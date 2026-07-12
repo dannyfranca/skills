@@ -1,6 +1,6 @@
 # Slice Selection
 
-Register slices until every meaningful risk in the change belongs to at least one slice.
+Register slices until every meaningful risk in the change belongs to at least one slice. A runtime code change is incomplete without a dedicated `test-coverage` slice.
 
 ## Related work
 
@@ -14,6 +14,22 @@ python3 "$SKILL_DIR/scripts/add_related_task.py" \
 ```
 
 Use `--file <path>` or `--dir <path>` for larger related tasks.
+
+## Required test coverage slice
+
+Every change to runtime code requires a dedicated prompted `test-coverage` slice. Runtime code is shipped application, library, service, CLI, or automation code. This slice is optional for changes limited to tests, documentation, or metadata.
+
+```bash
+python3 "$SKILL_DIR/scripts/add_slice.py" \
+  --review-dir "$REVIEW_DIR" \
+  --name test-coverage \
+  --prompt-file - <<'EOF'
+Review the current uncommitted changes.
+Slice: test coverage for changed runtime behavior.
+Scope: every added, removed, or changed runtime behavior in this review.
+Verify tests prove the behavior and catch regressions across success, failure, boundary, and integration paths. Report each meaningful behavior without adequate test evidence.
+EOF
+```
 
 ## Broad slices
 

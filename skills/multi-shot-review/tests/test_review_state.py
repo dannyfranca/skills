@@ -1870,6 +1870,9 @@ class CliTests(unittest.TestCase):
         self.assertIn("references/slice-selection.md", skill)
         self.assertNotIn("Up to 5 meaningful files", skill)
         self.assertIn("Up to 5 meaningful files", reference)
+        self.assertIn("Every change to runtime code requires a dedicated prompted `test-coverage` slice", reference)
+        self.assertIn("--name test-coverage", reference)
+        self.assertIn("every added, removed, or changed runtime behavior", reference)
         self.assertFalse((ROOT / "README.md").exists())
 
 
