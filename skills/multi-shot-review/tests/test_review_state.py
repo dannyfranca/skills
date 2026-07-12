@@ -1089,8 +1089,7 @@ class RunnerTests(unittest.TestCase):
 
         def runner(cmd, cwd, input_text, output_file, slice_data):
             self.assertEqual(cwd, self.root)
-            self.assertIsNotNone(input_text)
-            self.assertIn(str(self.review_dir / "task.md"), input_text)
+            self.assertIsNone(input_text)
             self.assertEqual(output_file.parent, self.review_dir)
             self.assertRegex(output_file.name, TIMESTAMPED_REVIEW_FILE_RE)
             self.assertTrue(output_file.name.endswith("-1-api.md"))
@@ -1101,7 +1100,7 @@ class RunnerTests(unittest.TestCase):
             self.assertIn('-c', cmd)
             self.assertEqual(cmd[cmd.index("-c") + 1], 'model_reasoning_effort="high"')
             self.assertIn("--uncommitted", cmd)
-            self.assertEqual(cmd[-3:], ["-o", str(output_file), "-"])
+            self.assertEqual(cmd[-2:], ["-o", str(output_file)])
             output_file.write_text("No findings.", encoding="utf-8")
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
@@ -1142,15 +1141,15 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("--base", base_cmd)
         self.assertEqual(base_cmd[base_cmd.index("--base") + 1], "main")
         self.assertNotIn("--uncommitted", base_cmd)
-        self.assertEqual(base_cmd[-3:], ["-o", str(self.review_dir / "1-base.md"), "-"])
-        self.assertIn(str(self.review_dir / "task.md"), base_input)
+        self.assertEqual(base_cmd[-2:], ["-o", str(self.review_dir / "1-base.md")])
+        self.assertIsNone(base_input)
         self.assertIn("--commit", commit_cmd)
         self.assertEqual(commit_cmd[commit_cmd.index("--commit") + 1], "abc123")
         self.assertNotIn("--uncommitted", commit_cmd)
-        self.assertEqual(commit_cmd[-3:], ["-o", str(self.review_dir / "1-commit.md"), "-"])
-        self.assertIn(str(self.review_dir / "task.md"), commit_input)
+        self.assertEqual(commit_cmd[-2:], ["-o", str(self.review_dir / "1-commit.md")])
+        self.assertIsNone(commit_input)
 
-    def test_build_review_command_uses_prompt_stdin_and_output(self) -> None:
+    def test_build_review_command_uses_positional_prompt_and_output(self) -> None:
         cmd, input_text = build_review_command(
             {
                 "name": "api",
@@ -1162,13 +1161,14 @@ class RunnerTests(unittest.TestCase):
             self.review_dir / "1-api.md",
         )
 
-        self.assertIn(str(self.review_dir / "task.md"), input_text)
-        self.assertIn("Slice instructions:\nReview only API code.", input_text)
+        self.assertIsNone(input_text)
         self.assertIn("-m", cmd)
         self.assertEqual(cmd[cmd.index("-m") + 1], "gpt-5.5")
         self.assertIn("-c", cmd)
         self.assertEqual(cmd[cmd.index("-c") + 1], 'model_reasoning_effort="high"')
-        self.assertEqual(cmd[-3:], ["-o", str(self.review_dir / "1-api.md"), "-"])
+        self.assertEqual(cmd[-3:-1], ["-o", str(self.review_dir / "1-api.md")])
+        self.assertIn(str(self.review_dir / "task.md"), cmd[-1])
+        self.assertIn("Slice instructions:\nReview only API code.", cmd[-1])
 
 
 class CliTests(unittest.TestCase):
@@ -1497,9 +1497,6 @@ class CliTests(unittest.TestCase):
         fake_codex.write_text(
             "#!/usr/bin/env python3\n"
             "import os, sys, time\n"
-            "data = sys.stdin.read()\n"
-            "assert 'task.md' in data\n"
-            "assert sys.argv[-1] == '-'\n"
             "time.sleep(0.2)\n"
             "with open(os.environ['CODEX_INVOCATION_LOG'], 'a', encoding='utf-8') as log:\n"
             "    log.write('called\\n')\n"
@@ -1534,7 +1531,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(runs[0]["status"], "quiet")
         self.assertEqual(invocation_log.read_text(encoding="utf-8").splitlines(), ["called"])
 
-    def test_prompt_file_stdin_cli_passes_prompt_to_fake_codex(self) -> None:
+    def test_prompt_file_cli_passes_positional_prompt_to_fake_codex(self) -> None:
         review_dir = Path(
             self.run_cli(
                 str(SCRIPTS / "init_state.py"),
@@ -1564,11 +1561,10 @@ class CliTests(unittest.TestCase):
         fake_codex.write_text(
             "#!/usr/bin/env python3\n"
             "import os, sys\n"
-            "data = sys.stdin.read()\n"
-            "open(os.environ['CAPTURED_PROMPT'], 'w', encoding='utf-8').write(data)\n"
+            "open(os.environ['CAPTURED_PROMPT'], 'w', encoding='utf-8').write(sys.argv[-1])\n"
             "out = sys.argv[sys.argv.index('-o') + 1]\n"
             "open(out, 'w', encoding='utf-8').write('No findings.')\n"
-            "assert sys.argv[-1] == '-'\n",
+            "assert sys.argv[-1] != '-'\n",
             encoding="utf-8",
         )
         fake_codex.chmod(0o755)
@@ -1858,22 +1854,23 @@ class CliTests(unittest.TestCase):
 
     def test_skill_documents_review_barrier_protocol(self) -> None:
         text = (ROOT / "SKILL.md").read_text(encoding="utf-8")
-        self.assertIn("## Review Barrier Protocol", text)
         self.assertIn('python3 "$SKILL_DIR/scripts/run_reviews.py" --review-dir "$REVIEW_DIR"', text)
+        self.assertIn("review barrier exclusively in the foreground", text)
+        self.assertIn("timeout of at least two hours", text)
+        self.assertIn('`"ok":true` and `"rem":0`', text)
         self.assertNotIn("--summary-json", text)
         self.assertNotIn("--no-stdout", text)
         self.assertNotIn("--stream-progress", text)
         self.assertNotIn("_last-run.json", text)
-        self.assertIn("Do not run it with `&`, `nohup`, `disown`, `tmux`, `screen`", text)
-        self.assertIn("2 hours / 7,200,000 ms", text)
-        self.assertNotIn("Keep calling it until it prints `done`", text)
 
-    def test_readme_documents_human_recovery_and_debug_options(self) -> None:
-        text = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("_last-run.json", text)
-        self.assertIn("recovery path", text)
-        self.assertIn("--stream-progress", text)
-        self.assertIn("local human debugging", text)
+    def test_skill_discloses_slice_selection_once(self) -> None:
+        skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        reference = (ROOT / "references" / "slice-selection.md").read_text(encoding="utf-8")
+
+        self.assertIn("references/slice-selection.md", skill)
+        self.assertNotIn("Up to 5 meaningful files", skill)
+        self.assertIn("Up to 5 meaningful files", reference)
+        self.assertFalse((ROOT / "README.md").exists())
 
 
 def _writes(text: str):
