@@ -1,7 +1,6 @@
 ---
 name: to-tickets-local
 description: Publish tracer-bullet tickets as unversioned local files
-disable-model-invocation: true
 ---
 
 # To Tickets — Local

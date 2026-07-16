@@ -1,7 +1,6 @@
 ---
 name: implement-tickets-local
 description: Implement local ticket files sequentially with extensive reviews
-disable-model-invocation: true
 ---
 
 # Implement Local Tickets

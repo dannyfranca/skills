@@ -1,7 +1,6 @@
 ---
 name: to-tickets-gh
 description: Publish tracer-bullet tickets as GitHub Issues
-disable-model-invocation: true
 ---
 
 # To Tickets — GitHub

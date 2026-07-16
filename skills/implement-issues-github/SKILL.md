@@ -1,7 +1,6 @@
 ---
 name: implement-issues-github
 description: Implement selected GitHub issues sequentially with extensive reviews
-disable-model-invocation: true
 ---
 
 # Implement GitHub Issues
