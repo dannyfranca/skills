@@ -18,10 +18,10 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 TIMESTAMPED_REVIEW_FILE_RE = (
-    r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z-"
+    r"^\d{8}-\d{4}-"
     r"\d+-[a-z0-9._-]+(?:-retry\d+)?\.md$"
 )
-TIMESTAMPED_REVIEW_DIR_RE = r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z-[0-9a-f]{8}$"
+TIMESTAMPED_REVIEW_DIR_RE = r"^\d{8}-\d{4}-[0-9a-f]{8}$"
 sys.path.insert(0, str(SCRIPTS))
 
 import review_state as review_state_module  # noqa: E402
@@ -743,7 +743,9 @@ class RunnerTests(unittest.TestCase):
             _single_review_file(self.review_dir, "*-1-api.md").read_text(encoding="utf-8"),
             "partial stderr context",
         )
-        self.assertTrue(_single_review_file(self.review_dir, "*-1-api-retry2.md").exists())
+        retry_file = _single_review_file(self.review_dir, "*-1-api-retry2.md")
+        self.assertRegex(retry_file.name, TIMESTAMPED_REVIEW_FILE_RE)
+        self.assertTrue(retry_file.name.endswith("-1-api-retry2.md"))
         self.assertTrue(ReviewState.load(self.review_dir).data["slices"]["api"]["complete"])
 
     def test_launch_failure_records_error_and_remains_retryable(self) -> None:

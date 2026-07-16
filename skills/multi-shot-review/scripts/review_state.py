@@ -71,7 +71,7 @@ def now_iso() -> str:
 
 
 def filename_timestamp() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z").replace(":", "-")
+    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
 
 
 def session_id() -> str:
