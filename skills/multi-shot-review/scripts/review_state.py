@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -16,16 +17,26 @@ import tempfile
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from review_target import (
+    canonical_repository_root,
+    collect_change_inventory,
+    isolated_review_root,
+    resolve_review_target,
+    target_cli_args,
+    validate_review_target,
+)
+
 
 SCHEMA_VERSION = 1
 DEFAULT_MODEL = "gpt-5.6-sol"
 DEFAULT_REASONING = "high"
+DEFAULT_MAX_PARALLEL = 6
 TASK_ENTRYPOINT = "task.md"
 RELATED_TASKS_DIR = "related-tasks"
 ORIGINAL_REQUEST_START = "<!-- multi-shot-review:original-request:start -->"
@@ -104,11 +115,16 @@ def create_review_dir(root: Path) -> Path:
     raise ReviewStateError("could not create a unique review directory after 10 attempts")
 
 
-def init_review_state(root: Path, task: str) -> Path:
+def init_review_state(root: Path, task: str, *, target: dict[str, str] | None = None) -> Path:
     task = _require_non_empty_text(task, "task")
+    root = canonical_repository_root(root)
+    try:
+        target = resolve_review_target(root, target or {"kind": "uncommitted"})
+    except (RuntimeError, ValueError) as exc:
+        raise ReviewStateError(str(exc)) from exc
     review_dir = create_review_dir(root)
     write_task_entrypoint(review_dir, task)
-    state = ReviewState.new(review_dir=review_dir, root=root.resolve())
+    state = ReviewState.new(review_dir=review_dir, root=root.resolve(), target=target)
     state.save()
     return review_dir
 
@@ -208,6 +224,38 @@ def build_task_context_prompt(review_dir: Path) -> str:
         "- It contains the original user request and any related/future tasks.\n"
         "- Treat related/future tasks as deferred-work context, not as part of the current review scope.\n"
         "- Avoid flagging missing follow-up work when it is clearly covered by related/future tasks.\n"
+    )
+
+
+def _manual_slice_context(review_dir: Path, slice_data: dict[str, Any], *, native: bool) -> str:
+    classification_path = review_dir / "classification.json"
+    loaded_rules: list[str] = []
+    if classification_path.is_file():
+        try:
+            classification = json.loads(classification_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ReviewStateError(f"could not read classification context: {exc}") from exc
+        raw_rules = classification.get("loaded_rule_sources", [])
+        if not isinstance(raw_rules, list) or not all(isinstance(path, str) for path in raw_rules):
+            raise ReviewStateError("classification context has invalid loaded_rule_sources")
+        loaded_rules = raw_rules
+    built_in_dir = Path(__file__).resolve().parents[1] / "references"
+    core_rules = [
+        str(built_in_dir / name)
+        for name in ("correctness.md", "code-design.md", "readability.md", "simplicity.md")
+    ]
+    scope_instruction = (
+        "Review the whole immutable target, constrained by that directive."
+        if native
+        else "Follow the supplied slice instructions, constrained by that directive."
+    )
+    return (
+        f"{build_task_context_prompt(review_dir)}\n"
+        "Explicit user-added slice:\n"
+        f"- The user directive is authoritative: {json.dumps(slice_data.get('user_directive', ''))}.\n"
+        f"- {scope_instruction}\n"
+        f"- Read all applicable repository/global review rules: {json.dumps(loaded_rules)}.\n"
+        f"- Read the core review lens rules: {json.dumps(core_rules)}.\n"
     )
 
 
@@ -408,6 +456,55 @@ def _line_is_quiet_summary(line: str) -> bool:
     )
 
 
+def _legacy_target_to_session(target: dict[str, Any]) -> dict[str, str]:
+    if target.get("uncommitted") is True:
+        return {"kind": "uncommitted"}
+    if isinstance(target.get("base"), str) and target["base"]:
+        result = {"kind": "base", "value": target["base"]}
+        if isinstance(target.get("head"), str) and target["head"]:
+            result["head"] = target["head"]
+        return result
+    if isinstance(target.get("commit"), str) and target["commit"]:
+        return {"kind": "commit", "value": target["commit"]}
+    raise ReviewStateError("slice target is invalid")
+
+
+def _session_to_legacy_target(target: dict[str, str]) -> dict[str, Any]:
+    if target["kind"] == "uncommitted":
+        return {"uncommitted": True}
+    result = {target["kind"]: target["value"]}
+    if target["kind"] == "base":
+        result["head"] = target["head"]
+    return result
+
+
+def _legacy_target_matches_session(target: dict[str, Any], session_target: dict[str, str]) -> bool:
+    converted = _legacy_target_to_session(target)
+    return converted["kind"] == session_target["kind"] and converted.get("value") == session_target.get("value")
+
+
+def _definitions_are_semantic_replacements(previous: dict[str, Any], current: dict[str, Any]) -> bool:
+    return (
+        previous.get("kind") == current.get("kind")
+        and previous.get("area") == current.get("area")
+        and set(previous.get("lenses", [])) == set(current.get("lenses", []))
+        and set(previous.get("risks", [])) == set(current.get("risks", []))
+        and previous.get("primary_scope") == current.get("primary_scope")
+        and previous.get("context_scope") == current.get("context_scope")
+        and previous.get("focus") == current.get("focus")
+        and previous.get("rationale") == current.get("rationale")
+        and previous.get("rule_sources") == current.get("rule_sources")
+    )
+
+
+def _archived_slice_name(name: str, slices: dict[str, Any]) -> str:
+    stem = name[:47]
+    while True:
+        candidate = f"{stem}.removed-{uuid.uuid4().hex[:8]}"
+        if candidate not in slices:
+            return candidate
+
+
 def append_error(review_dir: Path, title: str, details: str) -> None:
     errors = review_dir / "_errors.md"
     with errors.open("a", encoding="utf-8") as fh:
@@ -433,6 +530,8 @@ class ReviewExecution:
     stderr_log: Path
     launch_error: OSError | None = None
     timed_out: bool = False
+    skipped_removed: bool = False
+    skipped_superseded: bool = False
 
 
 class LockedReviewState(AbstractContextManager["ReviewState"]):
@@ -446,7 +545,7 @@ class LockedReviewState(AbstractContextManager["ReviewState"]):
             self.review_dir.mkdir(parents=True, exist_ok=True)
             self._fh = (self.review_dir / "_state.lock").open("a+", encoding="utf-8")
             fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX)
-            self.state = ReviewState.load(self.review_dir)
+            self.state = ReviewState.load(self.review_dir, persist_migrations=True)
             return self.state
         except OSError as exc:
             self._release()
@@ -476,15 +575,21 @@ class ReviewState:
         self.validate()
 
     @classmethod
-    def new(cls, review_dir: Path, root: Path) -> "ReviewState":
+    def new(cls, review_dir: Path, root: Path, target: dict[str, str] | None = None) -> "ReviewState":
+        try:
+            target = validate_review_target(target or {"kind": "uncommitted"})
+        except ValueError as exc:
+            raise ReviewStateError(str(exc)) from exc
         data: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "session": {
                 "created_at": now_iso(),
                 "review_dir": str(review_dir.resolve()),
                 "root": str(root.resolve()),
+                "target": target,
             },
             "slices": {},
+            "classification_history": [],
             "history": [],
             "completed": False,
             "last_error": None,
@@ -492,7 +597,7 @@ class ReviewState:
         return cls(review_dir, data)
 
     @classmethod
-    def load(cls, review_dir: Path) -> "ReviewState":
+    def load(cls, review_dir: Path, *, persist_migrations: bool = False) -> "ReviewState":
         state_path = review_dir.resolve() / "_state.json"
         if not state_path.exists():
             raise ReviewStateError(f"missing review state: {state_path}")
@@ -501,7 +606,113 @@ class ReviewState:
                 data = json.load(fh)
         except json.JSONDecodeError as exc:
             raise ReviewStateError(f"invalid review state JSON: {exc}") from exc
+        cls._recover_classification_transaction(review_dir.resolve(), data)
+        migrated = False
+        if (
+            data.get("schema_version") == 1
+            and isinstance(data.get("session"), dict)
+            and "target" not in data["session"]
+        ):
+            inferred = cls._infer_legacy_session_target(data)
+            try:
+                canonical = resolve_review_target(Path(data["session"]["root"]), inferred)
+            except (RuntimeError, ValueError):
+                canonical = inferred
+            data["session"]["target"] = canonical
+            slices = data.get("slices", {})
+            if isinstance(slices, dict):
+                for item in slices.values():
+                    if not isinstance(item, dict):
+                        continue
+                    if item.get("mode") == "native":
+                        item["target"] = _session_to_legacy_target(canonical)
+                    elif item.get("mode") == "structured":
+                        item["target"] = json.loads(json.dumps(canonical))
+                    if item.get("mode") == "prompt" or isinstance(item.get("session_target"), dict):
+                        item["session_target"] = json.loads(json.dumps(canonical))
+            migrated = True
+        session = data.get("session")
+        legacy_base = session.get("target") if isinstance(session, dict) else None
+        if (
+            isinstance(legacy_base, dict)
+            and legacy_base.get("kind") == "base"
+            and "head" not in legacy_base
+        ):
+            try:
+                canonical = resolve_review_target(Path(session["root"]), legacy_base)
+            except (RuntimeError, ValueError) as exc:
+                raise ReviewStateError(f"cannot pin legacy base target: {exc}") from exc
+            session["target"] = canonical
+            slices = data.get("slices", {})
+            if isinstance(slices, dict):
+                for item in slices.values():
+                    if not isinstance(item, dict):
+                        continue
+                    if item.get("mode") == "native":
+                        item["target"] = _session_to_legacy_target(canonical)
+                    elif item.get("mode") == "structured":
+                        item["target"] = json.loads(json.dumps(canonical))
+                    if item.get("mode") == "prompt" or isinstance(item.get("session_target"), dict):
+                        item["session_target"] = json.loads(json.dumps(canonical))
+            migrated = True
+        if migrated and persist_migrations:
+            try:
+                _atomic_write_text(state_path, json.dumps(data, indent=2, sort_keys=True) + "\n")
+            except OSError as exc:
+                raise ReviewStateError(f"could not persist migrated review target: {exc}") from exc
         return cls(review_dir.resolve(), data)
+
+    @staticmethod
+    def _recover_classification_transaction(review_dir: Path, data: dict[str, Any]) -> None:
+        transaction = review_dir / "_classification-transaction.json"
+        if not transaction.exists():
+            return
+        try:
+            pending = json.loads(transaction.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ReviewStateError(f"invalid classification transaction: {exc}") from exc
+        owner = {
+            "runner_pid": pending.get("owner_pid"),
+            "runner_key": pending.get("owner_key"),
+            "started_at": now_iso(),
+        }
+        if _running_reservation_is_active(owner):
+            return
+        next_classification = pending.get("next_classification")
+        previous_classification = pending.get("previous_classification")
+        committed = data.get("classification") == next_classification
+        restored = next_classification if committed else previous_classification
+        artifact = review_dir / "classification.json"
+        try:
+            if restored is None:
+                artifact.unlink(missing_ok=True)
+            else:
+                _atomic_write_text(artifact, json.dumps(restored, indent=2, sort_keys=True) + "\n")
+            transaction.unlink(missing_ok=True)
+        except OSError as exc:
+            raise ReviewStateError(f"could not recover classification transaction: {exc}") from exc
+
+    @staticmethod
+    def _infer_legacy_session_target(data: dict[str, Any]) -> dict[str, str]:
+        targets: list[dict[str, str]] = []
+        slices = data.get("slices")
+        if isinstance(slices, dict):
+            for item in slices.values():
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    if item.get("mode") == "native":
+                        targets.append(_legacy_target_to_session(item.get("target")))
+                    elif item.get("mode") == "structured":
+                        targets.append(validate_review_target(item.get("target")))
+                    elif isinstance(item.get("session_target"), dict):
+                        targets.append(validate_review_target(item.get("session_target")))
+                except (ReviewStateError, ValueError):
+                    continue
+        unique = {json.dumps(target, sort_keys=True) for target in targets}
+        if len(unique) > 1:
+            raise ReviewStateError("legacy review session contains inconsistent slice targets")
+        return targets[0] if targets else {"kind": "uncommitted"}
 
     @classmethod
     def locked(cls, review_dir: Path) -> LockedReviewState:
@@ -542,8 +753,22 @@ class ReviewState:
             raise ReviewStateError("state session must have review_dir")
         if not isinstance(session.get("root"), str) or not session["root"]:
             raise ReviewStateError("state session must have root")
+        try:
+            validate_review_target(session.get("target"))
+        except ValueError as exc:
+            raise ReviewStateError(f"state session has invalid target: {exc}") from exc
         if not isinstance(data.get("slices"), dict):
             raise ReviewStateError("state slices must be an object")
+        classification_history = data.get("classification_history", [])
+        if not isinstance(classification_history, list):
+            raise ReviewStateError("state classification_history must be an array")
+        for index, entry in enumerate(classification_history):
+            if not isinstance(entry, dict):
+                raise ReviewStateError(f"classification history entry {index} must be an object")
+            if not isinstance(entry.get("applied_at"), str) or not entry["applied_at"]:
+                raise ReviewStateError(f"classification history entry {index} must have applied_at")
+            if not isinstance(entry.get("classification"), dict):
+                raise ReviewStateError(f"classification history entry {index} must preserve the plan")
         if not isinstance(data.get("history"), list):
             raise ReviewStateError("state history must be an array")
         if not isinstance(data.get("completed"), bool):
@@ -554,10 +779,12 @@ class ReviewState:
                 raise ReviewStateError(f"slice {name!r} must be an object")
             if item.get("name") != name:
                 raise ReviewStateError(f"slice {name!r} has mismatched name")
-            if item.get("mode") not in {"native", "prompt"}:
+            if item.get("mode") not in {"native", "prompt", "structured"}:
                 raise ReviewStateError(f"slice {name!r} has invalid mode")
             if item["mode"] == "native":
                 self._validate_native_target(name, item.get("target"))
+                if not _legacy_target_matches_session(item.get("target"), session["target"]):
+                    raise ReviewStateError(f"native slice {name!r} does not match the session target")
                 if item.get("prompt") is not None:
                     raise ReviewStateError(f"native slice {name!r} cannot have prompt text")
             if item["mode"] == "prompt":
@@ -565,6 +792,26 @@ class ReviewState:
                     raise ReviewStateError(f"prompt slice {name!r} cannot have native target")
                 if not isinstance(item.get("prompt"), str) or not item["prompt"].strip():
                     raise ReviewStateError(f"prompt slice {name!r} must have prompt text")
+                if item.get("session_target") is not None:
+                    try:
+                        prompt_target = validate_review_target(item["session_target"])
+                    except ValueError as exc:
+                        raise ReviewStateError(f"prompt slice {name!r} has invalid session target: {exc}") from exc
+                    if prompt_target != session["target"]:
+                        raise ReviewStateError(f"prompt slice {name!r} does not match the session target")
+            if item["mode"] == "structured":
+                try:
+                    validate_review_target(item.get("target"))
+                except ValueError as exc:
+                    raise ReviewStateError(f"structured slice {name!r} has invalid target: {exc}") from exc
+                if validate_review_target(item["target"]) != session["target"]:
+                    raise ReviewStateError(f"structured slice {name!r} does not match the session target")
+                if item.get("kind") not in {"native", "focused"}:
+                    raise ReviewStateError(f"structured slice {name!r} has invalid kind")
+                if not isinstance(item.get("prompt"), str) or not item["prompt"].strip():
+                    raise ReviewStateError(f"structured slice {name!r} must have rendered prompt text")
+                if not isinstance(item.get("definition"), dict):
+                    raise ReviewStateError(f"structured slice {name!r} must preserve its definition")
             if not isinstance(item.get("cwd"), str) or not item["cwd"]:
                 raise ReviewStateError(f"slice {name!r} must have cwd")
             if not isinstance(item.get("model"), str) or not item["model"]:
@@ -577,6 +824,13 @@ class ReviewState:
                 raise ReviewStateError(f"slice {name!r} must have complete boolean")
             if not isinstance(item.get("runs"), list):
                 raise ReviewStateError(f"slice {name!r} must have runs array")
+            if not isinstance(item.get("removed", False), bool):
+                raise ReviewStateError(f"slice {name!r} has invalid removed marker")
+            if item.get("definition_version") is not None and (
+                not isinstance(item.get("definition_version"), int)
+                or item["definition_version"] < 1
+            ):
+                raise ReviewStateError(f"slice {name!r} has invalid definition version")
             for run in item["runs"]:
                 self._validate_run(name, run)
 
@@ -612,6 +866,13 @@ class ReviewState:
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid runner_key")
         if run.get("error") is not None and not isinstance(run.get("error"), str):
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid error")
+        if run.get("definition") is not None and not isinstance(run.get("definition"), dict):
+            raise ReviewStateError(f"slice {slice_name!r} has run with invalid definition snapshot")
+        if run.get("definition_version") is not None and (
+            not isinstance(run.get("definition_version"), int)
+            or run["definition_version"] < 1
+        ):
+            raise ReviewStateError(f"slice {slice_name!r} has run with invalid definition version")
 
     @staticmethod
     def _validate_native_target(slice_name: str, target: Any) -> None:
@@ -626,7 +887,7 @@ class ReviewState:
         )
         if target_count != 1:
             raise ReviewStateError(f"native slice {slice_name!r} must have exactly one target")
-        allowed = {"uncommitted", "base", "commit"}
+        allowed = {"uncommitted", "base", "commit", "head"}
         extra = set(target) - allowed
         if extra:
             raise ReviewStateError(f"native slice {slice_name!r} has unsupported target keys")
@@ -635,6 +896,10 @@ class ReviewState:
         for key in ("base", "commit"):
             if key in target and (not isinstance(target[key], str) or not target[key]):
                 raise ReviewStateError(f"native slice {slice_name!r} has invalid {key} target")
+        if "head" in target and (
+            "base" not in target or not isinstance(target["head"], str) or not target["head"]
+        ):
+            raise ReviewStateError(f"native slice {slice_name!r} has invalid pinned head")
 
     @staticmethod
     def _validate_slice_name(name: str) -> None:
@@ -656,6 +921,8 @@ class ReviewState:
         cwd: Path,
         model: str = DEFAULT_MODEL,
         reasoning: str = DEFAULT_REASONING,
+        source: str = "manual",
+        user_directive: str | None = None,
     ) -> None:
         self._validate_slice_name(name)
         if name in self.data["slices"]:
@@ -667,6 +934,8 @@ class ReviewState:
                 raise ReviewStateError("native slices require --uncommitted, --base, or --commit")
             if prompt:
                 raise ReviewStateError("native target flags cannot be combined with prompt input")
+            if not _legacy_target_matches_session(target, self.data["session"]["target"]):
+                raise ReviewStateError("slice target must match the immutable session target")
         if mode == "prompt":
             if target:
                 raise ReviewStateError("prompt slices cannot be combined with native target flags")
@@ -677,6 +946,7 @@ class ReviewState:
             "mode": mode,
             "target": target,
             "prompt": prompt,
+            "session_target": json.loads(json.dumps(self.data["session"]["target"])),
             "cwd": str(cwd.resolve()),
             "model": model,
             "reasoning": reasoning,
@@ -684,9 +954,206 @@ class ReviewState:
             "complete": False,
             "runs": [],
             "last_error": None,
+            "removed": False,
+            "source": source,
+            "user_directive": user_directive,
         }
         self.data["completed"] = False
         self.data["history"].append({"event": "slice_added", "slice": name, "at": now_iso()})
+
+    def apply_classification(self, classification: dict[str, Any]) -> None:
+        """Apply a fully validated classifier plan as one state mutation."""
+        self.validate_classification_application(classification)
+        target = classification.get("target")
+        if target != self.data["session"]["target"]:
+            raise ReviewStateError("classification target does not match session target")
+        definitions = classification.get("slices", [])
+        previous_classification = self.data.get("classification")
+        footprint_changed = not isinstance(previous_classification, dict) or any(
+            previous_classification.get(key) != classification.get(key)
+            for key in (
+                "changed_files",
+                "line_counts",
+                "diff_fingerprint",
+                "loaded_rule_source_fingerprints",
+            )
+        )
+        user_tombstones = [
+            existing
+            for existing in self.data["slices"].values()
+            if existing.get("source") == "classifier"
+            and existing.get("removed")
+            and existing.get("removal_source") == "user"
+            and isinstance(existing.get("definition"), dict)
+        ]
+        selected_names = {definition["name"] for definition in definitions}
+        for name, existing in self.data["slices"].items():
+            if (
+                existing.get("source") == "classifier"
+                and not existing.get("removed")
+                and name not in selected_names
+            ):
+                existing["removed"] = True
+                existing["removed_at"] = now_iso()
+                existing["removal_source"] = "classifier"
+                existing["complete"] = True
+                existing["last_error"] = None
+                self.data["history"].append(
+                    {"event": "slice_classifier_retired", "slice": name, "at": now_iso()}
+                )
+            if (
+                footprint_changed
+                and existing.get("source") != "classifier"
+                and not existing.get("removed")
+                and existing.get("complete")
+            ):
+                existing["complete"] = False
+                existing["last_error"] = None
+                self.data["history"].append(
+                    {"event": "user_slice_invalidated_by_footprint", "slice": name, "at": now_iso()}
+                )
+
+        for definition in definitions:
+            name = definition["name"]
+            existing = self.data["slices"].get(name)
+            state_definition = json.loads(json.dumps(definition))
+            if (
+                existing is not None
+                and existing.get("removed")
+                and existing.get("removal_source") == "user"
+                and isinstance(existing.get("definition"), dict)
+                and not _definitions_are_semantic_replacements(existing["definition"], definition)
+            ):
+                archived_name = _archived_slice_name(name, self.data["slices"])
+                existing["name"] = archived_name
+                self.data["slices"][archived_name] = existing
+                del self.data["slices"][name]
+                self.data["history"].append(
+                    {
+                        "event": "slice_user_tombstone_archived",
+                        "slice": name,
+                        "archived_as": archived_name,
+                        "at": now_iso(),
+                    }
+                )
+                existing = None
+            matching_tombstone = next(
+                (
+                    tombstone
+                    for tombstone in user_tombstones
+                    if _definitions_are_semantic_replacements(tombstone["definition"], definition)
+                ),
+                None,
+            )
+            if existing is None:
+                self.data["slices"][name] = {
+                    "name": name,
+                    "mode": "structured",
+                    "kind": definition["kind"],
+                    "target": json.loads(json.dumps(target)),
+                    "prompt": definition["prompt"],
+                    "definition": state_definition,
+                    "cwd": self.data["session"]["root"],
+                    "model": DEFAULT_MODEL,
+                    "reasoning": DEFAULT_REASONING,
+                    "next_pass": 1,
+                    "complete": matching_tombstone is not None,
+                    "runs": [],
+                    "last_error": None,
+                    "removed": matching_tombstone is not None,
+                    "source": "classifier",
+                    "definition_version": 1,
+                }
+                if matching_tombstone is not None:
+                    created = self.data["slices"][name]
+                    created["removed_at"] = now_iso()
+                    created["removal_source"] = "user"
+                    created["removal_directive"] = matching_tombstone.get("removal_directive")
+                    created["semantic_tombstone_from"] = matching_tombstone["name"]
+                self.data["history"].append(
+                    {
+                        "event": "slice_tombstone_carried_forward" if matching_tombstone else "slice_added",
+                        "slice": name,
+                        "source": "classifier",
+                        "from": matching_tombstone["name"] if matching_tombstone else None,
+                        "at": now_iso(),
+                    }
+                )
+                continue
+            user_removed = existing.get("removed") and existing.get("removal_source") == "user"
+            if existing.get("removed") and not user_removed:
+                existing["removed"] = False
+                existing.pop("removed_at", None)
+                existing.pop("removal_source", None)
+                existing["complete"] = False
+            if existing.get("definition") != state_definition or footprint_changed:
+                existing["kind"] = definition["kind"]
+                existing["target"] = json.loads(json.dumps(target))
+                existing["prompt"] = definition["prompt"]
+                existing["definition"] = state_definition
+                existing["complete"] = bool(user_removed)
+                existing["last_error"] = None
+                existing["definition_version"] = int(existing.get("definition_version", 1)) + 1
+                self.data["history"].append(
+                    {
+                        "event": "slice_reclassified",
+                        "slice": name,
+                        "footprint_changed": footprint_changed,
+                        "at": now_iso(),
+                    }
+                )
+        applied_at = now_iso()
+        classification_snapshot = json.loads(json.dumps(classification))
+        classification_history = self.data.setdefault("classification_history", [])
+        classification_history.append(
+            {
+                "applied_at": applied_at,
+                "classification": classification_snapshot,
+            }
+        )
+        self.data["classification"] = json.loads(json.dumps(classification_snapshot))
+        self.data["history"].append(
+            {
+                "event": "classification_applied",
+                "classification_history_index": len(classification_history) - 1,
+                "changed_files": len(classification.get("changed_files", [])),
+                "slices": len(classification.get("slices", [])),
+                "at": applied_at,
+            }
+        )
+        self.data["completed"] = False
+        self._refresh_completed()
+
+    def validate_classification_application(self, classification: dict[str, Any]) -> None:
+        target = classification.get("target")
+        if target != self.data["session"]["target"]:
+            raise ReviewStateError("classification target does not match session target")
+        for definition in classification.get("slices", []):
+            name = definition["name"]
+            existing = self.data["slices"].get(name)
+            if existing is None:
+                continue
+            if existing.get("mode") != "structured" or existing.get("source") != "classifier":
+                raise ReviewStateError(f"classifier slice name collides with user/manual slice: {name}")
+
+    def remove_slice(self, name: str, *, user_directive: str) -> None:
+        self._validate_slice_name(name)
+        directive = _require_non_empty_text(user_directive, "user directive")
+        item = self.data["slices"].get(name)
+        if item is None:
+            raise ReviewStateError(f"slice not found: {name}")
+        if item.get("removed"):
+            return
+        item["removed"] = True
+        item["removed_at"] = now_iso()
+        item["removal_directive"] = directive
+        item["removal_source"] = "user"
+        item["complete"] = True
+        item["last_error"] = None
+        self.data["history"].append(
+            {"event": "slice_user_removed", "slice": name, "directive": directive, "at": now_iso()}
+        )
+        self._refresh_completed()
 
     def reserve_eligible(self) -> list[Reservation]:
         reservations: list[Reservation] = []
@@ -696,7 +1163,7 @@ class ReviewState:
             return reservations
         for name in sorted(self.data["slices"]):
             item = self.data["slices"][name]
-            if item["complete"]:
+            if item["complete"] or item.get("removed"):
                 continue
             if any(run.get("status") == "running" for run in item["runs"]):
                 continue
@@ -717,6 +1184,8 @@ class ReviewState:
                 "runner_pid": os.getpid(),
                 "runner_key": _process_key(os.getpid()),
                 "error": None,
+                "definition": json.loads(json.dumps(item.get("definition"))) if item.get("definition") else None,
+                "definition_version": item.get("definition_version"),
             }
             item["runs"].append(run)
             item["last_error"] = None
@@ -763,12 +1232,47 @@ class ReviewState:
             )
             self._refresh_completed()
             return False
+        attempted_status = status
         run["status"] = status
         run["ended_at"] = now_iso()
         run["exit_code"] = exit_code
         run["classification"] = classification
         run["finding_count"] = finding_count
         run["error"] = error
+
+        if item.get("removed"):
+            run["removed_result_status"] = attempted_status
+            run["status"] = "ignored"
+            run["classification"] = classification or "removed_during_execution"
+            self.data["history"].append(
+                {
+                    "event": "removed_slice_run_completed",
+                    "slice": slice_name,
+                    "run_id": run_id,
+                    "status": attempted_status,
+                    "at": now_iso(),
+                }
+            )
+            self._refresh_completed()
+            return True
+
+        if (
+            run.get("definition_version") is not None
+            and run.get("definition_version") != item.get("definition_version")
+        ):
+            self.data["history"].append(
+                {
+                    "event": "superseded_run_completion_ignored",
+                    "slice": slice_name,
+                    "run_id": run_id,
+                    "run_definition_version": run.get("definition_version"),
+                    "active_definition_version": item.get("definition_version"),
+                    "at": now_iso(),
+                }
+            )
+            item["complete"] = False
+            self._refresh_completed()
+            return True
 
         if status == "findings":
             item["next_pass"] = max(item["next_pass"], int(run["pass"]) + 1)
@@ -886,6 +1390,23 @@ class ReviewState:
                     continue
                 if _running_reservation_is_active(run):
                     continue
+                if item.get("removed"):
+                    run["status"] = "ignored"
+                    run["ended_at"] = now_iso()
+                    run["exit_code"] = None
+                    run["classification"] = "removed_stale_recovered"
+                    run["finding_count"] = 0
+                    run["error"] = None
+                    self.data["history"].append(
+                        {
+                            "event": "removed_stale_run_recovered",
+                            "slice": name,
+                            "run_id": run["id"],
+                            "pass": run.get("pass"),
+                            "at": now_iso(),
+                        }
+                    )
+                    continue
                 error = "stale running reservation recovered; review run will be retried"
                 run["status"] = "failed"
                 run["ended_at"] = now_iso()
@@ -920,7 +1441,9 @@ class ReviewState:
     def _refresh_completed(self) -> None:
         slices = self.data["slices"].values()
         self.data["completed"] = bool(self.data["slices"]) and all(
-            item["complete"] and not any(run.get("status") == "running" for run in item["runs"]) for item in slices
+            item.get("removed")
+            or (item["complete"] and not any(run.get("status") == "running" for run in item["runs"]))
+            for item in slices
         )
         if self.data["completed"] and all(item.get("last_error") is None for item in self.data["slices"].values()):
             self.data["last_error"] = None
@@ -959,10 +1482,24 @@ def build_review_command(slice_data: dict[str, Any], output_file: Path) -> tuple
             cmd.extend(["--commit", target["commit"]])
         else:
             raise ReviewStateError("native slice target is invalid")
-        cmd.extend(["-o", str(output_file)])
+        cmd.extend(["-o", str(output_file), _manual_slice_context(output_file.parent, slice_data, native=True)])
         return cmd, None
 
-    prompt = f"{task_prompt}\nSlice instructions:\n{slice_data['prompt']}"
+    if slice_data["mode"] == "structured":
+        cmd.extend(target_cli_args(slice_data["target"]))
+        prompt = f"{task_prompt}\nSlice instructions:\n{slice_data['prompt']}"
+        if slice_data.get("kind") == "native":
+            cmd.extend(["-o", str(output_file), prompt])
+            return cmd, None
+        cmd.extend(["-o", str(output_file), prompt])
+        return cmd, None
+
+    if slice_data.get("session_target"):
+        cmd.extend(target_cli_args(slice_data["session_target"]))
+    prompt = (
+        f"{_manual_slice_context(output_file.parent, slice_data, native=False)}\n"
+        f"Slice instructions:\n{slice_data['prompt']}"
+    )
     cmd.extend(["-o", str(output_file), prompt])
     return cmd, None
 
@@ -1085,15 +1622,77 @@ def run_reserved_review(
         output_file=reservation.output_file,
         slice_data=slice_data,
     )
+    with ReviewState.locked(reservation.output_file.parent) as state:
+        item = state.data["slices"].get(reservation.slice_name)
+        run = next(
+            (candidate for candidate in item.get("runs", []) if candidate.get("id") == reservation.run_id),
+            None,
+        ) if item is not None else None
+        if item is None or item.get("removed") or run is None or run.get("status") != "running":
+            enriched.output_file.write_text("Slice removed before launch; no review executed.\n", encoding="utf-8")
+            _write_completed_process_logs(subprocess.CompletedProcess([], 0, "", ""), stdout_log, stderr_log)
+            return ReviewExecution(
+                reservation=enriched,
+                proc=subprocess.CompletedProcess([], 0, "", ""),
+                stdout_log=stdout_log,
+                stderr_log=stderr_log,
+                skipped_removed=True,
+            )
+        if run.get("definition_version") != item.get("definition_version"):
+            enriched.output_file.write_text("Slice definition superseded before launch; no review executed.\n", encoding="utf-8")
+            _write_completed_process_logs(subprocess.CompletedProcess([], 0, "", ""), stdout_log, stderr_log)
+            return ReviewExecution(
+                reservation=enriched,
+                proc=subprocess.CompletedProcess([], 0, "", ""),
+                stdout_log=stdout_log,
+                stderr_log=stderr_log,
+                skipped_superseded=True,
+            )
+        try:
+            _ensure_classification_current(state)
+        except ReviewStateError as exc:
+            error = OSError(str(exc))
+            proc = subprocess.CompletedProcess([], 1, "", str(exc))
+            _write_completed_process_logs(proc, stdout_log, stderr_log)
+            return ReviewExecution(
+                reservation=enriched,
+                proc=proc,
+                stdout_log=stdout_log,
+                stderr_log=stderr_log,
+                launch_error=error,
+            )
+        session_target = json.loads(json.dumps(state.data["session"]["target"]))
+        repository_root = Path(state.data["session"]["root"])
+        classification = state.data.get("classification")
+        use_isolated_execution = session_target["kind"] != "uncommitted" or (
+            isinstance(classification, dict)
+            and isinstance(classification.get("diff_fingerprint"), str)
+            and bool(classification["diff_fingerprint"])
+        )
     cmd, input_text = build_review_command(slice_data, enriched.output_file)
     try:
-        proc = command_runner(
-            cmd,
-            Path(slice_data["cwd"]),
-            input_text,
-            enriched.output_file,
-            slice_data,
-        )
+        if use_isolated_execution:
+            inventory = collect_change_inventory(repository_root, session_target)
+            execution_context: AbstractContextManager[Path] = isolated_review_root(
+                repository_root,
+                session_target,
+                inventory.files,
+                removed_paths=inventory.removed_paths,
+                expected_inventory=inventory,
+            )
+        else:
+            execution_context = nullcontext(Path(slice_data["cwd"]))
+        with execution_context as execution_root:
+            if use_isolated_execution:
+                with ReviewState.locked(reservation.output_file.parent) as launch_state:
+                    _ensure_classification_current(launch_state, inventory=inventory)
+            proc = command_runner(
+                cmd,
+                execution_root,
+                input_text,
+                enriched.output_file,
+                slice_data,
+            )
         _write_completed_process_logs(proc, stdout_log, stderr_log)
     except subprocess.TimeoutExpired as exc:
         timeout_msg = f"review command timed out after {exc.timeout} seconds"
@@ -1104,7 +1703,7 @@ def run_reserved_review(
                 fh.write("\n")
             fh.write(f"[runner] {timeout_msg}\n")
         return ReviewExecution(reservation=enriched, proc=proc, stdout_log=stdout_log, stderr_log=stderr_log, timed_out=True)
-    except OSError as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         proc = subprocess.CompletedProcess(cmd, 1, "", str(exc))
         _write_completed_process_logs(proc, stdout_log, stderr_log)
         return ReviewExecution(reservation=enriched, proc=proc, stdout_log=stdout_log, stderr_log=stderr_log, launch_error=exc)
@@ -1176,7 +1775,85 @@ def _relative_path(path: Path, *, base: Path | None = None) -> str:
 
 
 def _remaining_count(state: ReviewState) -> int:
-    return sum(1 for item in state.data["slices"].values() if not item.get("complete"))
+    return sum(1 for item in state.data["slices"].values() if not item.get("complete") and not item.get("removed"))
+
+
+def _ensure_classification_current(state: ReviewState, *, inventory: Any | None = None) -> None:
+    classification = state.data.get("classification")
+    if not isinstance(classification, dict):
+        if not state.data["slices"] or any(
+            item.get("source") == "user" for item in state.data["slices"].values()
+        ):
+            raise ReviewStateError("review session is unclassified; run classify_slices.py before review")
+        return
+    root = Path(state.data["session"]["root"])
+    target = state.data["session"]["target"]
+    if inventory is None:
+        try:
+            inventory = collect_change_inventory(root, target)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise ReviewStateError(f"could not verify classified change footprint: {exc}") from exc
+    classified = set(classification.get("changed_files", []))
+    current = set(inventory.files)
+    if current != classified:
+        added = sorted(current - classified)
+        removed = sorted(classified - current)
+        details = []
+        if added:
+            details.append("added: " + ", ".join(added))
+        if removed:
+            details.append("removed: " + ", ".join(removed))
+        raise ReviewStateError(
+            "classification is stale; run classify_slices.py before review. Changed files differ ("
+            + "; ".join(details)
+            + ")."
+        )
+    classified_counts = classification.get("line_counts")
+    if not isinstance(classified_counts, dict) or any(
+        classified_counts.get(path) != inventory.line_counts.get(path)
+        for path in inventory.files
+    ):
+        raise ReviewStateError(
+            "classification is stale; run classify_slices.py before review. Changed-line footprint differs."
+        )
+    if classification.get("diff_fingerprint") != inventory.fingerprint:
+        raise ReviewStateError(
+            "classification is stale; run classify_slices.py before review. Changed content differs."
+        )
+    expected_rules = classification.get("loaded_rule_source_fingerprints")
+    if not isinstance(expected_rules, list):
+        raise ReviewStateError(
+            "classification is stale; run classify_slices.py before review. Rule fingerprints are missing."
+        )
+    from classification import discover_rule_sources
+
+    rediscovered_rules = discover_rule_sources(root, inventory.files)
+    expected_rule_paths = [
+        str(Path(item["path"]).absolute())
+        for item in expected_rules
+        if isinstance(item, dict) and set(item) == {"path", "sha256"}
+    ]
+    if [str(path.absolute()) for path in rediscovered_rules] != expected_rule_paths:
+        raise ReviewStateError(
+            "classification is stale; run classify_slices.py before review. Applicable review rule sources differ."
+        )
+    try:
+        current_rules = [
+            {
+                "path": str(Path(item["path"]).absolute()),
+                "sha256": hashlib.sha256(Path(item["path"]).read_bytes()).hexdigest(),
+            }
+            for item in expected_rules
+            if isinstance(item, dict) and set(item) == {"path", "sha256"}
+        ]
+    except OSError as exc:
+        raise ReviewStateError(
+            f"classification is stale; run classify_slices.py before review. Could not read a rule source: {exc}"
+        ) from exc
+    if len(current_rules) != len(expected_rules) or current_rules != expected_rules:
+        raise ReviewStateError(
+            "classification is stale; run classify_slices.py before review. Review rule contents differ."
+        )
 
 
 def _summary(
@@ -1282,6 +1959,7 @@ def run_reviews(
     stdout_json: bool = False,
     pretty_json: bool = False,
     child_timeout_seconds: float | None = None,
+    max_parallel: int = DEFAULT_MAX_PARALLEL,
 ) -> tuple[int, dict[str, Any]]:
     if no_stdout and summary_json is None:
         raise ReviewStateError("--no-stdout requires --summary-json")
@@ -1289,6 +1967,8 @@ def run_reviews(
         raise ReviewStateError("--stream-progress is incompatible with --no-stdout")
     if child_timeout_seconds is not None and child_timeout_seconds <= 0:
         child_timeout_seconds = None
+    if max_parallel < 1:
+        raise ReviewStateError("max_parallel must be at least 1")
 
     review_dir = review_dir.resolve()
     build_task_context_prompt(review_dir)
@@ -1296,6 +1976,7 @@ def run_reviews(
     any_running = False
     active_run_ids: set[str] = set()
     with ReviewState.locked(review_dir) as state:
+        _ensure_classification_current(state)
         reservations = state.reserve_eligible()
         state.save()
         remaining = _remaining_count(state)
@@ -1373,7 +2054,7 @@ def run_reviews(
     out_records: list[dict[str, Any]] = []
     err_records: list[dict[str, Any]] = []
     progress_stream = sys.stderr if progress_stream is None else progress_stream
-    with ThreadPoolExecutor(max_workers=len(reservations)) as executor:
+    with ThreadPoolExecutor(max_workers=min(max_parallel, len(reservations))) as executor:
         futures = [
             executor.submit(run_reserved_review, reservation, command_runner, child_timeout_seconds)
             for reservation in reservations
@@ -1382,7 +2063,14 @@ def run_reviews(
             execution = future.result()
             reservation = execution.reservation
             proc = execution.proc
-            if execution.launch_error is not None:
+            if execution.skipped_removed or execution.skipped_superseded:
+                status, classification, finding_count, error = (
+                    "ignored",
+                    "removed_before_launch" if execution.skipped_removed else "superseded_before_launch",
+                    0,
+                    None,
+                )
+            elif execution.launch_error is not None:
                 exc = execution.launch_error
                 append_error(
                     review_dir,
@@ -1405,6 +2093,17 @@ def run_reviews(
                     timed_out=execution.timed_out,
                 )
             with ReviewState.locked(review_dir) as state:
+                if not execution.skipped_removed and not execution.skipped_superseded:
+                    try:
+                        _ensure_classification_current(state)
+                    except ReviewStateError as exc:
+                        error = f"review target changed during execution: {exc}"
+                        status, classification, finding_count = "failed", None, None
+                        append_error(
+                            review_dir,
+                            f"stale review result for {reservation.slice_name}",
+                            f"Slice: {reservation.slice_name}\nOutput: {reservation.output_file}\nError: {error}",
+                        )
                 completion_applied = state.complete_run(
                     run_id=reservation.run_id,
                     slice_name=reservation.slice_name,
@@ -1414,16 +2113,22 @@ def run_reviews(
                     finding_count=finding_count,
                     error=error,
                 )
+                persisted_run = next(
+                    run
+                    for run in state.data["slices"][reservation.slice_name]["runs"]
+                    if run.get("id") == reservation.run_id
+                )
+                persisted_status = str(persisted_run.get("status"))
                 state.save()
                 remaining = _remaining_count(state)
-            display_status = status if completion_applied else "skipped-late-completion"
+            display_status = persisted_status if completion_applied else "skipped-late-completion"
             if stream_progress:
                 print(
                     f"{reservation.slice_name}: pass {reservation.pass_number} {display_status} -> {reservation.output_file}",
                     file=progress_stream,
                     flush=True,
                 )
-            if status in {"failed", "timeout"} or execution.launch_error is not None:
+            if persisted_status in {"failed", "timeout"}:
                 err_record: dict[str, Any] = {
                     "code": proc.returncode,
                     "f": _relative_path(reservation.output_file),
@@ -1441,7 +2146,7 @@ def run_reviews(
                         "f": _relative_path(reservation.output_file),
                         "p": reservation.pass_number,
                         "s": reservation.slice_name,
-                        "st": "done",
+                        "st": "skipped" if execution.skipped_removed or execution.skipped_superseded else "done",
                     }
                 )
 
@@ -1487,6 +2192,12 @@ def parse_add_slice_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--reasoning", default=DEFAULT_REASONING)
     parser.add_argument("--cwd", type=Path)
+    parser.add_argument(
+        "--user-directive-file",
+        type=Path,
+        required=True,
+        help="Record the explicit user instruction authorizing this manual slice.",
+    )
     return parser.parse_args(argv)
 
 
@@ -1520,7 +2231,22 @@ def add_slice_from_args(args: argparse.Namespace, *, stdin: Any = sys.stdin) -> 
             prompt = stdin.read()
 
     with ReviewState.locked(args.review_dir) as state:
-        cwd = args.cwd.resolve() if args.cwd is not None else Path(state.data["session"]["root"]).resolve()
+        session_root = Path(state.data["session"]["root"]).resolve()
+        cwd = args.cwd.resolve() if args.cwd is not None else session_root
+        try:
+            cwd.relative_to(session_root)
+        except ValueError as exc:
+            raise ReviewStateError("slice cwd must remain within the session repository") from exc
+        if target is not None:
+            try:
+                canonical = resolve_review_target(session_root, _legacy_target_to_session(target))
+            except (RuntimeError, ValueError) as exc:
+                raise ReviewStateError(str(exc)) from exc
+            target = _session_to_legacy_target(canonical)
+        user_directive = _require_non_empty_text(
+            args.user_directive_file.read_text(encoding="utf-8"),
+            "user directive",
+        )
         state.add_slice(
             name=args.name,
             mode=mode,
@@ -1529,6 +2255,8 @@ def add_slice_from_args(args: argparse.Namespace, *, stdin: Any = sys.stdin) -> 
             cwd=cwd,
             model=args.model,
             reasoning=args.reasoning,
+            source="user" if user_directive else "manual",
+            user_directive=user_directive,
         )
         state.save()
 

@@ -540,24 +540,21 @@ class RunnerTests(unittest.TestCase):
         stdout_log = self.root / err["stdout"]
         if not stdout_log.exists():
             stdout_log = self.review_dir / err["stdout"]
+        if not stdout_log.exists():
+            stdout_log = Path.cwd() / err["stdout"]
         stderr_log = self.root / err["stderr"]
         if not stderr_log.exists():
             stderr_log = self.review_dir / err["stderr"]
+        if not stderr_log.exists():
+            stderr_log = Path.cwd() / err["stderr"]
         self.assertTrue(stdout_log.exists())
         self.assertTrue(stderr_log.exists())
         self.assertEqual(stdout_log.read_text(encoding="utf-8"), "CHILD STDOUT BODY")
         self.assertEqual(stderr_log.read_text(encoding="utf-8"), "CHILD STDERR BODY")
 
-    def test_no_work_summary_is_compact_success(self) -> None:
-        rc, summary = self.run_reviews(command_runner=_should_not_run)
-
-        self.assertEqual(rc, 0)
-        self.assertTrue(summary["ok"])
-        self.assertEqual(summary["st"], "no_work")
-        self.assertEqual(summary["ran"], 0)
-        self.assertEqual(summary["out"], [])
-        self.assertIsNone(summary["err"])
-        self.assertEqual(json.loads((self.review_dir / "_last-run.json").read_text(encoding="utf-8")), summary)
+    def test_fresh_unclassified_session_cannot_pass_as_no_work(self) -> None:
+        with self.assertRaisesRegex(ReviewStateError, "unclassified"):
+            self.run_reviews(command_runner=_should_not_run)
 
     def test_child_timeout_marks_attempt_failed_with_log_paths(self) -> None:
         self.add_slice("api")
@@ -842,6 +839,46 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(_single_review_file(self.review_dir, "*-1-api-retry2.md").exists())
         self.assertTrue(state.data["slices"]["api"]["complete"])
 
+    def test_removed_running_failure_is_recorded_as_ignored(self) -> None:
+        self.add_slice("api")
+        with ReviewState.locked(self.review_dir) as state:
+            reservation = state.reserve_eligible()[0]
+            state.remove_slice("api", user_directive="User no longer wants this slice.")
+            state.complete_run(
+                run_id=reservation.run_id,
+                slice_name="api",
+                status="failed",
+                exit_code=7,
+                classification=None,
+                error="child failed after removal",
+            )
+            state.save()
+
+        run = ReviewState.load(self.review_dir).data["slices"]["api"]["runs"][0]
+        self.assertEqual(run["status"], "ignored")
+        self.assertEqual(run["removed_result_status"], "failed")
+        self.assertEqual(run["classification"], "removed_during_execution")
+
+    def test_removed_stale_running_reservation_is_finalized_without_retry(self) -> None:
+        self.add_slice("api")
+        with ReviewState.locked(self.review_dir) as state:
+            state.reserve_eligible()
+            run = state.data["slices"]["api"]["runs"][0]
+            run["runner_pid"] = -1
+            state.remove_slice("api", user_directive="User removed stale work.")
+            state.save()
+
+        run_reviews(
+            self.review_dir,
+            command_runner=lambda *args: self.fail("removed work must not relaunch"),
+            stdout=io.StringIO(),
+        )
+
+        item = ReviewState.load(self.review_dir).data["slices"]["api"]
+        self.assertEqual(len(item["runs"]), 1)
+        self.assertEqual(item["runs"][0]["status"], "ignored")
+        self.assertEqual(item["runs"][0]["classification"], "removed_stale_recovered")
+
     def test_reused_pid_running_reservation_is_recovered(self) -> None:
         self.add_slice("api")
         with ReviewState.locked(self.review_dir) as state:
@@ -1100,7 +1137,9 @@ class RunnerTests(unittest.TestCase):
             self.assertIn('-c', cmd)
             self.assertEqual(cmd[cmd.index("-c") + 1], 'model_reasoning_effort="high"')
             self.assertIn("--uncommitted", cmd)
-            self.assertEqual(cmd[-2:], ["-o", str(output_file)])
+            self.assertEqual(cmd[-3:-1], ["-o", str(output_file)])
+            self.assertIn(str(self.review_dir / "task.md"), cmd[-1])
+            self.assertIn("core review lens rules", cmd[-1])
             output_file.write_text("No findings.", encoding="utf-8")
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
@@ -1141,12 +1180,14 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("--base", base_cmd)
         self.assertEqual(base_cmd[base_cmd.index("--base") + 1], "main")
         self.assertNotIn("--uncommitted", base_cmd)
-        self.assertEqual(base_cmd[-2:], ["-o", str(self.review_dir / "1-base.md")])
+        self.assertEqual(base_cmd[-3:-1], ["-o", str(self.review_dir / "1-base.md")])
+        self.assertIn(str(self.review_dir / "task.md"), base_cmd[-1])
         self.assertIsNone(base_input)
         self.assertIn("--commit", commit_cmd)
         self.assertEqual(commit_cmd[commit_cmd.index("--commit") + 1], "abc123")
         self.assertNotIn("--uncommitted", commit_cmd)
-        self.assertEqual(commit_cmd[-2:], ["-o", str(self.review_dir / "1-commit.md")])
+        self.assertEqual(commit_cmd[-3:-1], ["-o", str(self.review_dir / "1-commit.md")])
+        self.assertIn(str(self.review_dir / "task.md"), commit_cmd[-1])
         self.assertIsNone(commit_input)
 
     def test_build_review_command_uses_positional_prompt_and_output(self) -> None:
@@ -1176,6 +1217,8 @@ class CliTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name) / "repo with spaces"
         self.root.mkdir()
+        self.user_directive = Path(self.tmp.name) / "user-directive.md"
+        self.user_directive.write_text("Add this slice for the user.\n", encoding="utf-8")
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -1191,10 +1234,16 @@ class CliTests(unittest.TestCase):
             check=False,
         )
 
+    def mark_slice_as_legacy(self, review_dir: Path, name: str) -> None:
+        with ReviewState.locked(review_dir) as state:
+            state.data["slices"][name]["source"] = "manual"
+            state.save()
+
     def test_help_outputs(self) -> None:
         for script in (
             "init_state.py",
             "add_slice.py",
+            "remove_slice.py",
             "add_related_task.py",
             "run_reviews.py",
             "report_ignored_findings.py",
@@ -1221,6 +1270,8 @@ class CliTests(unittest.TestCase):
             "--name",
             "api",
             "--uncommitted",
+            "--user-directive-file",
+            str(self.user_directive),
             cwd=Path(self.tmp.name),
         )
         self.assertEqual(add.returncode, 0, add.stderr)
@@ -1328,6 +1379,17 @@ class CliTests(unittest.TestCase):
         self.assertIn("choose exactly one", invalid.stderr)
 
     def test_cli_clear_errors_for_missing_state_and_invalid_args(self) -> None:
+        missing_directive = self.run_cli(
+            str(SCRIPTS / "add_slice.py"),
+            "--review-dir",
+            str(self.root / ".review" / "missing"),
+            "--name",
+            "api",
+            "--uncommitted",
+        )
+        self.assertEqual(missing_directive.returncode, 2)
+        self.assertIn("--user-directive-file", missing_directive.stderr)
+
         missing = self.run_cli(
             str(SCRIPTS / "add_slice.py"),
             "--review-dir",
@@ -1335,6 +1397,8 @@ class CliTests(unittest.TestCase):
             "--name",
             "api",
             "--uncommitted",
+            "--user-directive-file",
+            str(self.user_directive),
         )
         self.assertEqual(missing.returncode, 2)
         self.assertIn("missing review state", missing.stderr)
@@ -1357,6 +1421,8 @@ class CliTests(unittest.TestCase):
             "--uncommitted",
             "--base",
             "main",
+            "--user-directive-file",
+            str(self.user_directive),
         )
         self.assertEqual(invalid.returncode, 2)
         self.assertIn("choose only one", invalid.stderr)
@@ -1391,6 +1457,131 @@ class CliTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 2)
             self.assertIn("error:", proc.stderr)
             self.assertNotIn("Traceback", proc.stderr)
+
+    def test_init_clis_reject_empty_explicit_targets(self) -> None:
+        for script in ("init_state.py", "new_review_dir.py"):
+            for flag in ("--base", "--commit"):
+                with self.subTest(script=script, flag=flag):
+                    proc = self.run_cli(
+                        str(SCRIPTS / script),
+                        "--root",
+                        str(self.root),
+                        "--task",
+                        "Review exact target.",
+                        flag,
+                        "",
+                    )
+                    self.assertEqual(proc.returncode, 2)
+                    self.assertIn("non-empty", proc.stderr)
+
+    def test_init_clis_pin_symbolic_targets_to_commit_oids(self) -> None:
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=self.root, check=True)
+        subprocess.run(["git", "config", "user.email", "tests@example.com"], cwd=self.root, check=True)
+        subprocess.run(["git", "config", "user.name", "Tests"], cwd=self.root, check=True)
+        subprocess.run(["git", "commit", "--allow-empty", "-qm", "baseline"], cwd=self.root, check=True)
+        oid = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=self.root, check=True, text=True, stdout=subprocess.PIPE
+        ).stdout.strip()
+
+        for script, flag, value in (
+            ("init_state.py", "--base", "main"),
+            ("new_review_dir.py", "--commit", "HEAD"),
+        ):
+            with self.subTest(script=script):
+                proc = self.run_cli(
+                    str(SCRIPTS / script),
+                    "--root",
+                    str(self.root),
+                    "--task",
+                    "Review exact target.",
+                    flag,
+                    value,
+                )
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                state = ReviewState.load(Path(proc.stdout.strip()))
+                self.assertEqual(state.data["session"]["target"]["value"], oid)
+
+    def test_user_native_slice_accepts_original_symbolic_base_selector(self) -> None:
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=self.root, check=True)
+        subprocess.run(["git", "config", "user.email", "tests@example.com"], cwd=self.root, check=True)
+        subprocess.run(["git", "config", "user.name", "Tests"], cwd=self.root, check=True)
+        subprocess.run(["git", "commit", "--allow-empty", "-qm", "baseline"], cwd=self.root, check=True)
+        init = self.run_cli(
+            str(SCRIPTS / "init_state.py"),
+            "--root",
+            str(self.root),
+            "--task",
+            "Review exact base.",
+            "--base",
+            "main",
+        )
+        self.assertEqual(init.returncode, 0, init.stderr)
+        review_dir = Path(init.stdout.strip())
+
+        added = self.run_cli(
+            str(SCRIPTS / "add_slice.py"),
+            "--review-dir",
+            str(review_dir),
+            "--name",
+            "user-base",
+            "--base",
+            "main",
+            "--user-directive-file",
+            str(self.user_directive),
+        )
+        self.assertEqual(added.returncode, 0, added.stderr)
+        state = ReviewState.load(review_dir)
+        self.assertEqual(
+            state.data["slices"]["user-base"]["target"]["base"],
+            state.data["session"]["target"]["value"],
+        )
+
+    def test_run_reviews_cli_rejects_zero_max_parallel(self) -> None:
+        review_dir = Path(
+            self.run_cli(
+                str(SCRIPTS / "init_state.py"),
+                "--root",
+                str(self.root),
+                "--task",
+                "Review concurrency validation.",
+            ).stdout.strip()
+        )
+        proc = self.run_cli(
+            str(SCRIPTS / "run_reviews.py"),
+            "--review-dir",
+            str(review_dir),
+            "--max-parallel",
+            "0",
+        )
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("at least 1", proc.stderr)
+
+    def test_add_slice_cli_rejects_cwd_outside_session_repository(self) -> None:
+        review_dir = Path(
+            self.run_cli(
+                str(SCRIPTS / "init_state.py"),
+                "--root",
+                str(self.root),
+                "--task",
+                "Review manual cwd boundaries.",
+            ).stdout.strip()
+        )
+        outside = Path(self.tmp.name) / "other-repo"
+        outside.mkdir()
+        proc = self.run_cli(
+            str(SCRIPTS / "add_slice.py"),
+            "--review-dir",
+            str(review_dir),
+            "--name",
+            "external",
+            "--uncommitted",
+            "--cwd",
+            str(outside),
+            "--user-directive-file",
+            str(self.user_directive),
+        )
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("within the session repository", proc.stderr)
 
     def test_report_ignored_findings_cli_completes_slice(self) -> None:
         review_dir = Path(
@@ -1453,6 +1644,8 @@ class CliTests(unittest.TestCase):
                 "--name",
                 name,
                 "--uncommitted",
+                "--user-directive-file",
+                str(self.user_directive),
             ]
             for name in ("api", "ui")
         ]
@@ -1469,6 +1662,73 @@ class CliTests(unittest.TestCase):
             self.assertEqual(returncode, 0, stderr + stdout)
         state = ReviewState.load(review_dir)
         self.assertEqual(set(state.data["slices"]), {"api", "ui"})
+
+    def test_remove_slice_cli_requires_directive_and_preserves_history(self) -> None:
+        review_dir = Path(
+            self.run_cli(
+                str(SCRIPTS / "init_state.py"),
+                "--root",
+                str(self.root),
+                "--task",
+                "Review removal CLI behavior.",
+            ).stdout.strip()
+        )
+        add = self.run_cli(
+            str(SCRIPTS / "add_slice.py"),
+            "--review-dir",
+            str(review_dir),
+            "--name",
+            "api",
+            "--uncommitted",
+            "--user-directive-file",
+            str(self.user_directive),
+        )
+        self.assertEqual(add.returncode, 0, add.stderr)
+        with ReviewState.locked(review_dir) as state:
+            reservation = state.reserve_eligible()[0]
+            state.complete_run(
+                run_id=reservation.run_id,
+                slice_name="api",
+                status="quiet",
+                exit_code=0,
+                classification="quiet",
+            )
+            state.save()
+
+        removal = Path(self.tmp.name) / "removal.md"
+        removal.write_text("User no longer wants this slice.\n", encoding="utf-8")
+        removed = self.run_cli(
+            str(SCRIPTS / "remove_slice.py"),
+            "--review-dir",
+            str(review_dir),
+            "--name",
+            "api",
+            "--user-directive-file",
+            str(removal),
+        )
+        self.assertEqual(removed.returncode, 0, removed.stderr)
+        state = ReviewState.load(review_dir)
+        item = state.data["slices"]["api"]
+        self.assertTrue(item["removed"])
+        self.assertEqual(item["removal_directive"], "User no longer wants this slice.")
+        self.assertEqual(len(item["runs"]), 1)
+        self.assertIn("slice_user_removed", [event["event"] for event in state.data["history"]])
+
+        before = (review_dir / "_state.json").read_bytes()
+        empty = Path(self.tmp.name) / "empty-directive.md"
+        empty.write_text("", encoding="utf-8")
+        rejected = self.run_cli(
+            str(SCRIPTS / "remove_slice.py"),
+            "--review-dir",
+            str(review_dir),
+            "--name",
+            "missing",
+            "--user-directive-file",
+            str(empty),
+        )
+        self.assertEqual(rejected.returncode, 2)
+        self.assertIn("user directive must be non-empty", rejected.stderr)
+        self.assertEqual((review_dir / "_state.json").read_bytes(), before)
 
     def test_concurrent_run_reviews_cli_with_fake_codex_has_no_duplicate_reservations(self) -> None:
         review_dir = Path(
@@ -1487,8 +1747,11 @@ class CliTests(unittest.TestCase):
             "--name",
             "api",
             "--uncommitted",
+            "--user-directive-file",
+            str(self.user_directive),
         )
         self.assertEqual(add.returncode, 0, add.stderr)
+        self.mark_slice_as_legacy(review_dir, "api")
 
         fake_bin = Path(self.tmp.name) / "bin"
         fake_bin.mkdir()
@@ -1531,6 +1794,73 @@ class CliTests(unittest.TestCase):
         self.assertEqual(runs[0]["status"], "quiet")
         self.assertEqual(invocation_log.read_text(encoding="utf-8").splitlines(), ["called"])
 
+    def test_run_reviews_cli_honors_valid_max_parallel_override(self) -> None:
+        review_dir = init_review_state(self.root, "Review CLI concurrency forwarding.")
+        with ReviewState.locked(review_dir) as state:
+            for index in range(4):
+                state.add_slice(
+                    name=f"slice-{index}",
+                    mode="native",
+                    target={"uncommitted": True},
+                    prompt=None,
+                    cwd=self.root,
+                    source="manual",
+                )
+            state.save()
+
+        fake_bin = Path(self.tmp.name) / "concurrency-bin"
+        fake_bin.mkdir()
+        fake_codex = fake_bin / "codex"
+        counters = Path(self.tmp.name) / "concurrency.json"
+        counters.write_text('{"active": 0, "maximum": 0}', encoding="utf-8")
+        counter_lock = Path(self.tmp.name) / "concurrency.lock"
+        fake_codex.write_text(
+            "#!/usr/bin/env python3\n"
+            "import fcntl, json, os, sys, time\n"
+            "counter = os.environ['CONCURRENCY_COUNTER']\n"
+            "lock_path = os.environ['CONCURRENCY_LOCK']\n"
+            "def update(delta):\n"
+            "    with open(lock_path, 'a+', encoding='utf-8') as lock:\n"
+            "        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)\n"
+            "        with open(counter, encoding='utf-8') as fh: data = json.load(fh)\n"
+            "        data['active'] += delta\n"
+            "        data['maximum'] = max(data['maximum'], data['active'])\n"
+            "        with open(counter, 'w', encoding='utf-8') as fh: json.dump(data, fh)\n"
+            "update(1)\n"
+            "time.sleep(0.15)\n"
+            "out = sys.argv[sys.argv.index('-o') + 1]\n"
+            "open(out, 'w', encoding='utf-8').write('No findings.')\n"
+            "update(-1)\n",
+            encoding="utf-8",
+        )
+        fake_codex.chmod(0o755)
+        env = {
+            **os.environ,
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+            "CONCURRENCY_COUNTER": str(counters),
+            "CONCURRENCY_LOCK": str(counter_lock),
+        }
+
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "run_reviews.py"),
+                "--review-dir",
+                str(review_dir),
+                "--max-parallel",
+                "2",
+            ],
+            cwd=self.root,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertEqual(json.loads(counters.read_text(encoding="utf-8"))["maximum"], 2)
+
     def test_prompt_file_cli_passes_positional_prompt_to_fake_codex(self) -> None:
         review_dir = Path(
             self.run_cli(
@@ -1550,9 +1880,12 @@ class CliTests(unittest.TestCase):
             "api-prompt",
             "--prompt-file",
             "-",
+            "--user-directive-file",
+            str(self.user_directive),
             input_text=prompt,
         )
         self.assertEqual(add.returncode, 0, add.stderr)
+        self.mark_slice_as_legacy(review_dir, "api-prompt")
 
         fake_bin = Path(self.tmp.name) / "prompt-bin"
         fake_bin.mkdir()
@@ -1617,8 +1950,18 @@ class CliTests(unittest.TestCase):
                 "Review quiet CLI barrier.",
             ).stdout.strip()
         )
-        add = self.run_cli(str(SCRIPTS / "add_slice.py"), "--review-dir", str(review_dir), "--name", "api", "--uncommitted")
+        add = self.run_cli(
+            str(SCRIPTS / "add_slice.py"),
+            "--review-dir",
+            str(review_dir),
+            "--name",
+            "api",
+            "--uncommitted",
+            "--user-directive-file",
+            str(self.user_directive),
+        )
         self.assertEqual(add.returncode, 0, add.stderr)
+        self.mark_slice_as_legacy(review_dir, "api")
         summary_path = review_dir / "_last-run.json"
 
         proc = subprocess.run(
@@ -1685,8 +2028,11 @@ class CliTests(unittest.TestCase):
             "--name",
             "api",
             "--uncommitted",
+            "--user-directive-file",
+            str(self.user_directive),
         )
         self.assertEqual(add_default.returncode, 0, add_default.stderr)
+        self.mark_slice_as_legacy(default_review_dir, "api")
         default_proc = subprocess.run(
             [sys.executable, str(SCRIPTS / "run_reviews.py"), "--review-dir", str(default_review_dir)],
             cwd=self.root,
@@ -1737,8 +2083,11 @@ class CliTests(unittest.TestCase):
             "--name",
             "api",
             "--uncommitted",
+            "--user-directive-file",
+            str(self.user_directive),
         )
         self.assertEqual(add_fail.returncode, 0, add_fail.stderr)
+        self.mark_slice_as_legacy(fail_review_dir, "api")
         fail_summary_path = fail_review_dir / "_last-run.json"
         fail_proc = subprocess.run(
             [
@@ -1785,8 +2134,11 @@ class CliTests(unittest.TestCase):
             "--name",
             "api",
             "--uncommitted",
+            "--user-directive-file",
+            str(self.user_directive),
         )
         self.assertEqual(add_default_fail.returncode, 0, add_default_fail.stderr)
+        self.mark_slice_as_legacy(default_fail_review_dir, "api")
         default_fail_proc = subprocess.run(
             [sys.executable, str(SCRIPTS / "run_reviews.py"), "--review-dir", str(default_fail_review_dir)],
             cwd=self.root,
@@ -1835,8 +2187,11 @@ class CliTests(unittest.TestCase):
             "--name",
             "api",
             "--uncommitted",
+            "--user-directive-file",
+            str(self.user_directive),
         )
         self.assertEqual(add_stream.returncode, 0, add_stream.stderr)
+        self.mark_slice_as_legacy(stream_review_dir, "api")
         stream_proc = subprocess.run(
             [sys.executable, str(SCRIPTS / "run_reviews.py"), "--review-dir", str(stream_review_dir), "--stream-progress"],
             cwd=self.root,
@@ -1854,7 +2209,8 @@ class CliTests(unittest.TestCase):
 
     def test_skill_documents_review_barrier_protocol(self) -> None:
         text = (ROOT / "SKILL.md").read_text(encoding="utf-8")
-        self.assertIn('python3 "$SKILL_DIR/scripts/run_reviews.py" --review-dir "$REVIEW_DIR"', text)
+        self.assertIn('python3 "$SKILL_DIR/scripts/run_reviews.py"', text)
+        self.assertIn('--child-timeout-seconds 7200', text)
         self.assertIn("review barrier exclusively in the foreground", text)
         self.assertIn("timeout of at least two hours", text)
         self.assertIn('`"ok":true` and `"rem":0`', text)
@@ -1866,13 +2222,15 @@ class CliTests(unittest.TestCase):
     def test_skill_discloses_slice_selection_once(self) -> None:
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
         reference = (ROOT / "references" / "slice-selection.md").read_text(encoding="utf-8")
+        classifier_rules = (ROOT / "references" / "classifier-rules.md").read_text(encoding="utf-8")
 
         self.assertIn("references/slice-selection.md", skill)
-        self.assertNotIn("Up to 5 meaningful files", skill)
-        self.assertIn("Up to 5 meaningful files", reference)
-        self.assertIn("Every change to runtime code requires a dedicated prompted `test-coverage` slice", reference)
-        self.assertIn("--name test-coverage", reference)
-        self.assertIn("every added, removed, or changed runtime behavior", reference)
+        self.assertIn("classify_slices.py", skill)
+        self.assertIn("classifier alone selects", skill)
+        self.assertIn("Every runtime area", reference)
+        self.assertIn("dedicated test-coverage slice", reference)
+        self.assertIn("at most three meaningful files", classifier_rules)
+        self.assertIn("more than 200 meaningful database lines", classifier_rules)
         self.assertFalse((ROOT / "README.md").exists())
 
 
