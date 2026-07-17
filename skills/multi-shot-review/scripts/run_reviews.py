@@ -7,7 +7,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from review_state import DEFAULT_MAX_PARALLEL, ReviewStateError, run_reviews
+from review_state import ReviewStateError, run_reviews
 
 
 def main() -> int:
@@ -19,12 +19,6 @@ def main() -> int:
         "--stream-progress",
         action="store_true",
         help="Opt into legacy per-slice progress on stderr for local debugging.",
-    )
-    parser.add_argument(
-        "--max-parallel",
-        type=int,
-        default=DEFAULT_MAX_PARALLEL,
-        help=f"Maximum concurrent Codex review sessions. Defaults to {DEFAULT_MAX_PARALLEL}.",
     )
     parser.add_argument("--pretty-json", action="store_true", help="Pretty-print summary JSON for local debugging.")
     parser.add_argument(
@@ -52,7 +46,6 @@ def main() -> int:
             progress_stream=sys.stderr,
             pretty_json=args.pretty_json,
             child_timeout_seconds=args.child_timeout_seconds or None,
-            max_parallel=args.max_parallel,
         )
         return rc
     except ReviewStateError as exc:

@@ -46,8 +46,9 @@ python3 "$SKILL_DIR/scripts/run_reviews.py" --review-dir "$REVIEW_DIR" \
   --child-timeout-seconds 7200
 ```
 
-Wait silently for exit. Default concurrency is six. Consume only final JSON, the review Markdown
-paths in `out`, and diagnostics in `err`. Finish when every emitted result has been consumed.
+Wait silently for exit. All eligible slices run in one parallel wave. Consume only final JSON, the
+review Markdown paths in `out`, and diagnostics in `err`. Finish when every emitted result has
+been consumed.
 
 4. Treat each finding as a hypothesis. Validate it against code and task, fix real findings, and
 add focused regression tests where they materially reduce risk. Report rejected findings from a

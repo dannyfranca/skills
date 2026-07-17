@@ -26,7 +26,7 @@ from typing import Any, Callable, Iterable
 SCHEMA_VERSION = 1
 DEFAULT_MODEL = "gpt-5.6-terra"
 DEFAULT_REASONING = "high"
-DEFAULT_MAX_PARALLEL = 6
+MAX_ACTIVE_SLICES = 10
 TASK_ENTRYPOINT = "task.md"
 RELATED_TASKS_DIR = "related-tasks"
 ORIGINAL_REQUEST_START = "<!-- multi-shot-review:original-request:start -->"
@@ -773,6 +773,16 @@ class ReviewState:
                 or existing.get("removal_source") == "user"
             ):
                 raise ReviewStateError(f"slice is controlled by an explicit user directive: {name}")
+        active_count = sum(
+            not item.get("removed")
+            for item in self.data["slices"].values()
+        )
+        if active_count >= MAX_ACTIVE_SLICES:
+            raise ReviewStateError(
+                f"maximum of {MAX_ACTIVE_SLICES} active slices reached; "
+                "remove or consolidate an active slice first"
+            )
+        if existing is not None:
             definition["runs"] = existing["runs"]
             definition["next_pass"] = existing["next_pass"]
             definition["definition_version"] = existing.get("definition_version", 1) + 1
@@ -1500,7 +1510,6 @@ def run_reviews(
     stdout_json: bool = False,
     pretty_json: bool = False,
     child_timeout_seconds: float | None = None,
-    max_parallel: int = DEFAULT_MAX_PARALLEL,
 ) -> tuple[int, dict[str, Any]]:
     if no_stdout and summary_json is None:
         raise ReviewStateError("--no-stdout requires --summary-json")
@@ -1508,8 +1517,6 @@ def run_reviews(
         raise ReviewStateError("--stream-progress is incompatible with --no-stdout")
     if child_timeout_seconds is not None and child_timeout_seconds <= 0:
         child_timeout_seconds = None
-    if max_parallel < 1:
-        raise ReviewStateError("max_parallel must be at least 1")
 
     review_dir = review_dir.resolve()
     build_task_context_prompt(review_dir)
@@ -1517,6 +1524,15 @@ def run_reviews(
     any_running = False
     active_run_ids: set[str] = set()
     with ReviewState.locked(review_dir) as state:
+        active_count = sum(
+            not item.get("removed")
+            for item in state.data["slices"].values()
+        )
+        if active_count > MAX_ACTIVE_SLICES:
+            raise ReviewStateError(
+                f"{active_count} active slices exceeds maximum of {MAX_ACTIVE_SLICES}; "
+                "remove or consolidate slices before running reviews"
+            )
         reservations = state.reserve_eligible()
         state.save()
         remaining = _remaining_count(state)
@@ -1594,7 +1610,7 @@ def run_reviews(
     out_records: list[dict[str, Any]] = []
     err_records: list[dict[str, Any]] = []
     progress_stream = sys.stderr if progress_stream is None else progress_stream
-    with ThreadPoolExecutor(max_workers=min(max_parallel, len(reservations))) as executor:
+    with ThreadPoolExecutor(max_workers=len(reservations)) as executor:
         futures = [
             executor.submit(run_reserved_review, reservation, command_runner, child_timeout_seconds)
             for reservation in reservations

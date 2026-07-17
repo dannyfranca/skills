@@ -1257,7 +1257,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(runs[1]["status"], "findings")
         self.assertFalse(state.data["slices"]["api"]["complete"])
 
-    def test_followup_reservations_wait_for_active_batch(self) -> None:
+    def test_followup_reservations_wait_for_active_wave(self) -> None:
         self.add_slice("api")
         self.add_slice("ui")
         with ReviewState.locked(self.review_dir) as state:
@@ -1279,7 +1279,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(len(state.data["slices"]["api"]["runs"]), 1)
         self.assertEqual(state.data["slices"]["ui"]["runs"][0]["status"], "running")
 
-    def test_slice_added_mid_batch_starts_at_pass_one_while_existing_followups_continue(self) -> None:
+    def test_slice_added_mid_wave_starts_at_pass_one_while_existing_followups_continue(self) -> None:
         self.add_slice("api")
         self.add_slice("ui")
         for _ in range(4):
@@ -1666,6 +1666,45 @@ class CliTests(unittest.TestCase):
         self.assertIn("must remain within", proc.stderr)
         self.assertEqual(ReviewState.load(review_dir).data["slices"], {})
 
+    def test_add_slice_rejects_more_than_ten_active_slices(self) -> None:
+        review_dir = Path(
+            self.run_cli(
+                str(SCRIPTS / "init_state.py"),
+                "--root",
+                str(self.root),
+                "--task",
+                "Review at most ten slices.",
+            ).stdout.strip()
+        )
+        for index in range(10):
+            proc = self.run_cli(
+                str(SCRIPTS / "add_slice.py"),
+                "--review-dir",
+                str(review_dir),
+                "--name",
+                f"slice-{index}",
+                "--uncommitted",
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+
+        rejected = self.run_cli(
+            str(SCRIPTS / "add_slice.py"),
+            "--review-dir",
+            str(review_dir),
+            "--name",
+            "slice-10",
+            "--uncommitted",
+        )
+
+        self.assertEqual(rejected.returncode, 2)
+        self.assertIn("maximum of 10 active slices", rejected.stderr)
+        self.assertIn("remove or consolidate", rejected.stderr)
+        state = ReviewState.load(review_dir)
+        self.assertEqual(
+            sum(not item["removed"] for item in state.data["slices"].values()),
+            10,
+        )
+
     def test_compatibility_wrapper_creates_state(self) -> None:
         proc = self.run_cli(
             str(SCRIPTS / "new_review_dir.py"),
@@ -1968,6 +2007,108 @@ class CliTests(unittest.TestCase):
         self.assertEqual(len(runs), 1)
         self.assertEqual(runs[0]["status"], "quiet")
         self.assertEqual(invocation_log.read_text(encoding="utf-8").splitlines(), ["called"])
+
+    def test_run_reviews_rejects_legacy_state_above_ten_active_slices(self) -> None:
+        review_dir = Path(
+            self.run_cli(
+                str(SCRIPTS / "init_state.py"),
+                "--root",
+                str(self.root),
+                "--task",
+                "Reject oversized legacy review state.",
+            ).stdout.strip()
+        )
+        with ReviewState.locked(review_dir) as state:
+            for index in range(10):
+                state.add_slice(
+                    name=f"slice-{index}",
+                    mode="native",
+                    target={"uncommitted": True},
+                    prompt=None,
+                    cwd=self.root,
+                )
+            legacy = dict(state.data["slices"]["slice-9"])
+            legacy["name"] = "legacy-extra"
+            legacy["runs"] = []
+            state.data["slices"]["legacy-extra"] = legacy
+            state.save()
+
+        proc = self.run_cli(
+            str(SCRIPTS / "run_reviews.py"),
+            "--review-dir",
+            str(review_dir),
+        )
+
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("11 active slices exceeds maximum of 10", proc.stderr)
+        state = ReviewState.load(review_dir)
+        self.assertTrue(all(not item["runs"] for item in state.data["slices"].values()))
+
+    def test_run_reviews_launches_all_ten_slices_in_one_parallel_wave(self) -> None:
+        review_dir = Path(
+            self.run_cli(
+                str(SCRIPTS / "init_state.py"),
+                "--root",
+                str(self.root),
+                "--task",
+                "Run every slice in one wave.",
+            ).stdout.strip()
+        )
+        for index in range(10):
+            proc = self.run_cli(
+                str(SCRIPTS / "add_slice.py"),
+                "--review-dir",
+                str(review_dir),
+                "--name",
+                f"slice-{index}",
+                "--uncommitted",
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+
+        fake_bin = Path(self.tmp.name) / "one-wave-bin"
+        fake_bin.mkdir()
+        fake_codex = fake_bin / "codex"
+        started_log = Path(self.tmp.name) / "one-wave-started.log"
+        fake_codex.write_text(
+            "#!/usr/bin/env python3\n"
+            "import fcntl, os, sys, time\n"
+            "log_path = os.environ['STARTED_LOG']\n"
+            "with open(log_path, 'a+', encoding='utf-8') as log:\n"
+            "    fcntl.flock(log.fileno(), fcntl.LOCK_EX)\n"
+            "    log.write('started\\n')\n"
+            "    log.flush()\n"
+            "    fcntl.flock(log.fileno(), fcntl.LOCK_UN)\n"
+            "deadline = time.monotonic() + 3\n"
+            "while time.monotonic() < deadline:\n"
+            "    with open(log_path, encoding='utf-8') as log:\n"
+            "        if len(log.readlines()) == 10:\n"
+            "            out = sys.argv[sys.argv.index('-o') + 1]\n"
+            "            open(out, 'w', encoding='utf-8').write('No findings.')\n"
+            "            raise SystemExit(0)\n"
+            "    time.sleep(0.01)\n"
+            "raise SystemExit(9)\n",
+            encoding="utf-8",
+        )
+        fake_codex.chmod(0o755)
+        env = {
+            **os.environ,
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+            "STARTED_LOG": str(started_log),
+        }
+
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPTS / "run_reviews.py"), "--review-dir", str(review_dir)],
+            cwd=self.root,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(len(started_log.read_text(encoding="utf-8").splitlines()), 10)
+        self.assertTrue(ReviewState.load(review_dir).data["completed"])
 
     def test_prompt_file_cli_passes_positional_prompt_to_fake_codex(self) -> None:
         review_dir = Path(

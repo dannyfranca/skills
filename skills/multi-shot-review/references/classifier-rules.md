@@ -23,6 +23,10 @@ review scope. Larger changes usually split by coherent behavior, domain contract
 while keeping relevant lenses together. A slice may span related areas when the combined scope
 remains coherent.
 
+Use no more than ten active slices. Treat ten as a ceiling, never a target. Keep each justified
+slice substantial and coherent; balance cognitive load across them while allowing unequal scope
+when coherence requires it.
+
 Cover every applicable lens across the active slice set. Runtime behavior includes test coverage.
 Database work includes correctness, concurrency, indexing, and realistic execution coverage.
 Structural work includes applicable repository conventions. These lenses define coverage, not
@@ -38,8 +42,9 @@ effectively.
 Reason from current active slices, tombstones, runs, history, and the current Git target. Keep
 suitable slices unchanged. Consolidate redundant classifier-owned slices when broader coverage
 better controls cognitive load, including after runs exist. Add missing slices, remove obsolete
-ones, and reactivate an appropriate tombstone by adding its existing name. Partial earlier
-classification is valid context.
+ones, and reactivate an appropriate tombstone by adding its existing name. At the ceiling, remove
+or consolidate an active slice before adding a replacement. Partial earlier classification is
+valid context.
 
 ## Authority
 
