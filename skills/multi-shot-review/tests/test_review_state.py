@@ -56,6 +56,23 @@ class ReviewStateTests(unittest.TestCase):
         task_text = (self.review_dir / "task.md").read_text(encoding="utf-8")
         self.assertIn("Implement the requested API change.", task_text)
         self.assertIn("No related/future tasks registered.", task_text)
+        self.assertIn(
+            "Report actionable findings introduced, worsened, or made reachable by the change "
+            "when they have plausible production impact or imminent maintainability impact.",
+            task_text,
+        )
+        self.assertIn(
+            "Missing-test findings require a meaningful regression path.",
+            task_text,
+        )
+        self.assertIn(
+            "Return no findings when this threshold is unmet.",
+            task_text,
+        )
+        self.assertIn(
+            "An explicit lower threshold in the original user request takes precedence.",
+            task_text,
+        )
         self.assertTrue((self.review_dir / "related-tasks").is_dir())
         self.assertEqual(state.data["session"]["target"], {"kind": "uncommitted"})
 
@@ -627,6 +644,9 @@ class ClassifierTests(unittest.TestCase):
             self.assertIn("The parser is high risk.", prompt)
             self.assertIn(str(SCRIPTS / "add_slice.py"), prompt)
             self.assertIn(str(SCRIPTS / "remove_slice.py"), prompt)
+            self.assertIn(str(ROOT / "references" / "classifier-rules.md"), prompt)
+            self.assertNotIn("Keep each slice narrow", prompt)
+            self.assertNotIn("Prefer the smallest useful set of slices", prompt)
 
     def test_clean_classifier_rejects_success_without_active_slices(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -99,19 +99,12 @@ Review target: {json.dumps(target, sort_keys=True)}
 Inspect the target yourself with Git commands in the repository. Read changed code and every
 applicable review-rule file discovered through the convention in slice-selection.md.
 
-Work contextually. Existing active slices, removed slices, run records, and history are evidence.
-Keep suitable slices. Add missing slices, remove obsolete ones, or reactivate removed slices by
-adding the same name. Preserve explicit user-controlled slices unless the user directions below
-explicitly authorize changing them.
-
 Manage slices only by executing these scripts:
 - add/reactivate: {add_slice}
 - remove: {remove_slice}
 
 Call them as many times as needed. For focused slices, send the complete reviewer prompt through
-`--prompt-file -`. For native slices, pass the session target flag. Keep each slice narrow, but
-group closely related lenses when the rules allow it. Prefer the smallest useful set of slices.
-To revise an active classifier slice, remove it and then add the same name.
+`--prompt-file -`. For native slices, pass the session target flag.
 
 Normally omit `--user-directive-file`. If the supplemental user directions explicitly authorize
 changing a user-controlled slice, pass this exact source file to the mutation:

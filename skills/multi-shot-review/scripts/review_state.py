@@ -263,6 +263,11 @@ def _render_task_entrypoint(review_dir: Path, original_request: str) -> str:
         "- Review the current slice against the original user request.\n"
         "- Treat related/future tasks as deferred-work context, not as current review scope.\n"
         "- Do not flag missing follow-up work when it is clearly covered by a related/future task.\n"
+        "- Report actionable findings introduced, worsened, or made reachable by the change when "
+        "they have plausible production impact or imminent maintainability impact.\n"
+        "- Missing-test findings require a meaningful regression path.\n"
+        "- Return no findings when this threshold is unmet.\n"
+        "- An explicit lower threshold in the original user request takes precedence.\n"
     )
 
 
