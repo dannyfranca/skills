@@ -1489,8 +1489,9 @@ class RunnerTests(unittest.TestCase):
             self.assertIn('-c', cmd)
             self.assertEqual(cmd[cmd.index("-c") + 1], 'model_reasoning_effort="high"')
             self.assertIn("--uncommitted", cmd)
-            self.assertEqual(cmd[-3:-1], ["-o", str(output_file)])
-            self.assertIn(str(self.review_dir / "task.md"), cmd[-1])
+            self.assertEqual(cmd[-2:], ["-o", str(output_file)])
+            task_config = next(arg for arg in cmd if arg.startswith("developer_instructions="))
+            self.assertIn(str(self.review_dir / "task.md"), task_config)
             output_file.write_text("No findings.", encoding="utf-8")
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
@@ -1531,14 +1532,12 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("--base", base_cmd)
         self.assertEqual(base_cmd[base_cmd.index("--base") + 1], "main")
         self.assertNotIn("--uncommitted", base_cmd)
-        self.assertEqual(base_cmd[-3:-1], ["-o", str(self.review_dir / "1-base.md")])
-        self.assertIn(str(self.review_dir / "task.md"), base_cmd[-1])
+        self.assertEqual(base_cmd[-2:], ["-o", str(self.review_dir / "1-base.md")])
         self.assertIsNone(base_input)
         self.assertIn("--commit", commit_cmd)
         self.assertEqual(commit_cmd[commit_cmd.index("--commit") + 1], "abc123")
         self.assertNotIn("--uncommitted", commit_cmd)
-        self.assertEqual(commit_cmd[-3:-1], ["-o", str(self.review_dir / "1-commit.md")])
-        self.assertIn(str(self.review_dir / "task.md"), commit_cmd[-1])
+        self.assertEqual(commit_cmd[-2:], ["-o", str(self.review_dir / "1-commit.md")])
         self.assertIsNone(commit_input)
 
     def test_build_review_command_uses_positional_prompt_and_output(self) -> None:
@@ -1562,21 +1561,40 @@ class RunnerTests(unittest.TestCase):
         self.assertIn(str(self.review_dir / "task.md"), cmd[-1])
         self.assertIn("Slice instructions:\nReview only API code.", cmd[-1])
 
-    def test_prompt_slice_uses_session_target(self) -> None:
-        cmd, _ = build_review_command(
-            {
-                "name": "api",
-                "mode": "prompt",
-                "prompt": "Review only API code.",
-                "session_target": {"kind": "commit", "value": "abc123"},
-                "model": "gpt-5.5",
-                "reasoning": "high",
-            },
-            self.review_dir / "1-api.md",
-        )
+    def test_prompt_slice_describes_session_targets_without_native_flags(self) -> None:
+        targets = [
+            (
+                {"kind": "uncommitted"},
+                "Review the current staged, unstaged, and untracked changes.",
+            ),
+            (
+                {"kind": "base", "value": "main"},
+                "Review the current branch against base main, equivalent to `git diff main...HEAD`.",
+            ),
+            (
+                {"kind": "commit", "value": "abc123"},
+                "Review the changes introduced by commit abc123.",
+            ),
+        ]
 
-        self.assertIn("--commit", cmd)
-        self.assertEqual(cmd[cmd.index("--commit") + 1], "abc123")
+        for session_target, target_prompt in targets:
+            with self.subTest(target=session_target):
+                cmd, _ = build_review_command(
+                    {
+                        "name": "api",
+                        "mode": "prompt",
+                        "prompt": "Review only API code.",
+                        "session_target": session_target,
+                        "model": "gpt-5.5",
+                        "reasoning": "high",
+                    },
+                    self.review_dir / "1-api.md",
+                )
+
+                for native_flag in ("--uncommitted", "--base", "--commit"):
+                    self.assertNotIn(native_flag, cmd)
+                self.assertIn(target_prompt, cmd[-1])
+                self.assertIn("Slice instructions:\nReview only API code.", cmd[-1])
 
 
 class CliTests(unittest.TestCase):

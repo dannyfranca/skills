@@ -1172,7 +1172,10 @@ def build_review_command(slice_data: dict[str, Any], output_file: Path) -> tuple
         if session_target is not None
         else slice_data.get("target")
     )
-    if target is not None:
+    if slice_data["mode"] == "native":
+        if target is None:
+            raise ReviewStateError("native slice target is required")
+        cmd.extend(["-c", f"developer_instructions={json.dumps(task_prompt)}"])
         if target.get("uncommitted"):
             cmd.append("--uncommitted")
         elif "base" in target:
@@ -1181,12 +1184,23 @@ def build_review_command(slice_data: dict[str, Any], output_file: Path) -> tuple
             cmd.extend(["--commit", target["commit"]])
         else:
             raise ReviewStateError("slice target is invalid")
-
-    if slice_data["mode"] == "native":
-        cmd.extend(["-o", str(output_file), task_prompt])
+        cmd.extend(["-o", str(output_file)])
         return cmd, None
 
-    prompt = f"{task_prompt}\nSlice instructions:\n{slice_data['prompt']}"
+    target_prompt = ""
+    if session_target is not None:
+        session_target = _validate_session_target(session_target)
+        if session_target["kind"] == "uncommitted":
+            target_prompt = "Review the current staged, unstaged, and untracked changes.\n"
+        elif session_target["kind"] == "base":
+            target_prompt = (
+                f"Review the current branch against base {session_target['value']}, "
+                f"equivalent to `git diff {session_target['value']}...HEAD`.\n"
+            )
+        else:
+            target_prompt = f"Review the changes introduced by commit {session_target['value']}.\n"
+
+    prompt = f"{task_prompt}{target_prompt}\nSlice instructions:\n{slice_data['prompt']}"
     cmd.extend(["-o", str(output_file), prompt])
     return cmd, None
 
