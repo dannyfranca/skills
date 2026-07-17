@@ -56,6 +56,15 @@ def main() -> int:
             prompt,
         ]
         proc = subprocess.run(cmd, cwd=review_dir, check=False)
+        if proc.returncode == 0:
+            with ReviewState.locked(review_dir) as state:
+                if not any(
+                    not item.get("removed")
+                    for item in state.data["slices"].values()
+                ):
+                    raise ReviewStateError(
+                        "classifier completed without any active review slices"
+                    )
         return proc.returncode
     except (OSError, ReviewStateError) as exc:
         print(f"error: {exc}", file=sys.stderr)

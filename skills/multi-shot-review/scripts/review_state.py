@@ -24,7 +24,7 @@ from typing import Any, Callable, Iterable
 
 
 SCHEMA_VERSION = 1
-DEFAULT_MODEL = "gpt-5.6-sol"
+DEFAULT_MODEL = "gpt-5.6-terra"
 DEFAULT_REASONING = "high"
 DEFAULT_MAX_PARALLEL = 6
 TASK_ENTRYPOINT = "task.md"
@@ -238,6 +238,13 @@ def _validate_session_target(target: Any) -> dict[str, str]:
     if set(target) != {"kind", "value"}:
         raise ReviewStateError(f"{kind} target accepts only kind and value")
     return {"kind": kind, "value": value.strip()}
+
+
+def _native_target_from_session(target: dict[str, str]) -> dict[str, Any]:
+    target = _validate_session_target(target)
+    if target["kind"] == "uncommitted":
+        return {"uncommitted": True}
+    return {target["kind"]: target["value"]}
 
 
 def _render_task_entrypoint(review_dir: Path, original_request: str) -> str:
@@ -597,6 +604,10 @@ class ReviewState:
                 raise ReviewStateError(f"slice {name!r} has invalid mode")
             if item["mode"] == "native":
                 self._validate_native_target(name, item.get("target"))
+                if item["target"] != _native_target_from_session(session["target"]):
+                    raise ReviewStateError(
+                        f"native slice {name!r} target must match session target"
+                    )
                 if item.get("prompt") is not None:
                     raise ReviewStateError(f"native slice {name!r} cannot have prompt text")
             if item["mode"] == "prompt":
@@ -720,6 +731,11 @@ class ReviewState:
         if mode == "native":
             if not target:
                 raise ReviewStateError("native slices require --uncommitted, --base, or --commit")
+            expected_target = _native_target_from_session(self.data["session"]["target"])
+            if target != expected_target:
+                raise ReviewStateError(
+                    f"native slice target must match session target: {expected_target}"
+                )
             if prompt:
                 raise ReviewStateError("native target flags cannot be combined with prompt input")
         if mode == "prompt":
@@ -757,7 +773,12 @@ class ReviewState:
             definition["definition_version"] = existing.get("definition_version", 1) + 1
             self.data["slices"][name] = definition
             self.data["history"].append(
-                {"event": "slice_reactivated", "slice": name, "source": source, "at": now_iso()}
+                {
+                    "event": "slice_reactivated",
+                    "slice": name,
+                    "source": source,
+                    "at": now_iso(),
+                }
             )
         else:
             definition["runs"] = []
@@ -790,8 +811,15 @@ class ReviewState:
         item["removal_source"] = source
         item["removal_directive"] = user_directive
         item["complete"] = False
+        item["last_error"] = None
         self.data["history"].append(
-            {"event": "slice_removed", "slice": name, "source": source, "at": now_iso()}
+            {
+                "event": "slice_removed",
+                "slice": name,
+                "source": source,
+                "user_directive": user_directive,
+                "at": now_iso(),
+            }
         )
         self._refresh_completed()
 
@@ -837,7 +865,12 @@ class ReviewState:
                     slice_name=name,
                     pass_number=pass_number,
                     output_file=output_file,
-                    slice_data=json.loads(json.dumps(item)),
+                    slice_data={
+                        **json.loads(json.dumps(item)),
+                        "session_target": json.loads(
+                            json.dumps(self.data["session"]["target"])
+                        ),
+                    },
                 )
             )
         self._refresh_completed()
@@ -1017,7 +1050,12 @@ class ReviewState:
                     continue
                 if pass_number is not None and run.get("pass") != pass_number:
                     continue
-                if run.get("status") == "findings" and run is latest_run:
+                if (
+                    run.get("status") == "findings"
+                    and run is latest_run
+                    and run.get("definition_version", 1)
+                    == item.get("definition_version", 1)
+                ):
                     candidates.append((name, run))
         candidates.sort(key=lambda pair: str(pair[1].get("started_at", "")), reverse=True)
         return candidates
@@ -1028,6 +1066,24 @@ class ReviewState:
                 if run.get("status") != "running":
                     continue
                 if _running_reservation_is_active(run):
+                    continue
+                if item.get("removed"):
+                    run["status"] = "ignored"
+                    run["ended_at"] = now_iso()
+                    run["exit_code"] = None
+                    run["classification"] = "removed_stale_recovered"
+                    run["finding_count"] = 0
+                    run["error"] = None
+                    item["last_error"] = None
+                    self.data["history"].append(
+                        {
+                            "event": "removed_stale_run_recovered",
+                            "slice": name,
+                            "run_id": run["id"],
+                            "pass": run.get("pass"),
+                            "at": now_iso(),
+                        }
+                    )
                     continue
                 error = "stale running reservation recovered; review run will be retried"
                 run["status"] = "failed"
@@ -1095,8 +1151,13 @@ def build_review_command(slice_data: dict[str, Any], output_file: Path) -> tuple
         "-c",
         f'model_reasoning_effort="{slice_data["reasoning"]}"',
     ]
-    if slice_data["mode"] == "native":
-        target = slice_data["target"]
+    session_target = slice_data.get("session_target")
+    target = (
+        _native_target_from_session(session_target)
+        if session_target is not None
+        else slice_data.get("target")
+    )
+    if target is not None:
         if target.get("uncommitted"):
             cmd.append("--uncommitted")
         elif "base" in target:
@@ -1104,8 +1165,10 @@ def build_review_command(slice_data: dict[str, Any], output_file: Path) -> tuple
         elif "commit" in target:
             cmd.extend(["--commit", target["commit"]])
         else:
-            raise ReviewStateError("native slice target is invalid")
-        cmd.extend(["-o", str(output_file)])
+            raise ReviewStateError("slice target is invalid")
+
+    if slice_data["mode"] == "native":
+        cmd.extend(["-o", str(output_file), task_prompt])
         return cmd, None
 
     prompt = f"{task_prompt}\nSlice instructions:\n{slice_data['prompt']}"
@@ -1684,7 +1747,12 @@ def add_slice_from_args(args: argparse.Namespace, *, stdin: Any = sys.stdin) -> 
             prompt = stdin.read()
 
     with ReviewState.locked(args.review_dir) as state:
-        cwd = args.cwd.resolve() if args.cwd is not None else Path(state.data["session"]["root"]).resolve()
+        session_root = Path(state.data["session"]["root"]).resolve()
+        cwd = args.cwd.resolve() if args.cwd is not None else session_root
+        if not cwd.is_dir():
+            raise ReviewStateError(f"slice cwd is not a directory: {cwd}")
+        if not _path_is_relative_to(cwd, session_root):
+            raise ReviewStateError("slice cwd must remain within the session repository")
         user_directive = (
             args.user_directive_file.read_text(encoding="utf-8")
             if args.user_directive_file is not None

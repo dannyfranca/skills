@@ -70,6 +70,17 @@ class ReviewStateTests(unittest.TestCase):
 
         self.assertEqual(state.data["session"]["target"], {"kind": "base", "value": "main"})
 
+    def test_init_rejects_malformed_target_descriptors(self) -> None:
+        for target in (
+            {"kind": "base", "value": ""},
+            {"kind": "commit", "value": ""},
+            {"kind": "other", "value": "main"},
+            {"kind": "uncommitted", "value": "extra"},
+        ):
+            with self.subTest(target=target):
+                with self.assertRaises(ReviewStateError):
+                    init_review_state(self.root, "Review target.", target=target)
+
     def test_init_rejects_empty_task(self) -> None:
         with self.assertRaises(ReviewStateError):
             init_review_state(self.root, "  ")
@@ -371,6 +382,41 @@ class ReviewStateTests(unittest.TestCase):
             ["slice_removed", "slice_reactivated"],
         )
 
+    def test_reactivated_slice_cannot_ignore_findings_from_old_definition(self) -> None:
+        with ReviewState.locked(self.review_dir) as state:
+            state.add_slice(
+                name="api",
+                mode="native",
+                target={"uncommitted": True},
+                prompt=None,
+                cwd=self.root,
+            )
+            reservation = state.reserve_eligible()[0]
+            state.complete_run(
+                run_id=reservation.run_id,
+                slice_name="api",
+                status="findings",
+                exit_code=0,
+                classification="findings",
+                finding_count=1,
+            )
+            state.remove_slice("api")
+            state.add_slice(
+                name="api",
+                mode="prompt",
+                target=None,
+                prompt="Review the revised API contract.",
+                cwd=self.root,
+            )
+            with self.assertRaisesRegex(ReviewStateError, "no matching finding run"):
+                state.report_ignored_findings(ignored_count=1, slice_name="api")
+            state.save()
+
+        item = ReviewState.load(self.review_dir).data["slices"]["api"]
+        self.assertFalse(item["complete"])
+        self.assertEqual(item["next_pass"], 2)
+        self.assertEqual(item["runs"][0]["status"], "findings")
+
     def test_classifier_cannot_override_user_controlled_slice(self) -> None:
         with ReviewState.locked(self.review_dir) as state:
             state.add_slice(
@@ -395,6 +441,54 @@ class ReviewStateTests(unittest.TestCase):
                     mode="prompt",
                     target=None,
                     prompt="Bring it back.",
+                    cwd=self.root,
+                )
+
+    def test_classifier_cannot_reactivate_user_removed_classifier_slice(self) -> None:
+        with ReviewState.locked(self.review_dir) as state:
+            state.add_slice(
+                name="api",
+                mode="native",
+                target={"uncommitted": True},
+                prompt=None,
+                cwd=self.root,
+            )
+            state.remove_slice(
+                "api",
+                source="user",
+                user_directive="Remove this review.",
+            )
+            with self.assertRaisesRegex(ReviewStateError, "explicit user directive"):
+                state.add_slice(
+                    name="api",
+                    mode="native",
+                    target={"uncommitted": True},
+                    prompt=None,
+                    cwd=self.root,
+                )
+            state.save()
+
+        state = ReviewState.load(self.review_dir)
+        removal = next(
+            event
+            for event in state.data["history"]
+            if event["event"] == "slice_removed"
+        )
+        self.assertEqual(removal["user_directive"], "Remove this review.")
+
+    def test_native_slice_target_must_match_session_target(self) -> None:
+        review_dir = init_review_state(
+            self.root,
+            "Review main.",
+            target={"kind": "base", "value": "main"},
+        )
+        with ReviewState.locked(review_dir) as state:
+            with self.assertRaisesRegex(ReviewStateError, "must match session target"):
+                state.add_slice(
+                    name="wrong-target",
+                    mode="native",
+                    target={"uncommitted": True},
+                    prompt=None,
                     cwd=self.root,
                 )
 
@@ -496,6 +590,15 @@ class ClassifierTests(unittest.TestCase):
             executor_context = Path(tmp) / "executor.txt"
             executor_context.write_text("The parser is high risk.", encoding="utf-8")
             completed = subprocess.CompletedProcess([], 0)
+            with ReviewState.locked(review_dir) as state:
+                state.add_slice(
+                    name="api",
+                    mode="prompt",
+                    target=None,
+                    prompt="Review the API.",
+                    cwd=root,
+                )
+                state.save()
 
             with mock.patch.object(classify_slices.subprocess, "run", return_value=completed) as run:
                 with mock.patch.object(
@@ -524,6 +627,58 @@ class ClassifierTests(unittest.TestCase):
             self.assertIn("The parser is high risk.", prompt)
             self.assertIn(str(SCRIPTS / "add_slice.py"), prompt)
             self.assertIn(str(SCRIPTS / "remove_slice.py"), prompt)
+
+    def test_clean_classifier_rejects_success_without_active_slices(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            review_dir = init_review_state(root, "Review the current changes.")
+
+            with mock.patch.object(
+                classify_slices.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess([], 0),
+            ):
+                with mock.patch.object(
+                    sys,
+                    "argv",
+                    ["classify_slices.py", "--review-dir", str(review_dir)],
+                ):
+                    self.assertEqual(classify_slices.main(), 2)
+
+    def test_classifier_failure_preserves_partial_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            review_dir = init_review_state(root, "Review the current changes.")
+
+            def mutate_then_fail(*args, **kwargs):
+                with ReviewState.locked(review_dir) as state:
+                    state.add_slice(
+                        name="partial",
+                        mode="prompt",
+                        target=None,
+                        prompt="Review the partial classifier mutation.",
+                        cwd=root,
+                    )
+                    state.save()
+                return subprocess.CompletedProcess([], 7)
+
+            with mock.patch.object(
+                classify_slices.subprocess,
+                "run",
+                side_effect=mutate_then_fail,
+            ):
+                with mock.patch.object(
+                    sys,
+                    "argv",
+                    ["classify_slices.py", "--review-dir", str(review_dir)],
+                ):
+                    self.assertEqual(classify_slices.main(), 7)
+
+            state = ReviewState.load(review_dir)
+            self.assertIn("partial", state.data["slices"])
+            self.assertEqual(state.data["history"][-1]["event"], "slice_added")
 
     def test_findings_patterns(self) -> None:
         self.assertEqual(classify_output("## Review\n[P1] Breaks callers"), "findings")
@@ -1031,6 +1186,29 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(runs[0]["status"], "failed")
         self.assertEqual(runs[1]["status"], "quiet")
 
+    def test_stale_removed_reservation_is_ignored(self) -> None:
+        self.add_slice("obsolete")
+        with ReviewState.locked(self.review_dir) as state:
+            state.reserve_eligible()
+            run = state.data["slices"]["obsolete"]["runs"][0]
+            run["runner_pid"] = -1
+            state.remove_slice("obsolete")
+            state.save()
+
+        rc, summary = run_reviews(
+            self.review_dir,
+            command_runner=_should_not_run,
+            stdout=io.StringIO(),
+        )
+
+        state = ReviewState.load(self.review_dir)
+        run = state.data["slices"]["obsolete"]["runs"][0]
+        self.assertEqual(rc, 0)
+        self.assertEqual(summary["st"], "no_work")
+        self.assertEqual(run["status"], "ignored")
+        self.assertEqual(run["classification"], "removed_stale_recovered")
+        self.assertIsNone(state.data["last_error"])
+
     def test_late_completion_for_recovered_run_is_ignored(self) -> None:
         self.add_slice("api")
         with ReviewState.locked(self.review_dir) as state:
@@ -1197,6 +1375,23 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(state.data["completed"])
         self.assertIsNone(state.data["last_error"])
 
+    def test_removing_failed_slice_clears_current_error(self) -> None:
+        self.add_slice("obsolete")
+        run_reviews(
+            self.review_dir,
+            command_runner=lambda *args: subprocess.CompletedProcess([], 1, "", "failed"),
+            stdout=io.StringIO(),
+        )
+
+        with ReviewState.locked(self.review_dir) as state:
+            state.remove_slice("obsolete")
+            state.save()
+
+        state = ReviewState.load(self.review_dir)
+        self.assertTrue(state.data["completed"])
+        self.assertIsNone(state.data["slices"]["obsolete"]["last_error"])
+        self.assertIsNone(state.data["last_error"])
+
     def test_concurrent_run_reviews_do_not_duplicate_reservations(self) -> None:
         self.add_slice("api")
         calls = []
@@ -1270,11 +1465,12 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(slice_data["target"], {"uncommitted": True})
             self.assertEqual(cmd[:4], ["codex", "exec", "review", "--ephemeral"])
             self.assertIn("-m", cmd)
-            self.assertEqual(cmd[cmd.index("-m") + 1], "gpt-5.6-sol")
+            self.assertEqual(cmd[cmd.index("-m") + 1], "gpt-5.6-terra")
             self.assertIn('-c', cmd)
             self.assertEqual(cmd[cmd.index("-c") + 1], 'model_reasoning_effort="high"')
             self.assertIn("--uncommitted", cmd)
-            self.assertEqual(cmd[-2:], ["-o", str(output_file)])
+            self.assertEqual(cmd[-3:-1], ["-o", str(output_file)])
+            self.assertIn(str(self.review_dir / "task.md"), cmd[-1])
             output_file.write_text("No findings.", encoding="utf-8")
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
@@ -1315,12 +1511,14 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("--base", base_cmd)
         self.assertEqual(base_cmd[base_cmd.index("--base") + 1], "main")
         self.assertNotIn("--uncommitted", base_cmd)
-        self.assertEqual(base_cmd[-2:], ["-o", str(self.review_dir / "1-base.md")])
+        self.assertEqual(base_cmd[-3:-1], ["-o", str(self.review_dir / "1-base.md")])
+        self.assertIn(str(self.review_dir / "task.md"), base_cmd[-1])
         self.assertIsNone(base_input)
         self.assertIn("--commit", commit_cmd)
         self.assertEqual(commit_cmd[commit_cmd.index("--commit") + 1], "abc123")
         self.assertNotIn("--uncommitted", commit_cmd)
-        self.assertEqual(commit_cmd[-2:], ["-o", str(self.review_dir / "1-commit.md")])
+        self.assertEqual(commit_cmd[-3:-1], ["-o", str(self.review_dir / "1-commit.md")])
+        self.assertIn(str(self.review_dir / "task.md"), commit_cmd[-1])
         self.assertIsNone(commit_input)
 
     def test_build_review_command_uses_positional_prompt_and_output(self) -> None:
@@ -1343,6 +1541,22 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(cmd[-3:-1], ["-o", str(self.review_dir / "1-api.md")])
         self.assertIn(str(self.review_dir / "task.md"), cmd[-1])
         self.assertIn("Slice instructions:\nReview only API code.", cmd[-1])
+
+    def test_prompt_slice_uses_session_target(self) -> None:
+        cmd, _ = build_review_command(
+            {
+                "name": "api",
+                "mode": "prompt",
+                "prompt": "Review only API code.",
+                "session_target": {"kind": "commit", "value": "abc123"},
+                "model": "gpt-5.5",
+                "reasoning": "high",
+            },
+            self.review_dir / "1-api.md",
+        )
+
+        self.assertIn("--commit", cmd)
+        self.assertEqual(cmd[cmd.index("--commit") + 1], "abc123")
 
 
 class CliTests(unittest.TestCase):
@@ -1403,6 +1617,34 @@ class CliTests(unittest.TestCase):
         state = ReviewState.load(review_dir)
         self.assertIn("api", state.data["slices"])
         self.assertEqual(Path(state.data["slices"]["api"]["cwd"]), self.root.resolve())
+
+    def test_add_slice_rejects_cwd_outside_session_repository(self) -> None:
+        review_dir = Path(
+            self.run_cli(
+                str(SCRIPTS / "init_state.py"),
+                "--root",
+                str(self.root),
+                "--task",
+                "Review cwd boundaries.",
+            ).stdout.strip()
+        )
+        outside = Path(self.tmp.name) / "outside"
+        outside.mkdir()
+
+        proc = self.run_cli(
+            str(SCRIPTS / "add_slice.py"),
+            "--review-dir",
+            str(review_dir),
+            "--name",
+            "outside",
+            "--uncommitted",
+            "--cwd",
+            str(outside),
+        )
+
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("must remain within", proc.stderr)
+        self.assertEqual(ReviewState.load(review_dir).data["slices"], {})
 
     def test_compatibility_wrapper_creates_state(self) -> None:
         proc = self.run_cli(
