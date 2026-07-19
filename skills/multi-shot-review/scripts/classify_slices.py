@@ -9,6 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from review_instructions import load_classifier_guidance
 from review_state import DEFAULT_MODEL, DEFAULT_REASONING, ReviewState, ReviewStateError
 
 
@@ -28,10 +29,12 @@ def main() -> int:
         with ReviewState.locked(review_dir) as state:
             root = Path(state.data["session"]["root"])
             target = dict(state.data["session"]["target"])
+        review_instructions = load_classifier_guidance(root, target)
         prompt = _classifier_prompt(
             review_dir=review_dir,
             root=root,
             target=target,
+            review_instructions=review_instructions,
             user_directives=_read_optional(args.user_directives_file),
             user_directives_file=(
                 args.user_directives_file.resolve()
@@ -53,6 +56,8 @@ def main() -> int:
             args.model,
             "-c",
             f'model_reasoning_effort="{args.reasoning}"',
+            "-c",
+            "project_doc_fallback_filenames=[]",
             prompt,
         ]
         proc = subprocess.run(cmd, cwd=review_dir, check=False)
@@ -76,6 +81,7 @@ def _classifier_prompt(
     review_dir: Path,
     root: Path,
     target: dict[str, str],
+    review_instructions: str,
     user_directives: str,
     user_directives_file: Path | None,
     executor_context: str,
@@ -96,8 +102,17 @@ Read completely:
 Repository: {root}
 Review target: {json.dumps(target, sort_keys=True)}
 
-Inspect the target yourself with Git commands in the repository. Read changed code and every
-applicable review-rule file discovered through the convention in slice-selection.md.
+Inspect the target yourself with Git commands in the repository. Read changed code and applicable
+repository rules described by slice-selection.md.
+
+The tooling may provide already-resolved scoped guidance below. Treat it as classifier-only. Use it
+to select slices and, when material, translate only relevant concrete requirements into focused
+slice prompts. Never tell a reviewer to load the source guidance, copy it wholesale into a slice
+prompt, or assume a native slice receives it. When this guidance must govern reviewer behavior, use
+a focused slice prompt.
+
+Additional scoped guidance:
+{review_instructions}
 
 Manage slices only by executing these scripts:
 - add/reactivate: {add_slice}

@@ -617,7 +617,18 @@ class ClassifierTests(unittest.TestCase):
                 )
                 state.save()
 
-            with mock.patch.object(classify_slices.subprocess, "run", return_value=completed) as run:
+            with mock.patch.object(
+                classify_slices,
+                "load_classifier_guidance",
+                return_value=(
+                    "### Guidance for changed descendants of .\n\n"
+                    "Check compatibility boundaries."
+                ),
+            ), mock.patch.object(
+                classify_slices.subprocess,
+                "run",
+                return_value=completed,
+            ) as run:
                 with mock.patch.object(
                     sys,
                     "argv",
@@ -645,8 +656,14 @@ class ClassifierTests(unittest.TestCase):
             self.assertIn(str(SCRIPTS / "add_slice.py"), prompt)
             self.assertIn(str(SCRIPTS / "remove_slice.py"), prompt)
             self.assertIn(str(ROOT / "references" / "classifier-rules.md"), prompt)
+            self.assertIn("Additional scoped guidance:", prompt)
+            self.assertIn("Check compatibility boundaries.", prompt)
+            self.assertNotIn(str(root / "REVIEW.md"), prompt)
+            self.assertIn("project_doc_fallback_filenames=[]", cmd)
             self.assertNotIn("Keep each slice narrow", prompt)
             self.assertNotIn("Prefer the smallest useful set of slices", prompt)
+            stored_prompt = ReviewState.load(review_dir).data["slices"]["api"]["prompt"]
+            self.assertNotIn("Check compatibility boundaries.", stored_prompt)
 
     def test_clean_classifier_rejects_success_without_active_slices(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -655,6 +672,10 @@ class ClassifierTests(unittest.TestCase):
             review_dir = init_review_state(root, "Review the current changes.")
 
             with mock.patch.object(
+                classify_slices,
+                "load_classifier_guidance",
+                return_value="(no additional scoped guidance)",
+            ), mock.patch.object(
                 classify_slices.subprocess,
                 "run",
                 return_value=subprocess.CompletedProcess([], 0),
@@ -685,6 +706,10 @@ class ClassifierTests(unittest.TestCase):
                 return subprocess.CompletedProcess([], 7)
 
             with mock.patch.object(
+                classify_slices,
+                "load_classifier_guidance",
+                return_value="(no additional scoped guidance)",
+            ), mock.patch.object(
                 classify_slices.subprocess,
                 "run",
                 side_effect=mutate_then_fail,
@@ -1488,6 +1513,7 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(cmd[cmd.index("-m") + 1], "gpt-5.6-terra")
             self.assertIn('-c', cmd)
             self.assertEqual(cmd[cmd.index("-c") + 1], 'model_reasoning_effort="high"')
+            self.assertIn("project_doc_fallback_filenames=[]", cmd)
             self.assertIn("--uncommitted", cmd)
             self.assertEqual(cmd[-2:], ["-o", str(output_file)])
             task_config = next(arg for arg in cmd if arg.startswith("developer_instructions="))
@@ -1557,6 +1583,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("-m") + 1], "gpt-5.5")
         self.assertIn("-c", cmd)
         self.assertEqual(cmd[cmd.index("-c") + 1], 'model_reasoning_effort="high"')
+        self.assertIn("project_doc_fallback_filenames=[]", cmd)
         self.assertEqual(cmd[-3:-1], ["-o", str(self.review_dir / "1-api.md")])
         self.assertIn(str(self.review_dir / "task.md"), cmd[-1])
         self.assertIn("Slice instructions:\nReview only API code.", cmd[-1])
@@ -2461,13 +2488,15 @@ class CliTests(unittest.TestCase):
         self.assertNotIn("--stream-progress", text)
         self.assertNotIn("_last-run.json", text)
 
-    def test_skill_discloses_slice_selection_once(self) -> None:
+    def test_skill_keeps_loader_mechanics_out_of_classifier_references(self) -> None:
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
         reference = (ROOT / "references" / "slice-selection.md").read_text(encoding="utf-8")
 
         self.assertIn("references/slice-selection.md", skill)
         self.assertIn("classifier-rules.md", reference)
-        self.assertIn("~/.agents/REVIEW.md", reference)
+        self.assertIn("Scoped classifier guidance", reference)
+        self.assertNotIn("REVIEW.md", reference)
+        self.assertNotIn("REVIEW.override.md", reference)
         self.assertIn("Successful mutations remain", " ".join(reference.split()))
         self.assertFalse((ROOT / "references" / "classification.schema.json").exists())
         self.assertFalse((ROOT / "README.md").exists())

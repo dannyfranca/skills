@@ -1165,6 +1165,8 @@ def build_review_command(slice_data: dict[str, Any], output_file: Path) -> tuple
         slice_data["model"],
         "-c",
         f'model_reasoning_effort="{slice_data["reasoning"]}"',
+        "-c",
+        "project_doc_fallback_filenames=[]",
     ]
     session_target = slice_data.get("session_target")
     target = (
