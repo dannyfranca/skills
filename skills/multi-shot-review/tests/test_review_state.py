@@ -23,6 +23,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 import classify_slices  # noqa: E402
 import review_state as review_state_module  # noqa: E402
+from review_config import ReviewConfig  # noqa: E402
 from review_state import (  # noqa: E402
     ReviewState,
     ReviewStateError,
@@ -274,6 +275,11 @@ class ReviewStateTests(unittest.TestCase):
             reloaded.data["slices"]["api"]["model_source"],
             "harness-default",
         )
+        self.assertIsNone(reloaded.data["slices"]["api"]["reasoning"])
+        self.assertEqual(
+            reloaded.data["slices"]["api"]["reasoning_source"],
+            "harness-default",
+        )
 
     def test_rejects_duplicate_and_unsafe_slice_names(self) -> None:
         with ReviewState.locked(self.review_dir) as state:
@@ -377,6 +383,8 @@ class ReviewStateTests(unittest.TestCase):
                 cwd=self.root,
                 model="first-model",
                 model_source="configured-default",
+                reasoning="high",
+                reasoning_source="configured-default",
             )
             reservation = state.reserve_eligible()[0]
             state.complete_run(
@@ -395,6 +403,8 @@ class ReviewStateTests(unittest.TestCase):
                 cwd=self.root,
                 model="second-model",
                 model_source="slice-override",
+                reasoning="low",
+                reasoning_source="slice-override",
             )
             state.save()
 
@@ -403,9 +413,15 @@ class ReviewStateTests(unittest.TestCase):
         self.assertFalse(item["removed"])
         self.assertEqual(item["prompt"], "Review the API contract only.")
         self.assertEqual(item["model"], "second-model")
+        self.assertEqual(item["reasoning"], "low")
         self.assertEqual(len(item["runs"]), 1)
         self.assertEqual(item["runs"][0]["model"], "first-model")
         self.assertEqual(item["runs"][0]["model_source"], "configured-default")
+        self.assertEqual(item["runs"][0]["reasoning"], "high")
+        self.assertEqual(
+            item["runs"][0]["reasoning_source"],
+            "configured-default",
+        )
         self.assertEqual(
             [event["event"] for event in state.data["history"] if event.get("slice") == "api"][-2:],
             ["slice_removed", "slice_reactivated"],
@@ -631,6 +647,10 @@ class ClassifierTests(unittest.TestCase):
 
             with mock.patch.object(
                 classify_slices,
+                "load_review_config",
+                return_value=ReviewConfig(),
+            ), mock.patch.object(
+                classify_slices,
                 "load_classifier_guidance",
                 return_value=(
                     "### Guidance for changed descendants of .\n\n"
@@ -672,22 +692,30 @@ class ClassifierTests(unittest.TestCase):
             self.assertIn("Check compatibility boundaries.", prompt)
             self.assertNotIn(str(root / "REVIEW.md"), prompt)
             self.assertNotIn("-m", cmd)
+            self.assertFalse(
+                any(arg.startswith("model_reasoning_effort=") for arg in cmd)
+            )
             self.assertIn("project_doc_fallback_filenames=[]", cmd)
             self.assertIn("--model <model>", prompt)
-            self.assertIn("durable slice definition", prompt)
+            self.assertIn("--reasoning <effort>", prompt)
+            self.assertIn("durable slice definition", " ".join(prompt.split()))
             self.assertNotIn("Keep each slice narrow", prompt)
             self.assertNotIn("Prefer the smallest useful set of slices", prompt)
             stored_prompt = ReviewState.load(review_dir).data["slices"]["api"]["prompt"]
             self.assertNotIn("Check compatibility boundaries.", stored_prompt)
 
-    def test_classifier_uses_resolved_config_model_and_review_file(self) -> None:
+    def test_classifier_uses_resolved_config_execution_settings_and_review_file(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "repo"
             root.mkdir()
             agents = root / ".agents"
             agents.mkdir()
             (agents / "multi-shot-review.toml").write_text(
-                'review_file = "SECURITY"\nclassifier_model = "classifier-x"\n',
+                'review_file = "SECURITY"\n'
+                'classifier_model = "classifier-x"\n'
+                'classifier_reasoning = "medium"\n',
                 encoding="utf-8",
             )
             review_dir = init_review_state(root, "Review the current changes.")
@@ -724,6 +752,7 @@ class ClassifierTests(unittest.TestCase):
             )
             cmd = run.call_args.args[0]
             self.assertEqual(cmd[cmd.index("-m") + 1], "classifier-x")
+            self.assertIn('model_reasoning_effort="medium"', cmd)
 
     def test_clean_classifier_rejects_success_without_active_slices(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1570,8 +1599,7 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(slice_data["target"], {"uncommitted": True})
             self.assertEqual(cmd[:4], ["codex", "exec", "review", "--ephemeral"])
             self.assertNotIn("-m", cmd)
-            self.assertIn('-c', cmd)
-            self.assertEqual(cmd[cmd.index("-c") + 1], 'model_reasoning_effort="high"')
+            self.assertNotIn('model_reasoning_effort="high"', cmd)
             self.assertIn("project_doc_fallback_filenames=[]", cmd)
             self.assertIn("--uncommitted", cmd)
             self.assertEqual(cmd[-2:], ["-o", str(output_file)])
@@ -1585,10 +1613,15 @@ class RunnerTests(unittest.TestCase):
         run = state.data["slices"]["api"]["runs"][0]
         self.assertIsNone(run["model"])
         self.assertEqual(run["model_source"], "harness-default")
+        self.assertIsNone(run["reasoning"])
+        self.assertEqual(run["reasoning_source"], "harness-default")
         artifact = Path(run["output_file"]).read_text(encoding="utf-8")
         self.assertTrue(artifact.startswith("---\nmodel: null\n"))
         self.assertIn(
-            'model_source: "harness-default"\n---\n\nNo findings.',
+            'model_source: "harness-default"\n'
+            "reasoning: null\n"
+            'reasoning_source: "harness-default"\n'
+            "---\n\nNo findings.",
             artifact,
         )
 
@@ -1601,6 +1634,35 @@ class RunnerTests(unittest.TestCase):
 
         state = ReviewState.load(self.review_dir)
         self.assertEqual(state.data["slices"]["api"]["runs"], [])
+
+    def test_review_artifact_records_configured_model_and_reasoning(self) -> None:
+        with ReviewState.locked(self.review_dir) as state:
+            state.add_slice(
+                name="tuned",
+                mode="native",
+                target={"uncommitted": True},
+                prompt=None,
+                cwd=self.root,
+                model="review-model",
+                model_source="configured-default",
+                reasoning="medium",
+                reasoning_source="configured-default",
+            )
+            state.save()
+
+        run_reviews(
+            self.review_dir,
+            command_runner=_writes("No findings."),
+            stdout=io.StringIO(),
+        )
+
+        run = ReviewState.load(self.review_dir).data["slices"]["tuned"]["runs"][0]
+        self.assertEqual(run["model"], "review-model")
+        self.assertEqual(run["reasoning"], "medium")
+        artifact = Path(run["output_file"]).read_text(encoding="utf-8")
+        self.assertIn('model: "review-model"', artifact)
+        self.assertIn('reasoning: "medium"', artifact)
+        self.assertIn('reasoning_source: "configured-default"', artifact)
 
     def test_build_review_command_uses_base_and_commit_targets(self) -> None:
         base_cmd, base_input = build_review_command(
@@ -1752,11 +1814,12 @@ class CliTests(unittest.TestCase):
         self.assertIn("api", state.data["slices"])
         self.assertEqual(Path(state.data["slices"]["api"]["cwd"]), self.root.resolve())
 
-    def test_add_slice_uses_config_default_and_allows_explicit_model(self) -> None:
+    def test_add_slice_uses_config_defaults_and_allows_explicit_choices(self) -> None:
         agents = self.root / ".agents"
         agents.mkdir()
         (agents / "multi-shot-review.toml").write_text(
-            'slice_default_model = "configured-slice"\n',
+            'slice_default_model = "configured-slice"\n'
+            'slice_default_reasoning = "high"\n',
             encoding="utf-8",
         )
         review_dir = Path(
@@ -1786,6 +1849,8 @@ class CliTests(unittest.TestCase):
             "--uncommitted",
             "--model",
             "specialized-slice",
+            "--reasoning",
+            "low",
         )
 
         self.assertEqual(configured.returncode, 0, configured.stderr)
@@ -1796,9 +1861,19 @@ class CliTests(unittest.TestCase):
             state.data["slices"]["configured"]["model_source"],
             "configured-default",
         )
+        self.assertEqual(state.data["slices"]["configured"]["reasoning"], "high")
+        self.assertEqual(
+            state.data["slices"]["configured"]["reasoning_source"],
+            "configured-default",
+        )
         self.assertEqual(state.data["slices"]["explicit"]["model"], "specialized-slice")
         self.assertEqual(
             state.data["slices"]["explicit"]["model_source"],
+            "slice-override",
+        )
+        self.assertEqual(state.data["slices"]["explicit"]["reasoning"], "low")
+        self.assertEqual(
+            state.data["slices"]["explicit"]["reasoning_source"],
             "slice-override",
         )
 

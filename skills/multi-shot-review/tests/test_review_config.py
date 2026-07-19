@@ -34,16 +34,22 @@ class ReviewConfigTests(unittest.TestCase):
 
         self.assertEqual(config.review_file, "REVIEW")
         self.assertIsNone(config.classifier_model)
+        self.assertIsNone(config.classifier_reasoning)
         self.assertIsNone(config.slice_default_model)
+        self.assertIsNone(config.slice_default_reasoning)
 
     def test_merges_every_directory_from_home_to_repository_per_key(self) -> None:
         self.write_config(
             self.home,
-            'review_file = "HOME_REVIEW"\nclassifier_model = "global-classifier"\n',
+            'review_file = "HOME_REVIEW"\n'
+            'classifier_model = "global-classifier"\n'
+            'classifier_reasoning = "medium"\n',
         )
         self.write_config(
             self.home / "work",
-            'classifier_model = "work-classifier"\nslice_default_model = "work-slice"\n',
+            'classifier_model = "work-classifier"\n'
+            'slice_default_model = "work-slice"\n'
+            'slice_default_reasoning = "high"\n',
         )
         self.write_config(
             self.root,
@@ -54,7 +60,9 @@ class ReviewConfigTests(unittest.TestCase):
 
         self.assertEqual(config.review_file, "REPO_REVIEW")
         self.assertEqual(config.classifier_model, "work-classifier")
+        self.assertEqual(config.classifier_reasoning, "medium")
         self.assertEqual(config.slice_default_model, "work-slice")
+        self.assertEqual(config.slice_default_reasoning, "high")
 
     def test_rejects_unknown_non_string_empty_and_path_settings(self) -> None:
         invalid_configs = (

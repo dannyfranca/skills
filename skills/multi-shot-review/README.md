@@ -19,19 +19,24 @@ All settings are optional:
 ```toml
 review_file = "REVIEW"
 classifier_model = "model-name"
+classifier_reasoning = "high"
 slice_default_model = "model-name"
+slice_default_reasoning = "high"
 ```
 
 - `review_file`: review-instruction basename. Defaults to `REVIEW`. It must not contain a path or
   the `.md` suffix.
 - `classifier_model`: model used by the slice classifier.
+- `classifier_reasoning`: reasoning effort used by the slice classifier.
 - `slice_default_model`: model used when a slice does not choose one explicitly.
+- `slice_default_reasoning`: reasoning effort used when a slice does not choose one explicitly.
 
 Unknown settings and invalid values are rejected.
 
-When no classifier or slice model is configured, the corresponding command omits `-m` and lets the
-Codex harness select its default. `classify_slices.py --model` overrides the configured classifier
-model. `add_slice.py --model` overrides the configured slice default for that slice.
+When no model or reasoning is configured, the corresponding command omits `-m` or
+`model_reasoning_effort` and lets the Codex harness select its default.
+`classify_slices.py --model/--reasoning` override the configured classifier defaults.
+`add_slice.py --model/--reasoning` override the configured slice defaults for that slice.
 
 ## Review-instruction resolution
 
@@ -65,20 +70,20 @@ The resolved content is classifier-only. The classifier receives scoped guidance
 paths or loader details. Review slices do not receive it automatically. When relevant, the
 classifier translates only the concrete requirement into a focused slice prompt.
 
-## Model audit and resume data
+## Model and reasoning audit data
 
-Model selection is durable:
+Model and reasoning selections are durable:
 
-- Slice definitions store `model` and `model_source`.
-- Every run snapshots both fields, so later configuration or slice-definition changes do not alter
-  prior run identity.
+- Slice definitions store `model`, `model_source`, `reasoning`, and `reasoning_source`.
+- Every run snapshots all four fields, so later configuration or slice-definition changes do not
+  alter prior run identity.
 - Successful review Markdown artifacts include matching YAML frontmatter.
 
-`model_source` is one of:
+Each source field is one of:
 
 - `slice-override`
 - `configured-default`
 - `harness-default`
-- `legacy-definition` for migrated state created before run-level model snapshots
+- `legacy-definition` for migrated state created before run-level model/reasoning snapshots
 
-Harness-default runs store `model: null`.
+Harness-default runs store `model: null` and/or `reasoning: null`.

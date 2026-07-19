@@ -67,9 +67,10 @@ Injected scoped guidance is classifier-only. When it materially affects reviewer
 translate only the applicable requirement into a focused prompt. Do not name or link its source,
 copy it wholesale, or use a native slice that would need the guidance.
 
-## Model selection
+## Model and reasoning selection
 
 Each slice may select a model with `add_slice.py --model <model>` when the target, risk, or scoped
 guidance makes a specific model materially more suitable. Otherwise omit `--model`; tooling applies
-the configured slice default or lets the harness choose. Do not change models performatively.
-Model choice is durable slice state, not reviewer prompt content.
+the configured slice default or lets the harness choose. The same rule applies to
+`--reasoning <effort>`. Do not change either performatively. Model and reasoning choices are durable
+slice state, not reviewer prompt content.

@@ -17,7 +17,9 @@ DEFAULT_REVIEW_FILE = "REVIEW"
 _SUPPORTED_KEYS = {
     "review_file",
     "classifier_model",
+    "classifier_reasoning",
     "slice_default_model",
+    "slice_default_reasoning",
 }
 _REVIEW_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
@@ -26,7 +28,9 @@ _REVIEW_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 class ReviewConfig:
     review_file: str = DEFAULT_REVIEW_FILE
     classifier_model: str | None = None
+    classifier_reasoning: str | None = None
     slice_default_model: str | None = None
+    slice_default_reasoning: str | None = None
 
 
 def load_review_config(root: Path, *, home: Path | None = None) -> ReviewConfig:

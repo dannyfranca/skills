@@ -24,7 +24,6 @@ from typing import Any, Callable, Iterable
 
 
 SCHEMA_VERSION = 1
-DEFAULT_REASONING = "high"
 MAX_ACTIVE_SLICES = 10
 TASK_ENTRYPOINT = "task.md"
 RELATED_TASKS_DIR = "related-tasks"
@@ -556,6 +555,14 @@ class ReviewState:
                     "model_source",
                     "harness-default" if item.get("model") is None else "legacy-definition",
                 )
+                item.setdefault(
+                    "reasoning_source",
+                    (
+                        "harness-default"
+                        if item.get("reasoning") is None
+                        else "legacy-definition"
+                    ),
+                )
                 runs = item.get("runs")
                 if not isinstance(runs, list):
                     continue
@@ -564,6 +571,8 @@ class ReviewState:
                         continue
                     run.setdefault("model", item.get("model"))
                     run.setdefault("model_source", "legacy-definition")
+                    run.setdefault("reasoning", item.get("reasoning"))
+                    run.setdefault("reasoning_source", "legacy-definition")
         return cls(review_dir.resolve(), data)
 
     @classmethod
@@ -644,8 +653,18 @@ class ReviewState:
                 raise ReviewStateError(f"slice {name!r} must have a model string or null")
             if not isinstance(item.get("model_source"), str) or not item["model_source"]:
                 raise ReviewStateError(f"slice {name!r} must have model_source")
-            if not isinstance(item.get("reasoning"), str) or not item["reasoning"]:
-                raise ReviewStateError(f"slice {name!r} must have reasoning")
+            if item.get("reasoning") is not None and (
+                not isinstance(item.get("reasoning"), str)
+                or not item["reasoning"].strip()
+            ):
+                raise ReviewStateError(
+                    f"slice {name!r} must have a reasoning string or null"
+                )
+            if (
+                not isinstance(item.get("reasoning_source"), str)
+                or not item["reasoning_source"]
+            ):
+                raise ReviewStateError(f"slice {name!r} must have reasoning_source")
             if not isinstance(item.get("next_pass"), int) or item["next_pass"] < 1:
                 raise ReviewStateError(f"slice {name!r} must have a positive next_pass")
             if not isinstance(item.get("complete"), bool):
@@ -706,6 +725,20 @@ class ReviewState:
             raise ReviewStateError(
                 f"slice {slice_name!r} has run with invalid model_source"
             )
+        if run.get("reasoning") is not None and (
+            not isinstance(run.get("reasoning"), str)
+            or not run["reasoning"].strip()
+        ):
+            raise ReviewStateError(
+                f"slice {slice_name!r} has run with invalid reasoning"
+            )
+        if (
+            not isinstance(run.get("reasoning_source"), str)
+            or not run["reasoning_source"]
+        ):
+            raise ReviewStateError(
+                f"slice {slice_name!r} has run with invalid reasoning_source"
+            )
         definition_version = run.get("definition_version", 1)
         if not isinstance(definition_version, int) or definition_version < 1:
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid definition version")
@@ -753,7 +786,8 @@ class ReviewState:
         cwd: Path,
         model: str | None = None,
         model_source: str | None = None,
-        reasoning: str = DEFAULT_REASONING,
+        reasoning: str | None = None,
+        reasoning_source: str | None = None,
         source: str = "classifier",
         user_directive: str | None = None,
     ) -> None:
@@ -785,6 +819,20 @@ class ReviewState:
             model_source = "harness-default" if model is None else "slice-override"
         if not isinstance(model_source, str) or not model_source:
             raise ReviewStateError("slice model_source must be a non-empty string")
+        if reasoning is not None and (
+            not isinstance(reasoning, str) or not reasoning.strip()
+        ):
+            raise ReviewStateError(
+                "slice reasoning must be a non-empty string or null"
+            )
+        if reasoning_source is None:
+            reasoning_source = (
+                "harness-default" if reasoning is None else "slice-override"
+            )
+        if not isinstance(reasoning_source, str) or not reasoning_source:
+            raise ReviewStateError(
+                "slice reasoning_source must be a non-empty string"
+            )
         definition = {
             "name": name,
             "mode": mode,
@@ -794,6 +842,7 @@ class ReviewState:
             "model": model,
             "model_source": model_source,
             "reasoning": reasoning,
+            "reasoning_source": reasoning_source,
             "next_pass": 1,
             "complete": False,
             "last_error": None,
@@ -908,6 +957,8 @@ class ReviewState:
                 "definition_version": item.get("definition_version", 1),
                 "model": item.get("model"),
                 "model_source": item["model_source"],
+                "reasoning": item.get("reasoning"),
+                "reasoning_source": item["reasoning_source"],
             }
             item["runs"].append(run)
             item["last_error"] = None
@@ -1204,14 +1255,11 @@ def build_review_command(slice_data: dict[str, Any], output_file: Path) -> tuple
     ]
     if slice_data.get("model") is not None:
         cmd.extend(["-m", slice_data["model"]])
-    cmd.extend(
-        [
-            "-c",
-            f'model_reasoning_effort="{slice_data["reasoning"]}"',
-            "-c",
-            "project_doc_fallback_filenames=[]",
-        ]
-    )
+    if slice_data.get("reasoning") is not None:
+        cmd.extend(
+            ["-c", f'model_reasoning_effort="{slice_data["reasoning"]}"']
+        )
+    cmd.extend(["-c", "project_doc_fallback_filenames=[]"])
     session_target = slice_data.get("session_target")
     target = (
         _native_target_from_session(session_target)
@@ -1439,10 +1487,12 @@ def evaluate_completed_process(
         append_error(review_dir, f"empty review output for {reservation.slice_name}", error)
         return "failed", None, None, "review output is empty"
 
-    text = _add_model_frontmatter(
+    text = _add_execution_frontmatter(
         text,
         model=reservation.slice_data.get("model"),
         model_source=reservation.slice_data["model_source"],
+        reasoning=reservation.slice_data.get("reasoning"),
+        reasoning_source=reservation.slice_data["reasoning_source"],
     )
     try:
         _atomic_write_text(output_file, text)
@@ -1462,17 +1512,22 @@ def evaluate_completed_process(
     return classification, classification, finding_count, None
 
 
-def _add_model_frontmatter(
+def _add_execution_frontmatter(
     text: str,
     *,
     model: str | None,
     model_source: str,
+    reasoning: str | None,
+    reasoning_source: str,
 ) -> str:
     model_value = "null" if model is None else json.dumps(model)
+    reasoning_value = "null" if reasoning is None else json.dumps(reasoning)
     return (
         "---\n"
         f"model: {model_value}\n"
         f"model_source: {json.dumps(model_source)}\n"
+        f"reasoning: {reasoning_value}\n"
+        f"reasoning_source: {json.dumps(reasoning_source)}\n"
         "---\n\n"
         f"{text}"
     )
@@ -1819,7 +1874,13 @@ def parse_add_slice_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--model",
         help="Use a specific model for this slice instead of the configured or harness default.",
     )
-    parser.add_argument("--reasoning", default=DEFAULT_REASONING)
+    parser.add_argument(
+        "--reasoning",
+        help=(
+            "Use a specific reasoning effort for this slice instead of the "
+            "configured or harness default."
+        ),
+    )
     parser.add_argument("--cwd", type=Path)
     parser.add_argument(
         "--user-directive-file",
@@ -1882,6 +1943,15 @@ def add_slice_from_args(args: argparse.Namespace, *, stdin: Any = sys.stdin) -> 
         else:
             model = None
             model_source = "harness-default"
+        if args.reasoning is not None:
+            reasoning = args.reasoning
+            reasoning_source = "slice-override"
+        elif config.slice_default_reasoning is not None:
+            reasoning = config.slice_default_reasoning
+            reasoning_source = "configured-default"
+        else:
+            reasoning = None
+            reasoning_source = "harness-default"
         state.add_slice(
             name=args.name,
             mode=mode,
@@ -1890,7 +1960,8 @@ def add_slice_from_args(args: argparse.Namespace, *, stdin: Any = sys.stdin) -> 
             cwd=cwd,
             model=model,
             model_source=model_source,
-            reasoning=args.reasoning,
+            reasoning=reasoning,
+            reasoning_source=reasoning_source,
             source="user" if user_directive is not None else "classifier",
             user_directive=user_directive,
         )

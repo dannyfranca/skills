@@ -11,7 +11,7 @@ from pathlib import Path
 
 from review_config import load_review_config
 from review_instructions import load_classifier_guidance
-from review_state import DEFAULT_REASONING, ReviewState, ReviewStateError
+from review_state import ReviewState, ReviewStateError
 
 
 def main() -> int:
@@ -22,7 +22,7 @@ def main() -> int:
     parser.add_argument("--user-directives-file", type=Path)
     parser.add_argument("--executor-context-file", type=Path)
     parser.add_argument("--model")
-    parser.add_argument("--reasoning", default=DEFAULT_REASONING)
+    parser.add_argument("--reasoning")
     args = parser.parse_args()
 
     try:
@@ -66,10 +66,19 @@ def main() -> int:
             raise ReviewStateError("classifier model must be a non-empty string")
         if classifier_model is not None:
             cmd.extend(["-m", classifier_model])
+        classifier_reasoning = (
+            args.reasoning
+            if args.reasoning is not None
+            else config.classifier_reasoning
+        )
+        if classifier_reasoning is not None and not classifier_reasoning.strip():
+            raise ReviewStateError("classifier reasoning must be a non-empty string")
+        if classifier_reasoning is not None:
+            cmd.extend(
+                ["-c", f'model_reasoning_effort="{classifier_reasoning}"']
+            )
         cmd.extend(
             [
-                "-c",
-                f'model_reasoning_effort="{args.reasoning}"',
                 "-c",
                 "project_doc_fallback_filenames=[]",
                 prompt,
@@ -136,9 +145,10 @@ Manage slices only by executing these scripts:
 Call them as many times as needed. For focused slices, send the complete reviewer prompt through
 `--prompt-file -`. For native slices, pass the session target flag.
 
-Each add may pass `--model <model>` when a specific model materially suits that slice. Otherwise
-omit `--model`; the tool applies the configured slice default or leaves model choice to the review
-harness. Treat model choice as part of the durable slice definition, not as prompt text.
+Each add may pass `--model <model>` and/or `--reasoning <effort>` when a specific choice materially
+suits that slice. Otherwise omit the option; the tool applies its configured slice default or
+leaves the choice to the review harness. Treat model and reasoning choices as part of the durable
+slice definition, not as prompt text.
 
 Normally omit `--user-directive-file`. If the supplemental user directions explicitly authorize
 changing a user-controlled slice, pass this exact source file to the mutation:
