@@ -13,8 +13,7 @@ from review_state import ReviewStateError
 
 
 DEFAULT_MAX_BYTES = 32 * 1024
-REVIEW_OVERRIDE = "REVIEW.override.md"
-REVIEW_BASE = "REVIEW.md"
+DEFAULT_REVIEW_FILE = "REVIEW"
 
 
 @dataclass(frozen=True)
@@ -30,6 +29,7 @@ def load_classifier_guidance(
     root: Path,
     target: dict[str, str],
     *,
+    review_file: str = DEFAULT_REVIEW_FILE,
     global_agents_dir: Path | None = None,
     max_bytes: int = DEFAULT_MAX_BYTES,
 ) -> str:
@@ -39,6 +39,7 @@ def load_classifier_guidance(
         _discover_review_instructions(
             root,
             _collect_changed_files(root, target),
+            review_file=review_file,
             global_agents_dir=global_agents_dir,
             max_bytes=max_bytes,
         )
@@ -95,6 +96,7 @@ def _discover_review_instructions(
     root: Path,
     changed_files: Iterable[str],
     *,
+    review_file: str = DEFAULT_REVIEW_FILE,
     global_agents_dir: Path | None = None,
     max_bytes: int = DEFAULT_MAX_BYTES,
 ) -> tuple[_ScopedGuidance, ...]:
@@ -102,6 +104,7 @@ def _discover_review_instructions(
 
     if max_bytes <= 0:
         raise ReviewStateError("REVIEW instruction max bytes must be positive")
+    review_base, review_override = _review_filenames(review_file)
 
     root = root.resolve()
     global_agents_dir = (
@@ -111,7 +114,12 @@ def _discover_review_instructions(
     )
     loaded: list[_ScopedGuidance] = []
 
-    global_instruction = _load_global_instruction(global_agents_dir, max_bytes)
+    global_instruction = _load_global_instruction(
+        global_agents_dir,
+        max_bytes,
+        review_base=review_base,
+        review_override=review_override,
+    )
     if global_instruction is not None:
         loaded.append(global_instruction)
 
@@ -120,7 +128,11 @@ def _discover_review_instructions(
     for directory in directories:
         if remaining <= 0:
             break
-        candidate = _select_project_candidate(directory)
+        candidate = _select_project_candidate(
+            directory,
+            review_base=review_base,
+            review_override=review_override,
+        )
         if candidate is None:
             continue
         content, consumed, truncated = _read_limited_utf8(candidate, remaining)
@@ -182,10 +194,13 @@ def _applicable_directories(root: Path, changed_files: Iterable[str]) -> tuple[P
 def _load_global_instruction(
     global_agents_dir: Path,
     max_bytes: int,
+    *,
+    review_base: str,
+    review_override: str,
 ) -> _ScopedGuidance | None:
     for candidate in (
-        global_agents_dir / REVIEW_OVERRIDE,
-        global_agents_dir / REVIEW_BASE,
+        global_agents_dir / review_override,
+        global_agents_dir / review_base,
     ):
         if not candidate.is_file():
             continue
@@ -200,12 +215,21 @@ def _load_global_instruction(
     return None
 
 
-def _select_project_candidate(directory: Path) -> Path | None:
-    for name in (REVIEW_OVERRIDE, REVIEW_BASE):
+def _select_project_candidate(
+    directory: Path,
+    *,
+    review_base: str,
+    review_override: str,
+) -> Path | None:
+    for name in (review_override, review_base):
         candidate = directory / name
         if candidate.is_file():
             return candidate
     return None
+
+
+def _review_filenames(review_file: str) -> tuple[str, str]:
+    return f"{review_file}.md", f"{review_file}.override.md"
 
 
 def _read_limited_utf8(path: Path, max_bytes: int) -> tuple[str, int, bool]:

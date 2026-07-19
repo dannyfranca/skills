@@ -269,6 +269,11 @@ class ReviewStateTests(unittest.TestCase):
         reloaded = ReviewState.load(self.review_dir)
         self.assertEqual(reloaded.data["slices"]["api"]["next_pass"], 1)
         self.assertFalse(reloaded.data["slices"]["api"]["complete"])
+        self.assertIsNone(reloaded.data["slices"]["api"]["model"])
+        self.assertEqual(
+            reloaded.data["slices"]["api"]["model_source"],
+            "harness-default",
+        )
 
     def test_rejects_duplicate_and_unsafe_slice_names(self) -> None:
         with ReviewState.locked(self.review_dir) as state:
@@ -370,6 +375,8 @@ class ReviewStateTests(unittest.TestCase):
                 target={"uncommitted": True},
                 prompt=None,
                 cwd=self.root,
+                model="first-model",
+                model_source="configured-default",
             )
             reservation = state.reserve_eligible()[0]
             state.complete_run(
@@ -386,6 +393,8 @@ class ReviewStateTests(unittest.TestCase):
                 target=None,
                 prompt="Review the API contract only.",
                 cwd=self.root,
+                model="second-model",
+                model_source="slice-override",
             )
             state.save()
 
@@ -393,7 +402,10 @@ class ReviewStateTests(unittest.TestCase):
         item = state.data["slices"]["api"]
         self.assertFalse(item["removed"])
         self.assertEqual(item["prompt"], "Review the API contract only.")
+        self.assertEqual(item["model"], "second-model")
         self.assertEqual(len(item["runs"]), 1)
+        self.assertEqual(item["runs"][0]["model"], "first-model")
+        self.assertEqual(item["runs"][0]["model_source"], "configured-default")
         self.assertEqual(
             [event["event"] for event in state.data["history"] if event.get("slice") == "api"][-2:],
             ["slice_removed", "slice_reactivated"],
@@ -659,11 +671,59 @@ class ClassifierTests(unittest.TestCase):
             self.assertIn("Additional scoped guidance:", prompt)
             self.assertIn("Check compatibility boundaries.", prompt)
             self.assertNotIn(str(root / "REVIEW.md"), prompt)
+            self.assertNotIn("-m", cmd)
             self.assertIn("project_doc_fallback_filenames=[]", cmd)
+            self.assertIn("--model <model>", prompt)
+            self.assertIn("durable slice definition", prompt)
             self.assertNotIn("Keep each slice narrow", prompt)
             self.assertNotIn("Prefer the smallest useful set of slices", prompt)
             stored_prompt = ReviewState.load(review_dir).data["slices"]["api"]["prompt"]
             self.assertNotIn("Check compatibility boundaries.", stored_prompt)
+
+    def test_classifier_uses_resolved_config_model_and_review_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            agents = root / ".agents"
+            agents.mkdir()
+            (agents / "multi-shot-review.toml").write_text(
+                'review_file = "SECURITY"\nclassifier_model = "classifier-x"\n',
+                encoding="utf-8",
+            )
+            review_dir = init_review_state(root, "Review the current changes.")
+            with ReviewState.locked(review_dir) as state:
+                state.add_slice(
+                    name="api",
+                    mode="native",
+                    target={"uncommitted": True},
+                    prompt=None,
+                    cwd=root,
+                )
+                state.save()
+
+            with mock.patch.object(
+                classify_slices,
+                "load_classifier_guidance",
+                return_value="(no additional scoped guidance)",
+            ) as guidance, mock.patch.object(
+                classify_slices.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess([], 0),
+            ) as run:
+                with mock.patch.object(
+                    sys,
+                    "argv",
+                    ["classify_slices.py", "--review-dir", str(review_dir)],
+                ):
+                    self.assertEqual(classify_slices.main(), 0)
+
+            guidance.assert_called_once_with(
+                root,
+                {"kind": "uncommitted"},
+                review_file="SECURITY",
+            )
+            cmd = run.call_args.args[0]
+            self.assertEqual(cmd[cmd.index("-m") + 1], "classifier-x")
 
     def test_clean_classifier_rejects_success_without_active_slices(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1509,8 +1569,7 @@ class RunnerTests(unittest.TestCase):
             self.assertTrue(output_file.name.endswith("-1-api.md"))
             self.assertEqual(slice_data["target"], {"uncommitted": True})
             self.assertEqual(cmd[:4], ["codex", "exec", "review", "--ephemeral"])
-            self.assertIn("-m", cmd)
-            self.assertEqual(cmd[cmd.index("-m") + 1], "gpt-5.6-terra")
+            self.assertNotIn("-m", cmd)
             self.assertIn('-c', cmd)
             self.assertEqual(cmd[cmd.index("-c") + 1], 'model_reasoning_effort="high"')
             self.assertIn("project_doc_fallback_filenames=[]", cmd)
@@ -1522,6 +1581,16 @@ class RunnerTests(unittest.TestCase):
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
         run_reviews(self.review_dir, command_runner=runner, stdout=io.StringIO())
+        state = ReviewState.load(self.review_dir)
+        run = state.data["slices"]["api"]["runs"][0]
+        self.assertIsNone(run["model"])
+        self.assertEqual(run["model_source"], "harness-default")
+        artifact = Path(run["output_file"]).read_text(encoding="utf-8")
+        self.assertTrue(artifact.startswith("---\nmodel: null\n"))
+        self.assertIn(
+            'model_source: "harness-default"\n---\n\nNo findings.',
+            artifact,
+        )
 
     def test_missing_task_entrypoint_fails_before_reserving_runs(self) -> None:
         self.add_slice("api")
@@ -1682,6 +1751,56 @@ class CliTests(unittest.TestCase):
         state = ReviewState.load(review_dir)
         self.assertIn("api", state.data["slices"])
         self.assertEqual(Path(state.data["slices"]["api"]["cwd"]), self.root.resolve())
+
+    def test_add_slice_uses_config_default_and_allows_explicit_model(self) -> None:
+        agents = self.root / ".agents"
+        agents.mkdir()
+        (agents / "multi-shot-review.toml").write_text(
+            'slice_default_model = "configured-slice"\n',
+            encoding="utf-8",
+        )
+        review_dir = Path(
+            self.run_cli(
+                str(SCRIPTS / "init_state.py"),
+                "--root",
+                str(self.root),
+                "--task",
+                "Review model selection.",
+            ).stdout.strip()
+        )
+
+        configured = self.run_cli(
+            str(SCRIPTS / "add_slice.py"),
+            "--review-dir",
+            str(review_dir),
+            "--name",
+            "configured",
+            "--uncommitted",
+        )
+        explicit = self.run_cli(
+            str(SCRIPTS / "add_slice.py"),
+            "--review-dir",
+            str(review_dir),
+            "--name",
+            "explicit",
+            "--uncommitted",
+            "--model",
+            "specialized-slice",
+        )
+
+        self.assertEqual(configured.returncode, 0, configured.stderr)
+        self.assertEqual(explicit.returncode, 0, explicit.stderr)
+        state = ReviewState.load(review_dir)
+        self.assertEqual(state.data["slices"]["configured"]["model"], "configured-slice")
+        self.assertEqual(
+            state.data["slices"]["configured"]["model_source"],
+            "configured-default",
+        )
+        self.assertEqual(state.data["slices"]["explicit"]["model"], "specialized-slice")
+        self.assertEqual(
+            state.data["slices"]["explicit"]["model_source"],
+            "slice-override",
+        )
 
     def test_add_slice_rejects_cwd_outside_session_repository(self) -> None:
         review_dir = Path(
@@ -2490,6 +2609,7 @@ class CliTests(unittest.TestCase):
 
     def test_skill_keeps_loader_mechanics_out_of_classifier_references(self) -> None:
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
         reference = (ROOT / "references" / "slice-selection.md").read_text(encoding="utf-8")
 
         self.assertIn("references/slice-selection.md", skill)
@@ -2497,9 +2617,11 @@ class CliTests(unittest.TestCase):
         self.assertIn("Scoped classifier guidance", reference)
         self.assertNotIn("REVIEW.md", reference)
         self.assertNotIn("REVIEW.override.md", reference)
+        self.assertNotIn("multi-shot-review.toml", skill)
+        self.assertIn("multi-shot-review.toml", readme)
+        self.assertIn("REVIEW.override.md", readme)
         self.assertIn("Successful mutations remain", " ".join(reference.split()))
         self.assertFalse((ROOT / "references" / "classification.schema.json").exists())
-        self.assertFalse((ROOT / "README.md").exists())
 
 
 def _writes(text: str):

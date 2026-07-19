@@ -158,6 +158,27 @@ class ReviewInstructionDiscoveryTests(unittest.TestCase):
                 global_agents_dir=self.global_dir,
             )
 
+    def test_custom_review_file_stem_controls_base_and_override_names(self) -> None:
+        (self.global_dir / "SECURITY.md").write_text("global security", encoding="utf-8")
+        (self.root / "SECURITY.md").write_text("root base", encoding="utf-8")
+        (self.root / "SECURITY.override.md").write_text(
+            "root override",
+            encoding="utf-8",
+        )
+        (self.root / "REVIEW.md").write_text("ignored default", encoding="utf-8")
+
+        instructions = _discover_review_instructions(
+            self.root,
+            ["app.py"],
+            review_file="SECURITY",
+            global_agents_dir=self.global_dir,
+        )
+
+        self.assertEqual(
+            [item.content for item in instructions],
+            ["global security", "root override"],
+        )
+
 
 class ChangedFileCollectionTests(unittest.TestCase):
     def setUp(self) -> None:

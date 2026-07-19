@@ -9,8 +9,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+from review_config import load_review_config
 from review_instructions import load_classifier_guidance
-from review_state import DEFAULT_MODEL, DEFAULT_REASONING, ReviewState, ReviewStateError
+from review_state import DEFAULT_REASONING, ReviewState, ReviewStateError
 
 
 def main() -> int:
@@ -20,7 +21,7 @@ def main() -> int:
     parser.add_argument("--review-dir", required=True, type=Path)
     parser.add_argument("--user-directives-file", type=Path)
     parser.add_argument("--executor-context-file", type=Path)
-    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--model")
     parser.add_argument("--reasoning", default=DEFAULT_REASONING)
     args = parser.parse_args()
 
@@ -29,7 +30,12 @@ def main() -> int:
         with ReviewState.locked(review_dir) as state:
             root = Path(state.data["session"]["root"])
             target = dict(state.data["session"]["target"])
-        review_instructions = load_classifier_guidance(root, target)
+        config = load_review_config(root)
+        review_instructions = load_classifier_guidance(
+            root,
+            target,
+            review_file=config.review_file,
+        )
         prompt = _classifier_prompt(
             review_dir=review_dir,
             root=root,
@@ -52,14 +58,23 @@ def main() -> int:
             "--skip-git-repo-check",
             "-C",
             str(review_dir),
-            "-m",
-            args.model,
-            "-c",
-            f'model_reasoning_effort="{args.reasoning}"',
-            "-c",
-            "project_doc_fallback_filenames=[]",
-            prompt,
         ]
+        classifier_model = (
+            args.model if args.model is not None else config.classifier_model
+        )
+        if classifier_model is not None and not classifier_model.strip():
+            raise ReviewStateError("classifier model must be a non-empty string")
+        if classifier_model is not None:
+            cmd.extend(["-m", classifier_model])
+        cmd.extend(
+            [
+                "-c",
+                f'model_reasoning_effort="{args.reasoning}"',
+                "-c",
+                "project_doc_fallback_filenames=[]",
+                prompt,
+            ]
+        )
         proc = subprocess.run(cmd, cwd=review_dir, check=False)
         if proc.returncode == 0:
             with ReviewState.locked(review_dir) as state:
@@ -120,6 +135,10 @@ Manage slices only by executing these scripts:
 
 Call them as many times as needed. For focused slices, send the complete reviewer prompt through
 `--prompt-file -`. For native slices, pass the session target flag.
+
+Each add may pass `--model <model>` when a specific model materially suits that slice. Otherwise
+omit `--model`; the tool applies the configured slice default or leaves model choice to the review
+harness. Treat model choice as part of the durable slice definition, not as prompt text.
 
 Normally omit `--user-directive-file`. If the supplemental user directions explicitly authorize
 changing a user-controlled slice, pass this exact source file to the mutation:

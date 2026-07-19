@@ -24,7 +24,6 @@ from typing import Any, Callable, Iterable
 
 
 SCHEMA_VERSION = 1
-DEFAULT_MODEL = "gpt-5.6-terra"
 DEFAULT_REASONING = "high"
 MAX_ACTIVE_SLICES = 10
 TASK_ENTRYPOINT = "task.md"
@@ -548,6 +547,23 @@ class ReviewState:
             target = session.setdefault("target", {"kind": "uncommitted"})
             if isinstance(target, dict) and target.get("kind") == "base":
                 target.pop("head", None)
+        slices = data.get("slices")
+        if isinstance(slices, dict):
+            for item in slices.values():
+                if not isinstance(item, dict):
+                    continue
+                item.setdefault(
+                    "model_source",
+                    "harness-default" if item.get("model") is None else "legacy-definition",
+                )
+                runs = item.get("runs")
+                if not isinstance(runs, list):
+                    continue
+                for run in runs:
+                    if not isinstance(run, dict):
+                        continue
+                    run.setdefault("model", item.get("model"))
+                    run.setdefault("model_source", "legacy-definition")
         return cls(review_dir.resolve(), data)
 
     @classmethod
@@ -622,8 +638,12 @@ class ReviewState:
                     raise ReviewStateError(f"prompt slice {name!r} must have prompt text")
             if not isinstance(item.get("cwd"), str) or not item["cwd"]:
                 raise ReviewStateError(f"slice {name!r} must have cwd")
-            if not isinstance(item.get("model"), str) or not item["model"]:
-                raise ReviewStateError(f"slice {name!r} must have model")
+            if item.get("model") is not None and (
+                not isinstance(item.get("model"), str) or not item["model"].strip()
+            ):
+                raise ReviewStateError(f"slice {name!r} must have a model string or null")
+            if not isinstance(item.get("model_source"), str) or not item["model_source"]:
+                raise ReviewStateError(f"slice {name!r} must have model_source")
             if not isinstance(item.get("reasoning"), str) or not item["reasoning"]:
                 raise ReviewStateError(f"slice {name!r} must have reasoning")
             if not isinstance(item.get("next_pass"), int) or item["next_pass"] < 1:
@@ -676,6 +696,16 @@ class ReviewState:
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid runner_key")
         if run.get("error") is not None and not isinstance(run.get("error"), str):
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid error")
+        if run.get("model") is not None and (
+            not isinstance(run.get("model"), str) or not run["model"].strip()
+        ):
+            raise ReviewStateError(
+                f"slice {slice_name!r} has run with invalid model"
+            )
+        if not isinstance(run.get("model_source"), str) or not run["model_source"]:
+            raise ReviewStateError(
+                f"slice {slice_name!r} has run with invalid model_source"
+            )
         definition_version = run.get("definition_version", 1)
         if not isinstance(definition_version, int) or definition_version < 1:
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid definition version")
@@ -721,7 +751,8 @@ class ReviewState:
         target: dict[str, Any] | None,
         prompt: str | None,
         cwd: Path,
-        model: str = DEFAULT_MODEL,
+        model: str | None = None,
+        model_source: str | None = None,
         reasoning: str = DEFAULT_REASONING,
         source: str = "classifier",
         user_directive: str | None = None,
@@ -748,6 +779,12 @@ class ReviewState:
                 raise ReviewStateError("prompt slices cannot be combined with native target flags")
             if not prompt or not prompt.strip():
                 raise ReviewStateError("prompt slices require non-empty prompt text")
+        if model is not None and (not isinstance(model, str) or not model.strip()):
+            raise ReviewStateError("slice model must be a non-empty string or null")
+        if model_source is None:
+            model_source = "harness-default" if model is None else "slice-override"
+        if not isinstance(model_source, str) or not model_source:
+            raise ReviewStateError("slice model_source must be a non-empty string")
         definition = {
             "name": name,
             "mode": mode,
@@ -755,6 +792,7 @@ class ReviewState:
             "prompt": prompt,
             "cwd": str(cwd.resolve()),
             "model": model,
+            "model_source": model_source,
             "reasoning": reasoning,
             "next_pass": 1,
             "complete": False,
@@ -868,6 +906,8 @@ class ReviewState:
                 "runner_key": _process_key(os.getpid()),
                 "error": None,
                 "definition_version": item.get("definition_version", 1),
+                "model": item.get("model"),
+                "model_source": item["model_source"],
             }
             item["runs"].append(run)
             item["last_error"] = None
@@ -1161,13 +1201,17 @@ def build_review_command(slice_data: dict[str, Any], output_file: Path) -> tuple
         "exec",
         "review",
         "--ephemeral",
-        "-m",
-        slice_data["model"],
-        "-c",
-        f'model_reasoning_effort="{slice_data["reasoning"]}"',
-        "-c",
-        "project_doc_fallback_filenames=[]",
     ]
+    if slice_data.get("model") is not None:
+        cmd.extend(["-m", slice_data["model"]])
+    cmd.extend(
+        [
+            "-c",
+            f'model_reasoning_effort="{slice_data["reasoning"]}"',
+            "-c",
+            "project_doc_fallback_filenames=[]",
+        ]
+    )
     session_target = slice_data.get("session_target")
     target = (
         _native_target_from_session(session_target)
@@ -1395,6 +1439,18 @@ def evaluate_completed_process(
         append_error(review_dir, f"empty review output for {reservation.slice_name}", error)
         return "failed", None, None, "review output is empty"
 
+    text = _add_model_frontmatter(
+        text,
+        model=reservation.slice_data.get("model"),
+        model_source=reservation.slice_data["model_source"],
+    )
+    try:
+        _atomic_write_text(output_file, text)
+    except OSError as exc:
+        error = f"Slice: {reservation.slice_name}\nOutput: {output_file}\nError: {exc}"
+        append_error(review_dir, f"unwritable review output for {reservation.slice_name}", error)
+        return "failed", None, None, f"could not add review metadata: {exc}"
+
     classification = classify_output(text)
     finding_count = count_findings(text) if classification == "findings" else 0
     if classification == "uncertain":
@@ -1404,6 +1460,22 @@ def evaluate_completed_process(
             f"Slice: {reservation.slice_name}\nOutput: {output_file}\nAction: marked complete, but classifier was uncertain.",
         )
     return classification, classification, finding_count, None
+
+
+def _add_model_frontmatter(
+    text: str,
+    *,
+    model: str | None,
+    model_source: str,
+) -> str:
+    model_value = "null" if model is None else json.dumps(model)
+    return (
+        "---\n"
+        f"model: {model_value}\n"
+        f"model_source: {json.dumps(model_source)}\n"
+        "---\n\n"
+        f"{text}"
+    )
 
 
 def _relative_path(path: Path, *, base: Path | None = None) -> str:
@@ -1743,7 +1815,10 @@ def parse_add_slice_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--base")
     parser.add_argument("--commit")
     parser.add_argument("--prompt-file", type=Path)
-    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument(
+        "--model",
+        help="Use a specific model for this slice instead of the configured or harness default.",
+    )
     parser.add_argument("--reasoning", default=DEFAULT_REASONING)
     parser.add_argument("--cwd", type=Path)
     parser.add_argument(
@@ -1784,7 +1859,10 @@ def add_slice_from_args(args: argparse.Namespace, *, stdin: Any = sys.stdin) -> 
             prompt = stdin.read()
 
     with ReviewState.locked(args.review_dir) as state:
+        from review_config import load_review_config
+
         session_root = Path(state.data["session"]["root"]).resolve()
+        config = load_review_config(session_root)
         cwd = args.cwd.resolve() if args.cwd is not None else session_root
         if not cwd.is_dir():
             raise ReviewStateError(f"slice cwd is not a directory: {cwd}")
@@ -1795,13 +1873,23 @@ def add_slice_from_args(args: argparse.Namespace, *, stdin: Any = sys.stdin) -> 
             if args.user_directive_file is not None
             else None
         )
+        if args.model is not None:
+            model = args.model
+            model_source = "slice-override"
+        elif config.slice_default_model is not None:
+            model = config.slice_default_model
+            model_source = "configured-default"
+        else:
+            model = None
+            model_source = "harness-default"
         state.add_slice(
             name=args.name,
             mode=mode,
             target=target,
             prompt=prompt,
             cwd=cwd,
-            model=args.model,
+            model=model,
+            model_source=model_source,
             reasoning=args.reasoning,
             source="user" if user_directive is not None else "classifier",
             user_directive=user_directive,
