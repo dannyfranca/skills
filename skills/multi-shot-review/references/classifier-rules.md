@@ -1,8 +1,9 @@
 # Slice Classifier Rules
 
 Act as the sole slice classifier for a stateful multi-shot code review. Inspect the session target,
-`task.md`, changed code, current slice state/history, and every applicable review-rule file. Manage
-slices with `add_slice.py` and `remove_slice.py`; do not perform the review.
+`task.md`, changed code, current slice state/history, injected scoped guidance, and applicable
+repository rules. Manage slices with `add_slice.py` and `remove_slice.py`; do not perform the
+review.
 
 Read the built-in lens rules that apply:
 
@@ -58,5 +59,10 @@ Preserve user-controlled slices unless an explicit user direction authorizes cha
 ## Reviewer prompts
 
 Create prompts from the code and context. Every focused prompt states the review target, coherent
-scope, review lenses, and relevant rule files. Name primary files, symbols, behaviors, and context
-boundaries when they help the reviewer inspect the scope directly without reclassifying the change.
+scope, review lenses, and relevant concrete requirements. Name primary files, symbols, behaviors,
+and context boundaries when they help the reviewer inspect the scope directly without reclassifying
+the change.
+
+Injected scoped guidance is classifier-only. When it materially affects reviewer behavior,
+translate only the applicable requirement into a focused prompt. Do not name or link its source,
+copy it wholesale, or use a native slice that would need the guidance.

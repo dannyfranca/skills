@@ -18,25 +18,16 @@ The session stores only a target descriptor:
 This is live Git context, not a pinned snapshot. Focused prompts state the target explicitly.
 Native slices receive the matching `--uncommitted`, `--base`, or `--commit` flag.
 
-## Rules convention
+## Scoped classifier guidance
 
-Projects may add `REVIEW.md` at repository root or in nested directories. Nested files apply to
-changed descendants. One global file is supported at `~/.agents/REVIEW.md`.
+The launcher may provide guidance already resolved to changed-path scopes. Discovery, precedence,
+source filenames, and loading are launcher responsibilities, not classifier responsibilities.
 
-Precedence:
+Use applicable guidance when selecting slices. If it materially affects reviewer behavior,
+translate only the relevant concrete requirement into a focused slice prompt. Do not pass the full
+guidance, identify its source, or assume a native slice receives it.
 
-1. Explicit user directions.
-2. Closest scoped `REVIEW.md` / `AGENTS.md`.
-3. Repository-root review, agent, contributing, and coding-standard files.
-4. Global `~/.agents/REVIEW.md`.
-5. Built-in lens rules.
-
-At the same directory, `REVIEW.md` precedes `AGENTS.md`. At repository root, order is `REVIEW.md`,
-`AGENTS.md`, lexically sorted `CONTRIBUTING*`, then lexically sorted `CODING_STANDARDS*`. Only the
-closest directory containing scoped review or agent rules applies to a changed file; intermediate
-scoped directories are not stacked.
-
-The classifier and reviewers read sources directly; the parent does not summarize them.
+Repository instructions, explicit user directions, and built-in lens rules remain separate inputs.
 
 ## State mutations
 
