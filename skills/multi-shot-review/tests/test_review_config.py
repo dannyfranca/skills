@@ -80,6 +80,14 @@ class ReviewConfigTests(unittest.TestCase):
                 with self.assertRaises(ReviewStateError):
                     load_review_config(directory, home=self.home)
 
+    def test_rejects_invalid_utf8_as_a_config_error(self) -> None:
+        agents = self.root / ".agents"
+        agents.mkdir()
+        (agents / "multi-shot-review.toml").write_bytes(b"\xff")
+
+        with self.assertRaisesRegex(ReviewStateError, "could not read review config"):
+            load_review_config(self.root, home=self.home)
+
 
 if __name__ == "__main__":
     unittest.main()

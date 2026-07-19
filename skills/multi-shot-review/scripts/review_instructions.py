@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import codecs
 import os
 import subprocess
 from dataclasses import dataclass
@@ -53,7 +54,10 @@ def _collect_changed_files(root: Path, target: dict[str, str]) -> tuple[str, ...
     kind = target.get("kind")
     if kind == "uncommitted" and set(target) == {"kind"}:
         if _git_succeeds(root, ["rev-parse", "--verify", "HEAD"]):
-            tracked = _git_paths(root, ["diff", "--name-only", "-z", "HEAD"])
+            tracked = _git_paths(
+                root,
+                ["diff", "--no-renames", "--name-only", "-z", "HEAD"],
+            )
         else:
             tracked = _git_paths(root, ["ls-files", "--cached", "-z"])
         untracked = _git_paths(root, ["ls-files", "--others", "--exclude-standard", "-z"])
@@ -62,7 +66,13 @@ def _collect_changed_files(root: Path, target: dict[str, str]) -> tuple[str, ...
         paths = set(
             _git_paths(
                 root,
-                ["diff", "--name-only", "-z", f"{target['value']}...HEAD"],
+                [
+                    "diff",
+                    "--no-renames",
+                    "--name-only",
+                    "-z",
+                    f"{target['value']}...HEAD",
+                ],
             )
         )
     elif kind == "commit" and _valid_target_value(target):
@@ -71,8 +81,10 @@ def _collect_changed_files(root: Path, target: dict[str, str]) -> tuple[str, ...
                 root,
                 [
                     "diff-tree",
+                    "-m",
                     "--root",
                     "--no-commit-id",
+                    "--no-renames",
                     "--name-only",
                     "-r",
                     "-z",
@@ -136,9 +148,9 @@ def _discover_review_instructions(
         if candidate is None:
             continue
         content, consumed, truncated = _read_limited_utf8(candidate, remaining)
+        remaining -= consumed
         if not content.strip():
             continue
-        remaining -= consumed
         scope = "."
         if directory != root:
             scope = directory.relative_to(root).as_posix()
@@ -206,6 +218,8 @@ def _load_global_instruction(
             continue
         content, _consumed, truncated = _read_limited_utf8(candidate, max_bytes)
         if not content.strip():
+            if truncated:
+                return None
             continue
         return _ScopedGuidance(
             scope="*",
@@ -234,13 +248,17 @@ def _review_filenames(review_file: str) -> tuple[str, str]:
 
 def _read_limited_utf8(path: Path, max_bytes: int) -> tuple[str, int, bool]:
     try:
-        raw = path.read_bytes()
-        raw.decode("utf-8")
-    except (OSError, UnicodeError) as exc:
+        with path.open("rb") as source:
+            raw = source.read(max_bytes + 1)
+    except OSError as exc:
         raise ReviewStateError(f"could not read REVIEW instructions from {path}: {exc}") from exc
     truncated = len(raw) > max_bytes
     selected = raw[:max_bytes]
-    content = selected.decode("utf-8", errors="ignore") if truncated else selected.decode("utf-8")
+    try:
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="strict")
+        content = decoder.decode(selected, final=not truncated)
+    except UnicodeError as exc:
+        raise ReviewStateError(f"could not read REVIEW instructions from {path}: {exc}") from exc
     return content, len(selected), truncated
 
 

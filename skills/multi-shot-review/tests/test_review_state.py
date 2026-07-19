@@ -88,6 +88,24 @@ class ReviewStateTests(unittest.TestCase):
 
         self.assertEqual(state.data["session"]["target"], {"kind": "base", "value": "main"})
 
+    def test_init_normalizes_nested_path_to_repository_root(self) -> None:
+        repository = Path(self.tmp.name) / "repository"
+        nested = repository / "nested"
+        nested.mkdir(parents=True)
+        subprocess.run(
+            ["git", "init", "-b", "main"],
+            cwd=repository,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+
+        review_dir = init_review_state(nested, "Review nested invocation.")
+        state = ReviewState.load(review_dir)
+
+        self.assertEqual(review_dir.parent, repository / ".review")
+        self.assertEqual(Path(state.data["session"]["root"]), repository)
+
     def test_init_rejects_malformed_target_descriptors(self) -> None:
         for target in (
             {"kind": "base", "value": ""},
@@ -372,6 +390,96 @@ class ReviewStateTests(unittest.TestCase):
         (self.review_dir / "_state.json").write_text(json.dumps(state_data), encoding="utf-8")
         with self.assertRaises(ReviewStateError):
             ReviewState.load(self.review_dir)
+
+    def test_schema_validation_rejects_invalid_execution_provenance(self) -> None:
+        with ReviewState.locked(self.review_dir) as state:
+            state.add_slice(
+                name="api",
+                mode="native",
+                target={"uncommitted": True},
+                prompt=None,
+                cwd=self.root,
+            )
+            state.reserve_eligible()
+            state.save()
+
+        valid = json.loads(
+            (self.review_dir / "_state.json").read_text(encoding="utf-8")
+        )
+        variants = (
+            ("definition unknown source", ("model", "model_source"), (None, "unknown")),
+            (
+                "definition contradictory source",
+                ("reasoning", "reasoning_source"),
+                ("high", "harness-default"),
+            ),
+            (
+                "run unknown source",
+                ("runs", 0, "model", "model_source"),
+                (None, "unknown"),
+            ),
+            (
+                "run contradictory source",
+                ("runs", 0, "reasoning", "reasoning_source"),
+                ("high", "harness-default"),
+            ),
+        )
+        state_path = self.review_dir / "_state.json"
+        for label, location, values in variants:
+            with self.subTest(label=label):
+                data = json.loads(json.dumps(valid))
+                item = data["slices"]["api"]
+                if location[0] == "runs":
+                    item = item["runs"][location[1]]
+                    value_key, source_key = location[2:]
+                else:
+                    value_key, source_key = location
+                item[value_key], item[source_key] = values
+                state_path.write_text(json.dumps(data), encoding="utf-8")
+                with self.assertRaises(ReviewStateError):
+                    ReviewState.load(self.review_dir)
+
+    def test_load_migrates_absent_null_execution_metadata_as_harness_defaults(
+        self,
+    ) -> None:
+        with ReviewState.locked(self.review_dir) as state:
+            state.add_slice(
+                name="api",
+                mode="native",
+                target={"uncommitted": True},
+                prompt=None,
+                cwd=self.root,
+            )
+            state.reserve_eligible()
+            state.save()
+
+        state_path = self.review_dir / "_state.json"
+        legacy = json.loads(state_path.read_text(encoding="utf-8"))
+        item = legacy["slices"]["api"]
+        run = item["runs"][0]
+        for field in (
+            "model",
+            "model_source",
+            "reasoning",
+            "reasoning_source",
+        ):
+            item.pop(field)
+            run.pop(field)
+        state_path.write_text(json.dumps(legacy), encoding="utf-8")
+
+        migrated = ReviewState.load(self.review_dir).data["slices"]["api"]
+
+        self.assertIsNone(migrated["model"])
+        self.assertEqual(migrated["model_source"], "harness-default")
+        self.assertIsNone(migrated["reasoning"])
+        self.assertEqual(migrated["reasoning_source"], "harness-default")
+        self.assertIsNone(migrated["runs"][0]["model"])
+        self.assertEqual(migrated["runs"][0]["model_source"], "harness-default")
+        self.assertIsNone(migrated["runs"][0]["reasoning"])
+        self.assertEqual(
+            migrated["runs"][0]["reasoning_source"],
+            "harness-default",
+        )
 
     def test_remove_and_reactivate_preserve_runs_and_history(self) -> None:
         with ReviewState.locked(self.review_dir) as state:

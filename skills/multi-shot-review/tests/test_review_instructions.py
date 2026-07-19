@@ -15,6 +15,7 @@ from review_instructions import (  # noqa: E402
     _ScopedGuidance,
     _collect_changed_files,
     _discover_review_instructions,
+    _read_limited_utf8,
     _render_review_instructions,
     load_classifier_guidance,
 )
@@ -87,6 +88,22 @@ class ReviewInstructionDiscoveryTests(unittest.TestCase):
         self.assertEqual(len(instructions), 1)
         self.assertEqual(instructions[0].content, "global base")
 
+    def test_truncated_whitespace_global_override_still_masks_base(self) -> None:
+        (self.global_dir / "REVIEW.override.md").write_text(
+            " " * 10 + "override",
+            encoding="utf-8",
+        )
+        (self.global_dir / "REVIEW.md").write_text("global base", encoding="utf-8")
+
+        instructions = _discover_review_instructions(
+            self.root,
+            ["app.py"],
+            global_agents_dir=self.global_dir,
+            max_bytes=5,
+        )
+
+        self.assertEqual(instructions, ())
+
     def test_shared_sources_load_once_in_deterministic_chain_order(self) -> None:
         package = self.root / "package"
         first = package / "a"
@@ -124,6 +141,21 @@ class ReviewInstructionDiscoveryTests(unittest.TestCase):
         self.assertFalse(instructions[0].truncated)
         self.assertTrue(instructions[1].truncated)
 
+    def test_empty_project_guidance_still_consumes_the_combined_byte_limit(self) -> None:
+        nested = self.root / "nested"
+        nested.mkdir()
+        (self.root / "REVIEW.override.md").write_text("    ", encoding="utf-8")
+        (nested / "REVIEW.md").write_text("nested rule", encoding="utf-8")
+
+        instructions = _discover_review_instructions(
+            self.root,
+            ["nested/app.py"],
+            global_agents_dir=self.global_dir,
+            max_bytes=4,
+        )
+
+        self.assertEqual(instructions, ())
+
     def test_render_labels_sources_scopes_and_truncation(self) -> None:
         rendered = _render_review_instructions(
             [
@@ -157,6 +189,26 @@ class ReviewInstructionDiscoveryTests(unittest.TestCase):
                 ["app.py"],
                 global_agents_dir=self.global_dir,
             )
+
+    def test_limited_read_does_not_decode_content_beyond_the_budget(self) -> None:
+        source = self.root / "REVIEW.md"
+        source.write_bytes(b"valid" + b"\xff" * 1024)
+
+        content, consumed, truncated = _read_limited_utf8(source, 5)
+
+        self.assertEqual(content, "valid")
+        self.assertEqual(consumed, 5)
+        self.assertTrue(truncated)
+
+    def test_limited_read_drops_only_an_incomplete_utf8_boundary(self) -> None:
+        source = self.root / "REVIEW.md"
+        source.write_bytes("abc€".encode())
+
+        content, consumed, truncated = _read_limited_utf8(source, 4)
+
+        self.assertEqual(content, "abc")
+        self.assertEqual(consumed, 4)
+        self.assertTrue(truncated)
 
     def test_custom_review_file_stem_controls_base_and_override_names(self) -> None:
         (self.global_dir / "SECURITY.md").write_text("global security", encoding="utf-8")
@@ -220,6 +272,61 @@ class ChangedFileCollectionTests(unittest.TestCase):
         self.assertEqual(
             _collect_changed_files(self.root, {"kind": "commit", "value": commit}),
             ("feature.py",),
+        )
+
+    def test_collects_changed_paths_from_each_merge_parent(self) -> None:
+        self._git("checkout", "-b", "feature")
+        nested = self.root / "nested"
+        nested.mkdir()
+        (nested / "feature.py").write_text("feature\n", encoding="utf-8")
+        self._git("add", "nested/feature.py")
+        self._git("commit", "-m", "nested feature")
+        self._git("checkout", "main")
+        (self.root / "main.py").write_text("main\n", encoding="utf-8")
+        self._git("add", "main.py")
+        self._git("commit", "-m", "main change")
+        self._git("merge", "--no-ff", "feature", "-m", "merge feature")
+        merge_commit = self._git("rev-parse", "HEAD").stdout.strip()
+
+        self.assertEqual(
+            _collect_changed_files(
+                self.root,
+                {"kind": "commit", "value": merge_commit},
+            ),
+            ("main.py", "nested/feature.py"),
+        )
+
+    def test_collects_both_rename_paths_for_every_target_kind(self) -> None:
+        source = self.root / "source"
+        destination = self.root / "destination"
+        source.mkdir()
+        destination.mkdir()
+        (source / "app.py").write_text("app\n", encoding="utf-8")
+        self._git("add", "source/app.py")
+        self._git("commit", "-m", "source file")
+        self._git("mv", "source/app.py", "destination/app.py")
+
+        self.assertEqual(
+            _collect_changed_files(self.root, {"kind": "uncommitted"}),
+            ("destination/app.py", "source/app.py"),
+        )
+
+        self._git("commit", "-m", "move source file")
+        commit = self._git("rev-parse", "HEAD").stdout.strip()
+        expected = ("destination/app.py", "source/app.py")
+        self.assertEqual(
+            _collect_changed_files(
+                self.root,
+                {"kind": "base", "value": f"{commit}^"},
+            ),
+            expected,
+        )
+        self.assertEqual(
+            _collect_changed_files(
+                self.root,
+                {"kind": "commit", "value": commit},
+            ),
+            expected,
         )
 
     def test_rejects_invalid_target(self) -> None:

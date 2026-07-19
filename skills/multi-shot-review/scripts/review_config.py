@@ -67,7 +67,7 @@ def _load_config_file(path: Path) -> dict[str, str]:
     try:
         with path.open("rb") as fh:
             data = tomllib.load(fh)
-    except (OSError, tomllib.TOMLDecodeError) as exc:
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
         raise ReviewStateError(f"could not read review config {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise ReviewStateError(f"review config must be a TOML table: {path}")

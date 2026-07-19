@@ -25,6 +25,14 @@ from typing import Any, Callable, Iterable
 
 SCHEMA_VERSION = 1
 MAX_ACTIVE_SLICES = 10
+EXECUTION_SOURCES = frozenset(
+    {
+        "slice-override",
+        "configured-default",
+        "harness-default",
+        "legacy-definition",
+    }
+)
 TASK_ENTRYPOINT = "task.md"
 RELATED_TASKS_DIR = "related-tasks"
 ORIGINAL_REQUEST_START = "<!-- multi-shot-review:original-request:start -->"
@@ -52,6 +60,23 @@ QUIET_PRIORITY_RE = re.compile(
 
 class ReviewStateError(RuntimeError):
     """Raised when review state is invalid or a requested mutation is rejected."""
+
+
+def _validate_execution_choice(
+    value: Any,
+    source: Any,
+    *,
+    field: str,
+    owner: str,
+) -> None:
+    if value is not None and (not isinstance(value, str) or not value.strip()):
+        raise ReviewStateError(f"{owner} must have a {field} string or null")
+    if source not in EXECUTION_SOURCES:
+        raise ReviewStateError(f"{owner} has invalid {field}_source")
+    if (value is None) != (source == "harness-default"):
+        raise ReviewStateError(
+            f"{owner} {field} must be null exactly when {field}_source is harness-default"
+        )
 
 
 def now_iso() -> str:
@@ -105,11 +130,12 @@ def create_review_dir(root: Path) -> Path:
 
 def init_review_state(root: Path, task: str, *, target: dict[str, str] | None = None) -> Path:
     task = _require_non_empty_text(task, "task")
+    root = repo_root(root)
     review_dir = create_review_dir(root)
     write_task_entrypoint(review_dir, task)
     state = ReviewState.new(
         review_dir=review_dir,
-        root=root.resolve(),
+        root=root,
         target=target or {"kind": "uncommitted"},
     )
     state.save()
@@ -551,10 +577,12 @@ class ReviewState:
             for item in slices.values():
                 if not isinstance(item, dict):
                     continue
+                item.setdefault("model", None)
                 item.setdefault(
                     "model_source",
                     "harness-default" if item.get("model") is None else "legacy-definition",
                 )
+                item.setdefault("reasoning", None)
                 item.setdefault(
                     "reasoning_source",
                     (
@@ -570,9 +598,23 @@ class ReviewState:
                     if not isinstance(run, dict):
                         continue
                     run.setdefault("model", item.get("model"))
-                    run.setdefault("model_source", "legacy-definition")
+                    run.setdefault(
+                        "model_source",
+                        (
+                            "harness-default"
+                            if run.get("model") is None
+                            else "legacy-definition"
+                        ),
+                    )
                     run.setdefault("reasoning", item.get("reasoning"))
-                    run.setdefault("reasoning_source", "legacy-definition")
+                    run.setdefault(
+                        "reasoning_source",
+                        (
+                            "harness-default"
+                            if run.get("reasoning") is None
+                            else "legacy-definition"
+                        ),
+                    )
         return cls(review_dir.resolve(), data)
 
     @classmethod
@@ -647,24 +689,18 @@ class ReviewState:
                     raise ReviewStateError(f"prompt slice {name!r} must have prompt text")
             if not isinstance(item.get("cwd"), str) or not item["cwd"]:
                 raise ReviewStateError(f"slice {name!r} must have cwd")
-            if item.get("model") is not None and (
-                not isinstance(item.get("model"), str) or not item["model"].strip()
-            ):
-                raise ReviewStateError(f"slice {name!r} must have a model string or null")
-            if not isinstance(item.get("model_source"), str) or not item["model_source"]:
-                raise ReviewStateError(f"slice {name!r} must have model_source")
-            if item.get("reasoning") is not None and (
-                not isinstance(item.get("reasoning"), str)
-                or not item["reasoning"].strip()
-            ):
-                raise ReviewStateError(
-                    f"slice {name!r} must have a reasoning string or null"
-                )
-            if (
-                not isinstance(item.get("reasoning_source"), str)
-                or not item["reasoning_source"]
-            ):
-                raise ReviewStateError(f"slice {name!r} must have reasoning_source")
+            _validate_execution_choice(
+                item.get("model"),
+                item.get("model_source"),
+                field="model",
+                owner=f"slice {name!r}",
+            )
+            _validate_execution_choice(
+                item.get("reasoning"),
+                item.get("reasoning_source"),
+                field="reasoning",
+                owner=f"slice {name!r}",
+            )
             if not isinstance(item.get("next_pass"), int) or item["next_pass"] < 1:
                 raise ReviewStateError(f"slice {name!r} must have a positive next_pass")
             if not isinstance(item.get("complete"), bool):
@@ -715,30 +751,18 @@ class ReviewState:
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid runner_key")
         if run.get("error") is not None and not isinstance(run.get("error"), str):
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid error")
-        if run.get("model") is not None and (
-            not isinstance(run.get("model"), str) or not run["model"].strip()
-        ):
-            raise ReviewStateError(
-                f"slice {slice_name!r} has run with invalid model"
-            )
-        if not isinstance(run.get("model_source"), str) or not run["model_source"]:
-            raise ReviewStateError(
-                f"slice {slice_name!r} has run with invalid model_source"
-            )
-        if run.get("reasoning") is not None and (
-            not isinstance(run.get("reasoning"), str)
-            or not run["reasoning"].strip()
-        ):
-            raise ReviewStateError(
-                f"slice {slice_name!r} has run with invalid reasoning"
-            )
-        if (
-            not isinstance(run.get("reasoning_source"), str)
-            or not run["reasoning_source"]
-        ):
-            raise ReviewStateError(
-                f"slice {slice_name!r} has run with invalid reasoning_source"
-            )
+        _validate_execution_choice(
+            run.get("model"),
+            run.get("model_source"),
+            field="model",
+            owner=f"slice {slice_name!r} run",
+        )
+        _validate_execution_choice(
+            run.get("reasoning"),
+            run.get("reasoning_source"),
+            field="reasoning",
+            owner=f"slice {slice_name!r} run",
+        )
         definition_version = run.get("definition_version", 1)
         if not isinstance(definition_version, int) or definition_version < 1:
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid definition version")
@@ -813,26 +837,24 @@ class ReviewState:
                 raise ReviewStateError("prompt slices cannot be combined with native target flags")
             if not prompt or not prompt.strip():
                 raise ReviewStateError("prompt slices require non-empty prompt text")
-        if model is not None and (not isinstance(model, str) or not model.strip()):
-            raise ReviewStateError("slice model must be a non-empty string or null")
         if model_source is None:
             model_source = "harness-default" if model is None else "slice-override"
-        if not isinstance(model_source, str) or not model_source:
-            raise ReviewStateError("slice model_source must be a non-empty string")
-        if reasoning is not None and (
-            not isinstance(reasoning, str) or not reasoning.strip()
-        ):
-            raise ReviewStateError(
-                "slice reasoning must be a non-empty string or null"
-            )
         if reasoning_source is None:
             reasoning_source = (
                 "harness-default" if reasoning is None else "slice-override"
             )
-        if not isinstance(reasoning_source, str) or not reasoning_source:
-            raise ReviewStateError(
-                "slice reasoning_source must be a non-empty string"
-            )
+        _validate_execution_choice(
+            model,
+            model_source,
+            field="model",
+            owner="slice",
+        )
+        _validate_execution_choice(
+            reasoning,
+            reasoning_source,
+            field="reasoning",
+            owner="slice",
+        )
         definition = {
             "name": name,
             "mode": mode,
