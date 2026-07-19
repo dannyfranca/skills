@@ -35,9 +35,9 @@ slices, tombstones, runs, and history. It contextually calls `add_slice.py` and 
 there is no classification plan artifact.
 Selection behavior lives in
 [`references/slice-selection.md`](references/slice-selection.md) and is loaded by the classifier.
-The launcher automatically resolves global and changed-path `REVIEW.override.md` / `REVIEW.md`
-chains into classifier-only context. Reviewers receive only concrete requirements that the
-classifier deliberately translates into focused slice prompts.
+The launcher automatically resolves global and changed-path review instruction chains into
+classifier-only context. Reviewers receive only concrete requirements that the classifier
+deliberately translates into focused slice prompts.
 
 Run classification again after material target changes, partial classifier failure, or a user
 request to reconsider slices. Successful prior mutations remain context.
