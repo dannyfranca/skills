@@ -2778,12 +2778,18 @@ class CliTests(unittest.TestCase):
         self.assertNotIn("CHILD STDOUT", stream_proc.stdout)
         self.assertNotIn("CHILD STDERR", stream_proc.stderr)
 
-    def test_skill_documents_review_barrier_protocol(self) -> None:
+    def test_skill_documents_report_and_barrier_protocols(self) -> None:
         text = (ROOT / "SKILL.md").read_text(encoding="utf-8")
         normalized = " ".join(text.split())
         self.assertIn('python3 "$SKILL_DIR/scripts/run_reviews.py" --review-dir "$REVIEW_DIR"', text)
-        self.assertIn("review barrier exclusively in the foreground", text)
+        self.assertIn("review wave exclusively in the foreground", text)
         self.assertIn("timeout of at least two hours", text)
+        self.assertIn("**Barrier (default)**", text)
+        self.assertIn("### Report", text)
+        self.assertIn("switch only when the user explicitly requests a report-only review", normalized)
+        self.assertIn("with the target unchanged", normalized)
+        self.assertIn("Complete Report mode after consuming the wave for any `rem` value", normalized)
+        self.assertIn("### Barrier", text)
         self.assertIn('`"ok":true` and `"rem":0`', normalized)
         self.assertNotIn("--summary-json", text)
         self.assertNotIn("--no-stdout", text)
