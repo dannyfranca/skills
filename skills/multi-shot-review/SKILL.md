@@ -48,11 +48,11 @@ deliberately translates into focused slice prompts.
 Run classification again after material target changes, partial classifier failure, or a user
 request to reconsider slices. Successful prior mutations remain context.
 
-4. Run one review wave exclusively in the foreground with a timeout of at least two hours:
+4. Run one review wave exclusively in the foreground with a timeout of at least one hour:
 
 ```bash
 python3 "$SKILL_DIR/scripts/run_reviews.py" --review-dir "$REVIEW_DIR" \
-  --child-timeout-seconds 7200
+  --child-timeout-seconds 3600
 ```
 
 Wait silently for exit. All eligible slices run in one parallel wave. Consume only final JSON, the
