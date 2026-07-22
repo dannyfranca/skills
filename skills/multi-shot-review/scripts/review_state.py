@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import fcntl
 import json
 import os
@@ -22,15 +23,25 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from review_result import (
+    RESULT_SCHEMA_VERSION,
+    RESULT_SCHEMA_PATH,
+    ReviewResultError,
+    assign_finding_ids,
+    parse_review_result,
+    render_review_failure_markdown,
+    render_review_markdown,
+    validate_stored_finding,
+)
 
-SCHEMA_VERSION = 1
+
+SCHEMA_VERSION = 2
 MAX_ACTIVE_SLICES = 10
 EXECUTION_SOURCES = frozenset(
     {
         "slice-override",
         "configured-default",
         "harness-default",
-        "legacy-definition",
     }
 )
 TASK_ENTRYPOINT = "task.md"
@@ -38,24 +49,6 @@ RELATED_TASKS_DIR = "related-tasks"
 ORIGINAL_REQUEST_START = "<!-- multi-shot-review:original-request:start -->"
 ORIGINAL_REQUEST_END = "<!-- multi-shot-review:original-request:end -->"
 SLICE_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
-PRIORITY_RE = re.compile(r"\[(?:P[0-3])\]", re.IGNORECASE)
-REVIEW_COMMENT_RE = re.compile(r"Review comment:", re.IGNORECASE)
-FULL_REVIEW_COMMENTS_RE = re.compile(r"^Full review comments:\s*(.*)", re.IGNORECASE | re.DOTALL | re.MULTILINE)
-QUIET_RE = re.compile(
-    r"\b(no actionable issues|no blocking issues|no findings|no issues found|did not find\b.*\b(?:bug|issue|problem|defect)s?|lgtm|looks good to me)\b"
-    r"|(?=[\s\S]*\b(?:is|are|remains?|looks?) consistent with\b)(?=[\s\S]*\b(?:tests?|typechecks?|checks?)\b[\w\s/-]*\bpassed\b)",
-    re.IGNORECASE,
-)
-CONTRAST_RE = re.compile(r"\b(but|however|except|although)\b", re.IGNORECASE)
-QUIET_SUMMARY_RE = re.compile(
-    r"^\s*(?:no actionable issues(?: found)?|no blocking issues(?: found)?|no findings(?: found)?|no issues found|lgtm|looks good to me)\.?\s*$",
-    re.IGNORECASE,
-)
-EMPTY_SUMMARY_RE = re.compile(r"^\s*(?:none|n/a|no comments?)\.?\s*$", re.IGNORECASE)
-QUIET_PRIORITY_RE = re.compile(
-    r"\b(?:there\s+(?:are|were)\s+)?no\s+(?:findings|issues)\s+(?:above|at or above)\s+\[(?:P[0-3])\]|\b(?:there\s+(?:are|were)\s+)?no\s+(?:\[(?:P[0-3])\](?:(?:\s*,\s*|\s+(?:or|and)\s+|\s*,\s*(?:or|and)\s+)\[(?:P[0-3])\])*\s+)?(?:findings|issues)(?:\s+remain)?|\bi did not find\s+(?:any\s+)?(?:\[(?:P[0-3])\](?:(?:\s*,\s*|\s+(?:or|and)\s+|\s*,\s*(?:or|and)\s+)\[(?:P[0-3])\])*\s+)?(?:findings|issues|bugs|problems|defects)",
-    re.IGNORECASE,
-)
 
 
 class ReviewStateError(RuntimeError):
@@ -237,6 +230,8 @@ def build_task_context_prompt(review_dir: Path) -> str:
         "- It contains the original user request and any related/future tasks.\n"
         "- Treat related/future tasks as deferred-work context, not as part of the current review scope.\n"
         "- Avoid flagging missing follow-up work when it is clearly covered by related/future tasks.\n"
+        f"- Return only one JSON object matching {RESULT_SCHEMA_PATH}.\n"
+        "- Do not wrap the JSON in Markdown fences or add prose outside it.\n"
     )
 
 
@@ -360,11 +355,15 @@ def _remove_related_task_backups(backups: list[tuple[Path, Path]]) -> None:
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
+    _atomic_write_bytes(path, text.encode("utf-8"))
+
+
+def _atomic_write_bytes(path: Path, content: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
     try:
-        with tmp_path.open("w", encoding="utf-8") as fh:
-            fh.write(text)
+        with tmp_path.open("wb") as fh:
+            fh.write(content)
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp_path, path)
@@ -379,92 +378,6 @@ def _path_is_relative_to(path: Path, parent: Path) -> bool:
     except ValueError:
         return False
     return True
-
-
-def classify_output(text: str) -> str:
-    """Return findings, quiet, or uncertain for a successful review output."""
-    if count_findings(text) > 0:
-        return "findings"
-
-    if (QUIET_RE.search(text) and not CONTRAST_RE.search(text)) or any(
-        QUIET_PRIORITY_RE.search(line) and not CONTRAST_RE.search(line) for line in text.splitlines()
-    ):
-        return "quiet"
-
-    return "uncertain"
-
-
-def count_findings(text: str) -> int:
-    """Count recognizable review findings in successful Codex review output."""
-    full_comments = FULL_REVIEW_COMMENTS_RE.search(text)
-    if full_comments:
-        body = full_comments.group(1).strip()
-        if not body or re.fullmatch(r"(none\.?|n/a|no comments?\.?|no findings\.?)", body, re.IGNORECASE):
-            return 0
-
-        raw_lines = [line.rstrip() for line in body.splitlines() if line.strip()]
-        lines = [line.strip() for line in raw_lines]
-        bullet_lines = [line for line in raw_lines if re.match(r"^([-*]|\d+[.)])\s+", line)]
-        if bullet_lines:
-            finding_count = 0
-            for line in bullet_lines:
-                bullet_text = re.sub(r"^([-*]|\d+[.)])\s+", "", line)
-                quiet_stripped = QUIET_PRIORITY_RE.sub("", bullet_text).strip(" \t.,;:")
-                if EMPTY_SUMMARY_RE.fullmatch(bullet_text) or QUIET_SUMMARY_RE.fullmatch(bullet_text):
-                    continue
-                if not CONTRAST_RE.search(bullet_text) and QUIET_PRIORITY_RE.match(bullet_text) and not quiet_stripped:
-                    continue
-                finding_count += 1
-            for line in raw_lines:
-                if line.startswith((" ", "\t")) or re.match(r"^([-*]|\d+[.)])\s+", line):
-                    continue
-                line_without_quiet_priority = QUIET_PRIORITY_RE.sub("", line)
-                finding_count += len(PRIORITY_RE.findall(line_without_quiet_priority))
-            return finding_count
-        body_priority_count = 0
-        for line in lines:
-            line_without_quiet_priority = QUIET_PRIORITY_RE.sub("", line)
-            body_priority_count += len(PRIORITY_RE.findall(line_without_quiet_priority))
-        if body_priority_count:
-            return body_priority_count
-        if all(_line_is_quiet_summary(line) for line in lines):
-            return 0
-        return 1
-
-    priority_count = 0
-    review_comment_count = 0
-    for line in text.splitlines():
-        line_without_quiet_priority = QUIET_PRIORITY_RE.sub("", line)
-        priority_count += len(PRIORITY_RE.findall(line_without_quiet_priority))
-        if REVIEW_COMMENT_RE.search(line_without_quiet_priority) and not PRIORITY_RE.search(line_without_quiet_priority):
-            comment_text = REVIEW_COMMENT_RE.sub("", line_without_quiet_priority).strip()
-            if comment_text:
-                review_comment_count += 1
-    if priority_count:
-        return priority_count + review_comment_count
-
-    review_comment_count = sum(
-        1
-        for line in text.splitlines()
-        for _match in REVIEW_COMMENT_RE.finditer(line)
-        if not _review_comment_is_quiet(line)
-    )
-    if review_comment_count:
-        return review_comment_count
-    return 0
-
-
-def _review_comment_is_quiet(line: str) -> bool:
-    comment_text = REVIEW_COMMENT_RE.sub("", line).strip()
-    return bool(comment_text and _line_is_quiet_summary(comment_text))
-
-
-def _line_is_quiet_summary(line: str) -> bool:
-    return bool(
-        EMPTY_SUMMARY_RE.fullmatch(line)
-        or QUIET_SUMMARY_RE.fullmatch(line)
-        or (QUIET_PRIORITY_RE.match(line) and not QUIET_PRIORITY_RE.sub("", line).strip(" \t.,;:"))
-    )
 
 
 def append_error(review_dir: Path, title: str, details: str) -> None:
@@ -532,6 +445,7 @@ class ReviewState:
     def __init__(self, review_dir: Path, data: dict[str, Any]):
         self.review_dir = review_dir.resolve()
         self.data = data
+        self._artifact_snapshots: dict[Path, bytes | None] = {}
         self.validate()
 
     @classmethod
@@ -567,54 +481,6 @@ class ReviewState:
                 data = json.load(fh)
         except json.JSONDecodeError as exc:
             raise ReviewStateError(f"invalid review state JSON: {exc}") from exc
-        session = data.get("session")
-        if isinstance(session, dict):
-            target = session.setdefault("target", {"kind": "uncommitted"})
-            if isinstance(target, dict) and target.get("kind") == "base":
-                target.pop("head", None)
-        slices = data.get("slices")
-        if isinstance(slices, dict):
-            for item in slices.values():
-                if not isinstance(item, dict):
-                    continue
-                item.setdefault("model", None)
-                item.setdefault(
-                    "model_source",
-                    "harness-default" if item.get("model") is None else "legacy-definition",
-                )
-                item.setdefault("reasoning", None)
-                item.setdefault(
-                    "reasoning_source",
-                    (
-                        "harness-default"
-                        if item.get("reasoning") is None
-                        else "legacy-definition"
-                    ),
-                )
-                runs = item.get("runs")
-                if not isinstance(runs, list):
-                    continue
-                for run in runs:
-                    if not isinstance(run, dict):
-                        continue
-                    run.setdefault("model", item.get("model"))
-                    run.setdefault(
-                        "model_source",
-                        (
-                            "harness-default"
-                            if run.get("model") is None
-                            else "legacy-definition"
-                        ),
-                    )
-                    run.setdefault("reasoning", item.get("reasoning"))
-                    run.setdefault(
-                        "reasoning_source",
-                        (
-                            "harness-default"
-                            if run.get("reasoning") is None
-                            else "legacy-definition"
-                        ),
-                    )
         return cls(review_dir.resolve(), data)
 
     @classmethod
@@ -622,30 +488,66 @@ class ReviewState:
         return LockedReviewState(review_dir)
 
     def save(self) -> None:
-        self.validate()
-        self.review_dir.mkdir(parents=True, exist_ok=True)
-        fd, tmp_name = tempfile.mkstemp(
-            prefix="_state.",
-            suffix=".tmp",
-            dir=str(self.review_dir),
-            text=True,
-        )
+        tmp_name: str | None = None
         try:
+            self.validate()
+            self.review_dir.mkdir(parents=True, exist_ok=True)
+            fd, tmp_name = tempfile.mkstemp(
+                prefix="_state.",
+                suffix=".tmp",
+                dir=str(self.review_dir),
+                text=True,
+            )
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump(self.data, fh, indent=2, sort_keys=True)
                 fh.write("\n")
                 fh.flush()
                 os.fsync(fh.fileno())
             os.replace(tmp_name, self.review_dir / "_state.json")
+            tmp_name = None
+        except Exception:
+            self._rollback_artifacts()
+            raise
+        else:
+            self._artifact_snapshots.clear()
         finally:
-            if os.path.exists(tmp_name):
+            if tmp_name is not None and os.path.exists(tmp_name):
                 os.unlink(tmp_name)
+
+    def _remember_artifact(self, path: Path) -> None:
+        path = path.resolve()
+        if path in self._artifact_snapshots:
+            return
+        try:
+            self._artifact_snapshots[path] = path.read_bytes()
+        except FileNotFoundError:
+            self._artifact_snapshots[path] = None
+
+    def _write_artifact(self, path: Path, text: str) -> None:
+        self._remember_artifact(path)
+        _atomic_write_text(path, text)
+
+    def _remove_artifact(self, path: Path) -> None:
+        self._remember_artifact(path)
+        path.unlink(missing_ok=True)
+
+    def _rollback_artifacts(self) -> None:
+        snapshots = list(self._artifact_snapshots.items())
+        self._artifact_snapshots.clear()
+        for path, content in reversed(snapshots):
+            try:
+                if content is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    _atomic_write_bytes(path, content)
+            except OSError:
+                pass
 
     def validate(self) -> None:
         data = self.data
         if not isinstance(data, dict):
             raise ReviewStateError("state must be a JSON object")
-        if data.get("schema_version") != SCHEMA_VERSION:
+        if type(data.get("schema_version")) is not int or data["schema_version"] != SCHEMA_VERSION:
             raise ReviewStateError(f"unsupported review state schema: {data.get('schema_version')!r}")
         if not isinstance(data.get("session"), dict):
             raise ReviewStateError("state session must be an object")
@@ -666,6 +568,7 @@ class ReviewState:
             raise ReviewStateError("state history must be an array")
         if not isinstance(data.get("completed"), bool):
             raise ReviewStateError("state completed must be a boolean")
+        session_finding_ids: set[str] = set()
         for name, item in data["slices"].items():
             self._validate_slice_name(name)
             if not isinstance(item, dict):
@@ -701,7 +604,7 @@ class ReviewState:
                 field="reasoning",
                 owner=f"slice {name!r}",
             )
-            if not isinstance(item.get("next_pass"), int) or item["next_pass"] < 1:
+            if type(item.get("next_pass")) is not int or item["next_pass"] < 1:
                 raise ReviewStateError(f"slice {name!r} must have a positive next_pass")
             if not isinstance(item.get("complete"), bool):
                 raise ReviewStateError(f"slice {name!r} must have complete boolean")
@@ -714,10 +617,20 @@ class ReviewState:
             if item.get("removal_source") not in {None, "classifier", "user"}:
                 raise ReviewStateError(f"slice {name!r} has invalid removal source")
             definition_version = item.get("definition_version", 1)
-            if not isinstance(definition_version, int) or definition_version < 1:
+            if type(definition_version) is not int or definition_version < 1:
                 raise ReviewStateError(f"slice {name!r} has invalid definition version")
             for run in item["runs"]:
                 self._validate_run(name, run)
+                stored_findings = run.get("findings") or self._load_findings_archive(
+                    name, run
+                )
+                for finding in stored_findings:
+                    finding_id = finding["id"]
+                    if finding_id in session_finding_ids:
+                        raise ReviewStateError(
+                            f"duplicate session finding id: {finding_id}"
+                        )
+                    session_finding_ids.add(finding_id)
 
     @staticmethod
     def _validate_run(slice_name: str, run: Any) -> None:
@@ -725,26 +638,70 @@ class ReviewState:
             raise ReviewStateError(f"slice {slice_name!r} has non-object run entry")
         if not isinstance(run.get("id"), str) or not run["id"]:
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid id")
-        if not isinstance(run.get("pass"), int) or run["pass"] < 1:
+        if type(run.get("pass")) is not int or run["pass"] < 1:
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid pass")
         if not isinstance(run.get("output_file"), str) or not run["output_file"]:
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid output_file")
-        if run.get("status") not in {"running", "findings", "quiet", "uncertain", "failed", "timeout", "ignored"}:
+        if run.get("status") not in {"running", "findings", "no_findings", "failed", "timeout", "ignored"}:
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid status")
         if not isinstance(run.get("started_at"), str) or not run["started_at"]:
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid started_at")
         if run.get("ended_at") is not None and not isinstance(run.get("ended_at"), str):
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid ended_at")
-        if run.get("exit_code") is not None and not isinstance(run.get("exit_code"), int):
+        if run.get("exit_code") is not None and type(run.get("exit_code")) is not int:
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid exit_code")
         if run.get("classification") is not None and not isinstance(run.get("classification"), str):
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid classification")
         finding_count = run.get("finding_count")
-        if finding_count is not None and (not isinstance(finding_count, int) or finding_count < 0):
+        if finding_count is not None and (type(finding_count) is not int or finding_count < 0):
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid finding_count")
-        ignored_count = run.get("ignored_count")
-        if ignored_count is not None and (not isinstance(ignored_count, int) or ignored_count < 0):
-            raise ReviewStateError(f"slice {slice_name!r} has run with invalid ignored_count")
+        findings = run.get("findings")
+        if findings is not None and not isinstance(findings, list):
+            raise ReviewStateError(f"slice {slice_name!r} has invalid findings")
+        if isinstance(findings, list):
+            try:
+                for index, finding in enumerate(findings):
+                    validate_stored_finding(
+                        finding, owner=f"slice {slice_name!r} run finding {index}"
+                    )
+            except ReviewResultError as exc:
+                raise ReviewStateError(str(exc)) from exc
+            if finding_count != len(findings):
+                raise ReviewStateError(
+                    f"slice {slice_name!r} run finding_count does not match findings"
+                )
+        findings_archive = run.get("findings_archive")
+        if findings_archive is not None and (
+            not isinstance(findings_archive, str) or not findings_archive
+        ):
+            raise ReviewStateError(
+                f"slice {slice_name!r} run has invalid findings_archive"
+            )
+        if findings is not None and findings_archive is not None:
+            raise ReviewStateError(
+                f"slice {slice_name!r} run cannot have active and archived findings"
+            )
+        status = run["status"]
+        if status == "findings" and not (
+            (findings and findings_archive is None)
+            or (
+                findings is None
+                and findings_archive is not None
+                and type(finding_count) is int
+                and finding_count > 0
+            )
+        ):
+            raise ReviewStateError(
+                f"slice {slice_name!r} finding run must have active or archived findings"
+            )
+        if status == "no_findings" and findings != []:
+            raise ReviewStateError(
+                f"slice {slice_name!r} no-findings run must have an empty finding list"
+            )
+        if status in {"running", "failed", "timeout"} and findings is not None:
+            raise ReviewStateError(
+                f"slice {slice_name!r} unfinished or failed run cannot have findings"
+            )
         if run.get("runner_pid") is not None and not isinstance(run.get("runner_pid"), int):
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid runner_pid")
         if run.get("runner_key") is not None and not isinstance(run.get("runner_key"), str):
@@ -764,7 +721,7 @@ class ReviewState:
             owner=f"slice {slice_name!r} run",
         )
         definition_version = run.get("definition_version", 1)
-        if not isinstance(definition_version, int) or definition_version < 1:
+        if type(definition_version) is not int or definition_version < 1:
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid definition version")
 
     @staticmethod
@@ -892,9 +849,29 @@ class ReviewState:
                 "remove or consolidate an active slice first"
             )
         if existing is not None:
+            existing_snapshot = copy.deepcopy(existing)
             definition["runs"] = existing["runs"]
             definition["next_pass"] = existing["next_pass"]
             definition["definition_version"] = existing.get("definition_version", 1) + 1
+            superseded_at = now_iso()
+            try:
+                for run in definition["runs"]:
+                    if not run.get("findings"):
+                        continue
+                    for finding in run["findings"]:
+                        if finding.get("status") == "open":
+                            finding["status"] = "superseded"
+                            finding["resolution"] = {
+                                "kind": "superseded",
+                                "definition_version": definition["definition_version"],
+                                "at": superseded_at,
+                            }
+                    self._archive_and_render_run(name, run)
+            except (OSError, UnicodeError):
+                existing.clear()
+                existing.update(existing_snapshot)
+                self._rollback_artifacts()
+                raise
             self.data["slices"][name] = definition
             self.data["history"].append(
                 {
@@ -931,6 +908,26 @@ class ReviewState:
             raise ReviewStateError(f"slice already removed: {name}")
         if source == "classifier" and item.get("source") == "user":
             raise ReviewStateError(f"slice is controlled by an explicit user directive: {name}")
+        item_snapshot = copy.deepcopy(item)
+        superseded_at = now_iso()
+        try:
+            for run in item["runs"]:
+                if not run.get("findings"):
+                    continue
+                for finding in run["findings"]:
+                    if finding.get("status") == "open":
+                        finding["status"] = "superseded"
+                        finding["resolution"] = {
+                            "kind": "superseded",
+                            "removed": True,
+                            "at": superseded_at,
+                        }
+                self._archive_and_render_run(name, run)
+        except (OSError, UnicodeError):
+            item.clear()
+            item.update(item_snapshot)
+            self._rollback_artifacts()
+            raise
         item["removed"] = True
         item["removal_source"] = source
         item["removal_directive"] = user_directive
@@ -972,7 +969,8 @@ class ReviewState:
                 "exit_code": None,
                 "classification": None,
                 "finding_count": None,
-                "ignored_count": 0,
+                "findings": None,
+                "findings_archive": None,
                 "runner_pid": os.getpid(),
                 "runner_key": _process_key(os.getpid()),
                 "error": None,
@@ -1012,7 +1010,7 @@ class ReviewState:
         status: str,
         exit_code: int | None,
         classification: str | None,
-        finding_count: int | None = None,
+        findings: list[dict[str, Any]] | None = None,
         error: str | None = None,
     ) -> bool:
         item = self.data["slices"][slice_name]
@@ -1067,26 +1065,71 @@ class ReviewState:
             )
             self._refresh_completed()
             return True
+        item_snapshot = copy.deepcopy(item)
+        if status == "findings":
+            findings = assign_finding_ids(findings or [], used_ids=self._finding_ids())
+            if not findings:
+                raise ReviewStateError("finding run must contain at least one finding")
+        elif status == "no_findings":
+            findings = []
+        elif status not in {"failed", "timeout"}:
+            raise ReviewStateError(f"invalid run status: {status}")
+
+        if status in {"findings", "no_findings"}:
+            output_path = Path(run["output_file"])
+            try:
+                self._write_artifact(
+                    output_path,
+                    render_review_markdown(
+                        findings or [],
+                        model=run.get("model"),
+                        model_source=run["model_source"],
+                        reasoning=run.get("reasoning"),
+                        reasoning_source=run["reasoning_source"],
+                    ),
+                )
+                self._supersede_prior_findings(slice_name, item, run)
+            except (OSError, UnicodeError) as exc:
+                item.clear()
+                item.update(item_snapshot)
+                run = next(
+                    candidate
+                    for candidate in item["runs"]
+                    if candidate.get("id") == run_id
+                )
+                error = f"could not persist review artifacts: {exc}"
+                self._rollback_artifacts()
+                try:
+                    append_error(
+                        self.review_dir,
+                        f"failed to persist review artifacts for {slice_name}",
+                        f"Slice: {slice_name}\nOutput: {run['output_file']}\nError: {exc}",
+                    )
+                except (OSError, UnicodeError):
+                    pass
+                status = "failed"
+                classification = None
+                findings = None
+
         run["status"] = status
         run["ended_at"] = now_iso()
         run["exit_code"] = exit_code
         run["classification"] = classification
-        run["finding_count"] = finding_count
+        run["findings"] = findings
+        run["finding_count"] = len(findings) if findings is not None else None
         run["error"] = error
 
         if status == "findings":
             item["next_pass"] = max(item["next_pass"], int(run["pass"]) + 1)
             item["complete"] = False
             item["last_error"] = None
-        elif status in {"quiet", "uncertain"}:
+        elif status == "no_findings":
             item["complete"] = True
             item["last_error"] = None
         elif status in {"failed", "timeout"}:
             item["complete"] = False
             item["last_error"] = error or ("review process timed out" if status == "timeout" else "review process failed")
             self.data["last_error"] = {"slice": slice_name, "run_id": run_id, "error": item["last_error"], "at": now_iso()}
-        else:
-            raise ReviewStateError(f"invalid run status: {status}")
 
         self.data["history"].append(
             {
@@ -1101,92 +1144,266 @@ class ReviewState:
         self._refresh_completed()
         return True
 
-    def report_ignored_findings(
-        self,
-        *,
-        ignored_count: int,
-        slice_name: str | None = None,
-        run_id: str | None = None,
-        pass_number: int | None = None,
-    ) -> tuple[bool, str]:
-        if ignored_count < 0:
-            raise ReviewStateError("ignored count must be zero or greater")
-        candidates = self._find_ignored_report_candidates(
-            slice_name=slice_name,
-            run_id=run_id,
-            pass_number=pass_number,
-        )
-        if not candidates:
-            raise ReviewStateError("no matching finding run found")
-        if len(candidates) > 1:
-            names = ", ".join(f"{name}:pass-{run['pass']}" for name, run in candidates)
-            raise ReviewStateError(f"multiple matching finding runs found; pass --slice or --run-id: {names}")
+    def _finding_ids(self) -> set[str]:
+        return {finding["id"] for finding in self._session_findings()}
 
-        name, run = candidates[0]
-        finding_count = run.get("finding_count")
-        if not isinstance(finding_count, int) or finding_count < 1:
-            raise ReviewStateError("target run does not have a positive finding_count")
-        if ignored_count > finding_count:
-            raise ReviewStateError(
-                f"ignored count {ignored_count} exceeds finding count {finding_count} for slice {name}"
-            )
-        if ignored_count < finding_count:
-            return False, (
-                f"unchanged: slice {name} has {finding_count} findings and only {ignored_count} ignored; "
-                "follow-up remains required."
-            )
-
-        run["status"] = "ignored"
-        run["classification"] = "ignored_findings"
-        run["ignored_count"] = ignored_count
-        run["ignored_at"] = now_iso()
-        item = self.data["slices"][name]
-        item["complete"] = True
-        item["last_error"] = None
-        self.data["history"].append(
-            {
-                "event": "findings_ignored",
-                "slice": name,
-                "run_id": run["id"],
-                "pass": run["pass"],
-                "ignored_count": ignored_count,
-                "finding_count": finding_count,
-                "at": now_iso(),
-            }
-        )
-        self._refresh_completed()
-        return True, f"complete: slice {name} pass {run['pass']} had {finding_count} findings and all were ignored."
-
-    def _find_ignored_report_candidates(
-        self,
-        *,
-        slice_name: str | None,
-        run_id: str | None,
-        pass_number: int | None,
-    ) -> list[tuple[str, dict[str, Any]]]:
-        if slice_name is not None:
-            self._validate_slice_name(slice_name)
-            if slice_name not in self.data["slices"]:
-                raise ReviewStateError(f"slice not found: {slice_name}")
-        candidates: list[tuple[str, dict[str, Any]]] = []
-        for name, item in self.data["slices"].items():
-            if slice_name is not None and name != slice_name:
-                continue
-            latest_run = item["runs"][-1] if item["runs"] else None
+    def _session_findings(self) -> list[dict[str, Any]]:
+        findings: list[dict[str, Any]] = []
+        for slice_name, item in self.data["slices"].items():
             for run in item["runs"]:
-                if run_id is not None and run.get("id") != run_id:
+                findings.extend(
+                    run.get("findings")
+                    or self._load_findings_archive(slice_name, run)
+                )
+        return findings
+
+    def _load_findings_archive(
+        self, slice_name: str, run: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        archive = run.get("findings_archive")
+        if not archive:
+            return []
+        archive_path = Path(archive)
+        expected_path = self.review_dir / "history" / f"{run['id']}.json"
+        if archive_path.resolve() != expected_path.resolve():
+            raise ReviewStateError(
+                f"run {run['id']} has unexpected findings archive path: {archive}"
+            )
+        try:
+            archive_data = json.loads(archive_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ReviewStateError(
+                f"could not read findings archive {archive}: {exc}"
+            ) from exc
+        if not isinstance(archive_data, dict) or set(archive_data) != {
+            "schema_version",
+            "run_id",
+            "slice",
+            "pass",
+            "archived_at",
+            "findings",
+        }:
+            raise ReviewStateError(f"invalid findings archive shape: {archive}")
+        if (
+            type(archive_data["schema_version"]) is not int
+            or archive_data["schema_version"] != RESULT_SCHEMA_VERSION
+            or archive_data["run_id"] != run["id"]
+            or archive_data["slice"] != slice_name
+            or archive_data["pass"] != run["pass"]
+            or not isinstance(archive_data["archived_at"], str)
+            or not archive_data["archived_at"]
+            or not isinstance(archive_data["findings"], list)
+            or len(archive_data["findings"]) != run.get("finding_count")
+        ):
+            raise ReviewStateError(f"invalid findings archive metadata: {archive}")
+        findings: list[dict[str, Any]] = []
+        for index, finding in enumerate(archive_data["findings"]):
+            try:
+                validated = validate_stored_finding(
+                    finding, owner=f"archive {archive} finding {index}"
+                )
+            except ReviewResultError as exc:
+                raise ReviewStateError(str(exc)) from exc
+            if validated["status"] == "open":
+                raise ReviewStateError(
+                    f"archive {archive} contains open finding {validated['id']}"
+                )
+            findings.append(validated)
+        return findings
+
+    def _finding_ids_for_run(
+        self, slice_name: str, run: dict[str, Any]
+    ) -> list[str]:
+        return [
+            finding["id"]
+            for finding in (
+                run.get("findings")
+                or self._load_findings_archive(slice_name, run)
+            )
+        ]
+
+    def _duplicate_targets(self) -> set[str]:
+        return {
+            finding["resolution"]["finding_id"]
+            for finding in self._session_findings()
+            if finding.get("status") == "ignored"
+            and isinstance(finding.get("resolution"), dict)
+            and finding["resolution"].get("kind") == "duplicate"
+        }
+
+    def _supersede_prior_findings(
+        self,
+        slice_name: str,
+        item: dict[str, Any],
+        successor_run: dict[str, Any],
+    ) -> None:
+        superseded_at = now_iso()
+        for prior_run in item["runs"]:
+            if prior_run is successor_run or not prior_run.get("findings"):
+                continue
+            for finding in prior_run["findings"]:
+                if finding.get("status") != "open":
                     continue
-                if pass_number is not None and run.get("pass") != pass_number:
-                    continue
-                if (
-                    run.get("status") == "findings"
-                    and run is latest_run
-                    and run.get("definition_version", 1)
-                    == item.get("definition_version", 1)
-                ):
-                    candidates.append((name, run))
-        candidates.sort(key=lambda pair: str(pair[1].get("started_at", "")), reverse=True)
-        return candidates
+                finding["status"] = "superseded"
+                finding["resolution"] = {
+                    "kind": "superseded",
+                    "successor_run_id": successor_run["id"],
+                    "at": superseded_at,
+                }
+            self._archive_and_render_run(slice_name, prior_run)
+
+    def ignore_finding(self, finding_id: str, reason: str) -> tuple[bool, str]:
+        reason = _require_non_empty_text(reason, "ignore reason")
+        name, item, run, finding = self._find_active_finding(finding_id)
+        item_snapshot = copy.deepcopy(item)
+        if finding["status"] != "open":
+            raise ReviewStateError(f"finding is already terminal: {finding_id}")
+        finding["status"] = "ignored"
+        finding["resolution"] = {
+            "kind": "rejected",
+            "text": reason,
+            "at": now_iso(),
+        }
+        try:
+            if self._all_findings_terminal(run):
+                run["status"] = "ignored"
+                run["classification"] = "ignored_findings"
+                item["complete"] = True
+                item["last_error"] = None
+                self._archive_and_render_run(name, run)
+            else:
+                self._render_run_findings(run)
+                item["complete"] = False
+        except (OSError, UnicodeError):
+            item.clear()
+            item.update(item_snapshot)
+            self._rollback_artifacts()
+            raise
+        self._refresh_completed()
+        return True, f"ignored: {finding_id}"
+
+    def dedupe_finding(
+        self, finding_id: str, canonical_id: str
+    ) -> tuple[bool, str]:
+        if finding_id == canonical_id:
+            raise ReviewStateError("a finding cannot duplicate itself")
+        name, item, run, finding = self._find_active_finding(finding_id)
+        item_snapshot = copy.deepcopy(item)
+        _canonical_name, _canonical_item, _canonical_run, canonical = (
+            self._find_active_finding(canonical_id)
+        )
+        if finding["status"] != "open":
+            raise ReviewStateError(f"finding is already terminal: {finding_id}")
+        if canonical["status"] != "open":
+            raise ReviewStateError(f"canonical finding must be open: {canonical_id}")
+        if finding_id in self._duplicate_targets():
+            raise ReviewStateError(
+                f"canonical finding cannot become a duplicate: {finding_id}"
+            )
+        finding["status"] = "ignored"
+        finding["resolution"] = {
+            "kind": "duplicate",
+            "finding_id": canonical_id,
+            "at": now_iso(),
+        }
+        try:
+            if self._all_findings_terminal(run):
+                run["status"] = "ignored"
+                run["classification"] = "ignored_findings"
+                item["complete"] = True
+                item["last_error"] = None
+                self._archive_and_render_run(name, run)
+            else:
+                self._render_run_findings(run)
+                item["complete"] = False
+        except (OSError, UnicodeError):
+            item.clear()
+            item.update(item_snapshot)
+            self._rollback_artifacts()
+            raise
+        self._refresh_completed()
+        return True, f"deduplicated: {finding_id} -> {canonical_id}"
+
+    def _find_active_finding(
+        self, finding_id: str
+    ) -> tuple[str, dict[str, Any], dict[str, Any], dict[str, Any]]:
+        matches = [
+            (name, item, run, finding)
+            for name, item in self.data["slices"].items()
+            for run in item["runs"]
+            for finding in (run.get("findings") or [])
+            if finding.get("id") == finding_id
+        ]
+        if not matches:
+            raise ReviewStateError(f"active finding not found: {finding_id}")
+        if len(matches) > 1:
+            raise ReviewStateError(f"duplicate active finding id: {finding_id}")
+        return matches[0]
+
+    @staticmethod
+    def _all_findings_terminal(run: dict[str, Any]) -> bool:
+        findings = run.get("findings") or []
+        return bool(findings) and all(finding.get("status") == "ignored" for finding in findings)
+
+    def _render_run_findings(self, run: dict[str, Any]) -> None:
+        self._write_artifact(
+            Path(run["output_file"]),
+            render_review_markdown(
+                run.get("findings") or [],
+                model=run.get("model"),
+                model_source=run["model_source"],
+                reasoning=run.get("reasoning"),
+                reasoning_source=run["reasoning_source"],
+            ),
+        )
+
+    def _archive_run_findings(self, slice_name: str, run: dict[str, Any]) -> None:
+        findings = run.get("findings")
+        if not findings:
+            return
+        archive_dir = self.review_dir / "history"
+        archive_path = archive_dir / f"{run['id']}.json"
+        archived_at = now_iso()
+        self._write_artifact(
+            archive_path,
+            json.dumps(
+                {
+                    "schema_version": RESULT_SCHEMA_VERSION,
+                    "run_id": run["id"],
+                    "slice": slice_name,
+                    "pass": run["pass"],
+                    "archived_at": archived_at,
+                    "findings": findings,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+        )
+        run["findings"] = None
+        run["findings_archive"] = str(archive_path)
+
+    def _archive_and_render_run(self, slice_name: str, run: dict[str, Any]) -> None:
+        active_findings = copy.deepcopy(run.get("findings"))
+        previous_archive = run.get("findings_archive")
+        rendered = render_review_markdown(
+            run.get("findings") or [],
+            model=run.get("model"),
+            model_source=run["model_source"],
+            reasoning=run.get("reasoning"),
+            reasoning_source=run["reasoning_source"],
+        )
+        self._archive_run_findings(slice_name, run)
+        archive_path = Path(run["findings_archive"])
+        try:
+            self._write_artifact(Path(run["output_file"]), rendered)
+        except (OSError, UnicodeError):
+            try:
+                self._remove_artifact(archive_path)
+            finally:
+                run["findings"] = active_findings
+                run["findings_archive"] = previous_archive
+            raise
 
     def _recover_stale_running_runs(self) -> None:
         for name, item in self.data["slices"].items():
@@ -1194,6 +1411,26 @@ class ReviewState:
                 if run.get("status") != "running":
                     continue
                 if _running_reservation_is_active(run):
+                    continue
+                if run.get("definition_version", 1) != item.get(
+                    "definition_version", 1
+                ):
+                    run["status"] = "ignored"
+                    run["ended_at"] = now_iso()
+                    run["exit_code"] = None
+                    run["classification"] = "superseded_stale_recovered"
+                    run["finding_count"] = 0
+                    run["error"] = None
+                    item["last_error"] = None
+                    self.data["history"].append(
+                        {
+                            "event": "superseded_stale_run_recovered",
+                            "slice": name,
+                            "run_id": run["id"],
+                            "pass": run.get("pass"),
+                            "at": now_iso(),
+                        }
+                    )
                     continue
                 if item.get("removed"):
                     run["status"] = "ignored"
@@ -1272,8 +1509,9 @@ def build_review_command(slice_data: dict[str, Any], output_file: Path) -> tuple
     cmd = [
         "codex",
         "exec",
-        "review",
         "--ephemeral",
+        "--sandbox",
+        "read-only",
     ]
     if slice_data.get("model") is not None:
         cmd.extend(["-m", slice_data["model"]])
@@ -1282,27 +1520,13 @@ def build_review_command(slice_data: dict[str, Any], output_file: Path) -> tuple
             ["-c", f'model_reasoning_effort="{slice_data["reasoning"]}"']
         )
     cmd.extend(["-c", "project_doc_fallback_filenames=[]"])
+    cmd.extend(["--output-schema", str(RESULT_SCHEMA_PATH)])
     session_target = slice_data.get("session_target")
     target = (
         _native_target_from_session(session_target)
         if session_target is not None
         else slice_data.get("target")
     )
-    if slice_data["mode"] == "native":
-        if target is None:
-            raise ReviewStateError("native slice target is required")
-        cmd.extend(["-c", f"developer_instructions={json.dumps(task_prompt)}"])
-        if target.get("uncommitted"):
-            cmd.append("--uncommitted")
-        elif "base" in target:
-            cmd.extend(["--base", target["base"]])
-        elif "commit" in target:
-            cmd.extend(["--commit", target["commit"]])
-        else:
-            raise ReviewStateError("slice target is invalid")
-        cmd.extend(["-o", str(output_file)])
-        return cmd, None
-
     target_prompt = ""
     if session_target is not None:
         session_target = _validate_session_target(session_target)
@@ -1315,8 +1539,25 @@ def build_review_command(slice_data: dict[str, Any], output_file: Path) -> tuple
             )
         else:
             target_prompt = f"Review the changes introduced by commit {session_target['value']}.\n"
+    elif target is not None:
+        if target.get("uncommitted") is True:
+            target_prompt = "Review the current staged, unstaged, and untracked changes.\n"
+        elif isinstance(target.get("base"), str):
+            target_prompt = (
+                f"Review the current branch against base {target['base']}, "
+                f"equivalent to `git diff {target['base']}...HEAD`.\n"
+            )
+        elif isinstance(target.get("commit"), str):
+            target_prompt = f"Review the changes introduced by commit {target['commit']}.\n"
+        else:
+            raise ReviewStateError("slice target is invalid")
 
-    prompt = f"{task_prompt}{target_prompt}\nSlice instructions:\n{slice_data['prompt']}"
+    slice_prompt = (
+        slice_data["prompt"]
+        if slice_data["mode"] == "prompt"
+        else "Review this target comprehensively for actionable defects."
+    )
+    prompt = f"{task_prompt}{target_prompt}\nSlice instructions:\n{slice_prompt}"
     cmd.extend(["-o", str(output_file), prompt])
     return cmd, None
 
@@ -1473,7 +1714,7 @@ def evaluate_completed_process(
     stdout_log: Path,
     stderr_log: Path,
     timed_out: bool = False,
-) -> tuple[str, str | None, int | None, str | None]:
+) -> tuple[str, str | None, list[dict[str, Any]] | None, str | None]:
     output_file = reservation.output_file
     if timed_out:
         error = (
@@ -1499,60 +1740,67 @@ def evaluate_completed_process(
 
     try:
         text = output_file.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeError) as exc:
         error = f"Slice: {reservation.slice_name}\nOutput: {output_file}\nError: {exc}"
         append_error(review_dir, f"unreadable review output for {reservation.slice_name}", error)
-        return "failed", None, None, f"review output is unreadable: {exc}"
+        message = f"review output is unreadable: {exc}"
+        _write_failure_review_artifact(reservation, message)
+        return "failed", None, None, message
 
     if not text.strip():
         error = f"Slice: {reservation.slice_name}\nOutput: {output_file}\nError: empty review output"
         append_error(review_dir, f"empty review output for {reservation.slice_name}", error)
-        return "failed", None, None, "review output is empty"
+        message = "review output is empty"
+        _write_failure_review_artifact(reservation, message)
+        return "failed", None, None, message
 
-    text = _add_execution_frontmatter(
-        text,
-        model=reservation.slice_data.get("model"),
-        model_source=reservation.slice_data["model_source"],
-        reasoning=reservation.slice_data.get("reasoning"),
-        reasoning_source=reservation.slice_data["reasoning_source"],
-    )
     try:
-        _atomic_write_text(output_file, text)
-    except OSError as exc:
+        findings = parse_review_result(text)
+    except ReviewResultError as exc:
         error = f"Slice: {reservation.slice_name}\nOutput: {output_file}\nError: {exc}"
-        append_error(review_dir, f"unwritable review output for {reservation.slice_name}", error)
-        return "failed", None, None, f"could not add review metadata: {exc}"
-
-    classification = classify_output(text)
-    finding_count = count_findings(text) if classification == "findings" else 0
-    if classification == "uncertain":
         append_error(
             review_dir,
-            f"uncertain successful review output for {reservation.slice_name}",
-            f"Slice: {reservation.slice_name}\nOutput: {output_file}\nAction: marked complete, but classifier was uncertain.",
+            f"invalid review output for {reservation.slice_name}",
+            error,
         )
-    return classification, classification, finding_count, None
+        _append_raw_review_output(stderr_log, text)
+        _write_failure_review_artifact(reservation, str(exc))
+        return "failed", None, None, str(exc)
+    classification = "findings" if findings else "no_findings"
+    status = "findings" if findings else "no_findings"
+    return status, classification, findings, None
 
 
-def _add_execution_frontmatter(
-    text: str,
-    *,
-    model: str | None,
-    model_source: str,
-    reasoning: str | None,
-    reasoning_source: str,
-) -> str:
-    model_value = "null" if model is None else json.dumps(model)
-    reasoning_value = "null" if reasoning is None else json.dumps(reasoning)
-    return (
-        "---\n"
-        f"model: {model_value}\n"
-        f"model_source: {json.dumps(model_source)}\n"
-        f"reasoning: {reasoning_value}\n"
-        f"reasoning_source: {json.dumps(reasoning_source)}\n"
-        "---\n\n"
-        f"{text}"
-    )
+def _append_raw_review_output(stderr_log: Path, text: str) -> None:
+    try:
+        with stderr_log.open("a", encoding="utf-8") as fh:
+            if stderr_log.stat().st_size:
+                fh.write("\n")
+            fh.write("[runner] raw invalid review output follows\n")
+            fh.write(text)
+            if not text.endswith("\n"):
+                fh.write("\n")
+    except (OSError, UnicodeError):
+        pass
+
+
+def _write_failure_review_artifact(
+    reservation: Reservation,
+    error: str,
+) -> None:
+    try:
+        _atomic_write_text(
+            reservation.output_file,
+            render_review_failure_markdown(
+                error,
+                model=reservation.slice_data.get("model"),
+                model_source=reservation.slice_data["model_source"],
+                reasoning=reservation.slice_data.get("reasoning"),
+                reasoning_source=reservation.slice_data["reasoning_source"],
+            ),
+        )
+    except (OSError, UnicodeError):
+        pass
 
 
 def _relative_path(path: Path, *, base: Path | None = None) -> str:
@@ -1677,13 +1925,14 @@ def _await_run_ids(
                             msg=run.get("error"),
                         )
                     )
-                elif status in {"quiet", "uncertain", "findings", "ignored"}:
+                elif status in {"no_findings", "findings", "ignored"}:
                     out.append(
                         {
                             "f": _relative_path(Path(run["output_file"])),
+                            "ids": state._finding_ids_for_run(slice_name, run),
                             "p": int(run["pass"]),
                             "s": slice_name,
-                            "st": "done",
+                            "st": run.get("classification") or "done",
                         }
                     )
             return remaining, out, errors
@@ -1859,14 +2108,14 @@ def run_reviews(
                     f"failed to launch review for {reservation.slice_name}",
                     f"Slice: {reservation.slice_name}\nOutput: {reservation.output_file}\nError: {exc}",
                 )
-                status, classification, finding_count, error = (
+                status, classification, findings, error = (
                     "failed",
                     None,
                     None,
                     f"review command failed to launch: {exc}",
                 )
             else:
-                status, classification, finding_count, error = evaluate_completed_process(
+                status, classification, findings, error = evaluate_completed_process(
                     review_dir,
                     reservation,
                     proc,
@@ -1881,7 +2130,7 @@ def run_reviews(
                     status=status,
                     exit_code=proc.returncode,
                     classification=classification,
-                    finding_count=finding_count,
+                    findings=findings,
                     error=error,
                 )
                 persisted_run = next(
@@ -1903,7 +2152,7 @@ def run_reviews(
                 err_record: dict[str, Any] = {
                     "code": proc.returncode,
                     "f": _relative_path(reservation.output_file),
-                    "msg": error or display_status,
+                    "msg": persisted_run.get("error") or error or display_status,
                     "p": reservation.pass_number,
                     "s": reservation.slice_name,
                     "st": "timeout" if persisted_status == "timeout" else "failed",
@@ -1915,9 +2164,12 @@ def run_reviews(
                 out_records.append(
                     {
                         "f": _relative_path(reservation.output_file),
+                        "ids": [
+                            finding["id"] for finding in (persisted_run.get("findings") or [])
+                        ],
                         "p": reservation.pass_number,
                         "s": reservation.slice_name,
-                        "st": "done",
+                        "st": persisted_run.get("classification") or "done",
                     }
                 )
 
@@ -2056,28 +2308,3 @@ def add_slice_from_args(args: argparse.Namespace, *, stdin: Any = sys.stdin) -> 
             user_directive=user_directive,
         )
         state.save()
-
-
-def parse_report_ignored_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Report how many findings were ignored for a finding run; state rules decide the next step."
-    )
-    parser.add_argument("--review-dir", required=True, type=Path)
-    parser.add_argument("--count", required=True, type=int, help="Number of findings from the run that were ignored.")
-    parser.add_argument("--slice", dest="slice_name")
-    parser.add_argument("--run-id")
-    parser.add_argument("--pass", dest="pass_number", type=int)
-    return parser.parse_args(argv)
-
-
-def report_ignored_from_args(args: argparse.Namespace) -> tuple[bool, str]:
-    with ReviewState.locked(args.review_dir) as state:
-        changed, message = state.report_ignored_findings(
-            ignored_count=args.count,
-            slice_name=args.slice_name,
-            run_id=args.run_id,
-            pass_number=args.pass_number,
-        )
-        if changed:
-            state.save()
-        return changed, message

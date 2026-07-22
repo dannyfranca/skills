@@ -84,6 +84,39 @@ Each source field is one of:
 - `slice-override`
 - `configured-default`
 - `harness-default`
-- `legacy-definition` for migrated state created before run-level model/reasoning snapshots
 
 Harness-default runs store `model: null` and/or `reasoning: null`.
+
+## Finding records
+
+Reviewers return only the strict JSON document defined by
+[`references/review-result.schema.json`](references/review-result.schema.json):
+
+```json
+{
+  "schema_version": 1,
+  "findings": [
+    {
+      "severity": "P1",
+      "title": "Short title",
+      "content": "Why this is actionable.",
+      "location": {"path": "src/example.py", "start_line": 12, "end_line": 15}
+    }
+  ]
+}
+```
+
+An empty `findings` array means no findings. The runner validates the document again, supplies an
+immutable session-scoped ID shaped as `f_` plus eight NanoID characters, stores active finding
+state in `_state.json`, and generates the human-facing Markdown artifact. Raw reviewer text is not
+the durable record.
+
+Record rejected findings individually with `scripts/ignore_finding.py --id ... --reason ...` (or
+`--reason-file`). Record overlap with `scripts/dedupe_finding.py --id ... --canonical-id ...`; the
+canonical finding must still be open. A valid follow-up supersedes any remaining open findings
+from the prior run. Failed follow-ups leave them active.
+
+When a run becomes terminal, its finding records move to `history/<run-id>.json`; `_state.json`
+keeps one archive reference. Generated Markdown remains beside the run and includes ignored or
+superseded resolutions for human audit. Sessions use state schema version 2; older in-progress
+sessions are intentionally unsupported.

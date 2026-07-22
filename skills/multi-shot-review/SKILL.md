@@ -55,10 +55,11 @@ python3 "$SKILL_DIR/scripts/run_reviews.py" --review-dir "$REVIEW_DIR" \
   --child-timeout-seconds 3600
 ```
 
-Wait silently for exit. All eligible slices run in one parallel wave. Consume only final JSON, the
-review Markdown paths in `out`, and diagnostics in `err`. Treat each finding as a hypothesis:
-validate it against the code and task, then deduplicate overlapping findings. Finish when every
-emitted result and diagnostic has been accounted for.
+Wait silently for exit. All eligible slices run in one parallel wave. Reviewers emit the strict
+JSON shape in `references/review-result.schema.json`; the runner validates it, assigns
+session-scoped `f_` IDs, and replaces the raw result with generated Markdown. Invalid results are
+retryable slice failures. Consume only final JSON, finding IDs and Markdown paths in `out`, and
+diagnostics in `err`. Treat each finding as a hypothesis and validate it against the code and task.
 
 If the harness detaches while the wave continues, await that wave in the foreground:
 
@@ -83,18 +84,29 @@ independent repeat of every slice.
 
 ### Barrier
 
-Fix validated findings and add focused regression tests where they materially reduce risk. Report
-rejected findings from a slice's latest run:
+Fix validated findings and add focused regression tests where they materially reduce risk. Ignore
+one rejected finding by ID with an immutable reason:
 
 ```bash
-python3 "$SKILL_DIR/scripts/report_ignored_findings.py" \
+python3 "$SKILL_DIR/scripts/ignore_finding.py" \
   --review-dir "$REVIEW_DIR" \
-  --slice "<slice-name>" \
-  --count "<ignored-count>"
+  --id "<finding-id>" \
+  --reason "<why it is not actionable>"
 ```
 
-Run another wave after fixes or ignored-finding reports. Finish when every finding is fixed or
-reported ignored, relevant checks pass, and JSON returns `"ok":true` and `"rem":0`.
+Use `--reason-file <path>` for a longer reason. Mark a repeated finding as a duplicate of another
+currently open finding:
+
+```bash
+python3 "$SKILL_DIR/scripts/dedupe_finding.py" \
+  --review-dir "$REVIEW_DIR" \
+  --id "<duplicate-id>" \
+  --canonical-id "<open-finding-id>"
+```
+
+Run another wave after fixes. A slice also completes when all findings in its latest run are
+ignored or deduplicated. Finish when every finding is fixed or recorded terminal, relevant checks
+pass, and JSON returns `"ok":true` and `"rem":0`.
 
 ## Explicit user slice changes
 
@@ -120,5 +132,5 @@ python3 "$SKILL_DIR/scripts/remove_slice.py" \
 Removal tombstones the slice; re-adding its name reactivates it. Definitions may change, while
 runs, outputs, and history remain.
 
-Treat scripts as sole owners of state, locking, output names, retries, and completion. Keep
-`.review/` uncommitted.
+Treat scripts as sole owners of state, locking, output names, rendering, retries, and completion.
+Do not edit generated review Markdown. Keep `.review/` uncommitted.

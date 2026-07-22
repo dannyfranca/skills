@@ -30,8 +30,6 @@ from review_state import (  # noqa: E402
     add_related_task,
     await_reviews,
     build_review_command,
-    classify_output,
-    count_findings,
     init_review_state,
     run_reviews,
 )
@@ -52,7 +50,7 @@ class ReviewStateTests(unittest.TestCase):
         self.assertTrue(state_path.exists())
         self.assertRegex(self.review_dir.name, TIMESTAMPED_REVIEW_DIR_RE)
         state = ReviewState.load(self.review_dir)
-        self.assertEqual(state.data["schema_version"], 1)
+        self.assertEqual(state.data["schema_version"], 2)
         self.assertEqual(state.data["slices"], {})
         self.assertFalse(state.data["completed"])
         task_text = (self.review_dir / "task.md").read_text(encoding="utf-8")
@@ -440,9 +438,7 @@ class ReviewStateTests(unittest.TestCase):
                 with self.assertRaises(ReviewStateError):
                     ReviewState.load(self.review_dir)
 
-    def test_load_migrates_absent_null_execution_metadata_as_harness_defaults(
-        self,
-    ) -> None:
+    def test_load_rejects_state_without_current_execution_metadata(self) -> None:
         with ReviewState.locked(self.review_dir) as state:
             state.add_slice(
                 name="api",
@@ -468,19 +464,8 @@ class ReviewStateTests(unittest.TestCase):
             run.pop(field)
         state_path.write_text(json.dumps(legacy), encoding="utf-8")
 
-        migrated = ReviewState.load(self.review_dir).data["slices"]["api"]
-
-        self.assertIsNone(migrated["model"])
-        self.assertEqual(migrated["model_source"], "harness-default")
-        self.assertIsNone(migrated["reasoning"])
-        self.assertEqual(migrated["reasoning_source"], "harness-default")
-        self.assertIsNone(migrated["runs"][0]["model"])
-        self.assertEqual(migrated["runs"][0]["model_source"], "harness-default")
-        self.assertIsNone(migrated["runs"][0]["reasoning"])
-        self.assertEqual(
-            migrated["runs"][0]["reasoning_source"],
-            "harness-default",
-        )
+        with self.assertRaises(ReviewStateError):
+            ReviewState.load(self.review_dir)
 
     def test_remove_and_reactivate_preserve_runs_and_history(self) -> None:
         with ReviewState.locked(self.review_dir) as state:
@@ -499,9 +484,9 @@ class ReviewStateTests(unittest.TestCase):
             state.complete_run(
                 run_id=reservation.run_id,
                 slice_name="api",
-                status="quiet",
+                status="no_findings",
                 exit_code=0,
-                classification="quiet",
+                classification="no_findings",
             )
             state.remove_slice("api")
             state.add_slice(
@@ -552,8 +537,9 @@ class ReviewStateTests(unittest.TestCase):
                 status="findings",
                 exit_code=0,
                 classification="findings",
-                finding_count=1,
+                findings=[_finding()],
             )
+            finding_id = state.data["slices"]["api"]["runs"][0]["findings"][0]["id"]
             state.remove_slice("api")
             state.add_slice(
                 name="api",
@@ -562,14 +548,45 @@ class ReviewStateTests(unittest.TestCase):
                 prompt="Review the revised API contract.",
                 cwd=self.root,
             )
-            with self.assertRaisesRegex(ReviewStateError, "no matching finding run"):
-                state.report_ignored_findings(ignored_count=1, slice_name="api")
+            with self.assertRaisesRegex(ReviewStateError, "active finding not found"):
+                state.ignore_finding(finding_id, "Old definition.")
             state.save()
 
         item = ReviewState.load(self.review_dir).data["slices"]["api"]
         self.assertFalse(item["complete"])
         self.assertEqual(item["next_pass"], 2)
-        self.assertEqual(item["runs"][0]["status"], "findings")
+        self.assertIsNotNone(item["runs"][0].get("findings_archive"))
+
+    def test_remove_slice_archives_open_findings_as_superseded(self) -> None:
+        with ReviewState.locked(self.review_dir) as state:
+            state.add_slice(
+                name="api",
+                mode="native",
+                target={"uncommitted": True},
+                prompt=None,
+                cwd=self.root,
+            )
+            reservation = state.reserve_eligible()[0]
+            state.complete_run(
+                run_id=reservation.run_id,
+                slice_name="api",
+                status="findings",
+                exit_code=0,
+                classification="findings",
+                findings=[_finding()],
+            )
+            state.remove_slice("api")
+            state.save()
+
+        run = ReviewState.load(self.review_dir).data["slices"]["api"]["runs"][0]
+        self.assertIsNone(run["findings"])
+        archive = json.loads(Path(run["findings_archive"]).read_text(encoding="utf-8"))
+        resolution = archive["findings"][0]["resolution"]
+        self.assertEqual(resolution["kind"], "superseded")
+        self.assertTrue(resolution["removed"])
+        self.assertFalse(
+            any(event["event"] == "findings_archived" for event in state.data["history"])
+        )
 
     def test_classifier_cannot_override_user_controlled_slice(self) -> None:
         with ReviewState.locked(self.review_dir) as state:
@@ -663,7 +680,7 @@ class ReviewStateTests(unittest.TestCase):
                 status="findings",
                 exit_code=0,
                 classification="findings",
-                finding_count=1,
+                findings=[_finding()],
             )
             state.save()
 
@@ -692,9 +709,9 @@ class ReviewStateTests(unittest.TestCase):
             state.complete_run(
                 run_id=reservation.run_id,
                 slice_name="api",
-                status="quiet",
+                status="no_findings",
                 exit_code=0,
-                classification="quiet",
+                classification="no_findings",
             )
             state.save()
 
@@ -716,9 +733,9 @@ class ReviewStateTests(unittest.TestCase):
             state.complete_run(
                 run_id=reservation.run_id,
                 slice_name="api",
-                status="quiet",
+                status="no_findings",
                 exit_code=0,
-                classification="quiet",
+                classification="no_findings",
             )
             state.save()
 
@@ -923,77 +940,6 @@ class ClassifierTests(unittest.TestCase):
             self.assertIn("partial", state.data["slices"])
             self.assertEqual(state.data["history"][-1]["event"], "slice_added")
 
-    def test_findings_patterns(self) -> None:
-        self.assertEqual(classify_output("## Review\n[P1] Breaks callers"), "findings")
-        self.assertEqual(classify_output('[P1] The classifier treats "No findings" output as quiet'), "findings")
-        self.assertEqual(classify_output("Review comment: this leaks state"), "findings")
-        self.assertEqual(
-            classify_output("Intro text\n\nFull review comments:\n- Validate migration rollback"),
-            "findings",
-        )
-
-    def test_quiet_patterns(self) -> None:
-        self.assertEqual(classify_output("No actionable issues found."), "quiet")
-        self.assertEqual(classify_output("LGTM"), "quiet")
-        self.assertEqual(classify_output("Full review comments: no findings"), "quiet")
-        self.assertEqual(classify_output("Full review comments:\nNo [P1] or [P2] findings."), "quiet")
-        self.assertEqual(classify_output("I did not find a discrete CLI or workflow bug."), "quiet")
-        self.assertEqual(classify_output("No [P1] findings."), "quiet")
-        self.assertEqual(classify_output("There are no [P1] findings."), "quiet")
-        self.assertEqual(classify_output("No [P1] or [P2] findings."), "quiet")
-        self.assertEqual(classify_output("No [P1], [P2], or [P3] findings."), "quiet")
-        self.assertEqual(classify_output("No [P1] or [P2] findings remain."), "quiet")
-        self.assertEqual(classify_output("I did not find any [P1] issues."), "quiet")
-        self.assertEqual(classify_output("No findings above [P2]."), "quiet")
-        self.assertEqual(
-            classify_output(
-                "The cashier generated client signatures, required company/auth headers, discriminated Pix response "
-                "handling, status polling, and query invalidations are consistent with the Mobile BFF cashier contract "
-                "and existing generated client style. Targeted typecheck and cashier tests passed."
-            ),
-            "quiet",
-        )
-        self.assertEqual(classify_output("No [P1] findings, but [P2] retry can loop forever"), "findings")
-        self.assertEqual(
-            classify_output("I did not find any API bugs, but the retry loop can run forever"),
-            "uncertain",
-        )
-
-    def test_uncertain_successful_output(self) -> None:
-        self.assertEqual(classify_output("The implementation was inspected carefully."), "uncertain")
-
-    def test_finding_counts(self) -> None:
-        self.assertEqual(count_findings("[P1] One\n[P2] Two\nReview comment: three"), 3)
-        self.assertEqual(count_findings("Review comment:\n[P2] One issue"), 1)
-        self.assertEqual(count_findings("Review comment: [P2] One issue"), 1)
-        self.assertEqual(count_findings("Review comment: unprioritized issue"), 1)
-        self.assertEqual(count_findings("Review comment: No findings are reported when retry fails"), 1)
-        self.assertEqual(count_findings('[P1] The classifier treats "No findings" output as quiet'), 1)
-        self.assertEqual(count_findings("No [P1] findings.\nNo [P1] or [P2] findings.\nNo findings above [P2]."), 0)
-        self.assertEqual(count_findings("No [P1], [P2], or [P3] findings."), 0)
-        self.assertEqual(count_findings("No [P1] or [P2] findings remain.\nI did not find any [P1] issues."), 0)
-        self.assertEqual(count_findings("No [P1] findings, but [P2] retry can loop forever"), 1)
-        self.assertEqual(count_findings("No [P1] findings. However, [P2] retry can loop forever"), 1)
-        self.assertEqual(count_findings("Full review comments:\nNo [P1] or [P2] findings."), 0)
-        self.assertEqual(count_findings("Full review comments:\nNone."), 0)
-        self.assertEqual(count_findings("Full review comments:\n- No findings.\n* No issues found."), 0)
-        self.assertEqual(count_findings("Full review comments:\n- None.\n- N/A"), 0)
-        self.assertEqual(count_findings('Full review comments:\n- The classifier treats "No findings" output as quiet'), 1)
-        self.assertEqual(count_findings("Full review comments:\n- [P1] One\n- Two"), 2)
-        self.assertEqual(count_findings("Full review comments:\n- No [P1] findings, but [P2] retry can loop forever"), 1)
-        self.assertEqual(count_findings("Full review comments:\n- No [P1] findings; [P2] retry can loop forever"), 1)
-        self.assertEqual(count_findings("Full review comments:\nNo [P1] findings.\n[P2] retry can loop forever"), 1)
-        self.assertEqual(count_findings("Full review comments:\nNo findings are reported when retry fails"), 1)
-        self.assertEqual(count_findings("Full review comments:\nNo [P1] findings.\nNo [P2] findings."), 0)
-        self.assertEqual(count_findings("Full review comments:\n[P1] One\n[P2] Two"), 2)
-        self.assertEqual(count_findings('Full review comments:\n- [P2] One\n  - nested detail\n  - another detail'), 1)
-        self.assertEqual(count_findings("Full review comments:\n- No findings.\n[P2] retry can loop forever"), 1)
-        self.assertEqual(count_findings('[P1] Parser treats "Full review comments: no findings" as quiet'), 1)
-        self.assertEqual(count_findings("Full review comments:\n- One\n- Two"), 2)
-        self.assertEqual(count_findings("Full review comments: no findings"), 0)
-        self.assertEqual(count_findings("Full review comments:\nNo issues found."), 0)
-
-
 class RunnerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -1030,13 +976,13 @@ class RunnerTests(unittest.TestCase):
 
         def runner(cmd, cwd, input_text, output_file, slice_data):
             if slice_data["name"] == "fast":
-                output_file.write_text("No findings.", encoding="utf-8")
+                _write_review_result(output_file, [])
                 fast_done.set()
                 return subprocess.CompletedProcess(cmd, 0, "fast stdout", "fast stderr")
             self.assertTrue(fast_done.wait(timeout=2))
             self.assertEqual(stdout.getvalue(), "")
             self.assertTrue(slow_can_finish.wait(timeout=2))
-            output_file.write_text("No findings.", encoding="utf-8")
+            _write_review_result(output_file, [])
             return subprocess.CompletedProcess(cmd, 0, "slow stdout", "slow stderr")
 
         def invoke() -> None:
@@ -1078,7 +1024,7 @@ class RunnerTests(unittest.TestCase):
         stdout = io.StringIO()
 
         rc, summary = self.run_reviews(
-            command_runner=_writes("No findings."),
+            command_runner=_writes_review_result([]),
             summary_json=summary_path,
             no_stdout=True,
             stdout=stdout,
@@ -1149,10 +1095,10 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("stderr", err)
         self.assertEqual(ReviewState.load(self.review_dir).data["slices"]["api"]["runs"][0]["status"], "timeout")
 
-    def test_quiet_slice_completes(self) -> None:
+    def test_no_findings_slice_completes(self) -> None:
         self.add_slice("api")
         out = io.StringIO()
-        rc, summary = run_reviews(self.review_dir, command_runner=_writes("No actionable issues found."), stdout=out)
+        rc, summary = run_reviews(self.review_dir, command_runner=_writes_review_result([]), stdout=out)
 
         state = ReviewState.load(self.review_dir)
         self.assertEqual(rc, 0)
@@ -1164,6 +1110,450 @@ class RunnerTests(unittest.TestCase):
         )
         self.assertEqual(out.getvalue(), "")
 
+    def test_valid_review_result_generates_markdown_and_exposes_finding_ids(self) -> None:
+        self.add_slice("api")
+        rc, summary = run_reviews(
+            self.review_dir,
+            command_runner=_writes_review_result([_finding(title="Race in cache initialization")]),
+            stdout=io.StringIO(),
+        )
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(summary["out"][0]["st"], "findings")
+        self.assertRegex(summary["out"][0]["ids"][0], r"^f_[A-Za-z0-9_-]{8}$")
+        artifact = Path(summary["out"][0]["f"])
+        if not artifact.is_absolute():
+            artifact = Path.cwd() / artifact
+        markdown = artifact.read_text(encoding="utf-8")
+        self.assertIn(summary["out"][0]["ids"][0], markdown)
+        self.assertIn("P1 · Race in cache initialization", markdown)
+        self.assertIn("`src/cache.py:42-45`", markdown)
+
+        run = ReviewState.load(self.review_dir).data["slices"]["api"]["runs"][0]
+        self.assertEqual(run["findings"][0]["title"], "Race in cache initialization")
+        self.assertEqual(run["findings"][0]["status"], "open")
+
+    def test_invalid_review_result_is_a_retryable_error(self) -> None:
+        self.add_slice("api")
+        invalid_results = (
+            {"schema_version": 1, "findings": [], "unexpected": True},
+            {"schema_version": True, "findings": []},
+            {"schema_version": 1, "findings": [{**_finding(), "severity": {}}]},
+            {"schema_version": 1, "findings": [_finding(title="   ")]},
+            {
+                "schema_version": 1,
+                "findings": [_finding(title="Unpaired surrogate: \ud800")],
+            },
+        )
+        for invalid in invalid_results:
+            with self.subTest(invalid=invalid):
+                rc, summary = run_reviews(
+                    self.review_dir,
+                    command_runner=_writes(json.dumps(invalid)),
+                    stdout=io.StringIO(),
+                )
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(summary["st"], "failed")
+                item = ReviewState.load(self.review_dir).data["slices"]["api"]
+                self.assertFalse(item["complete"])
+                self.assertEqual(item["next_pass"], 1)
+                self.assertEqual(item["runs"][-1]["status"], "failed")
+                failure_markdown = Path(item["runs"][-1]["output_file"]).read_text(
+                    encoding="utf-8"
+                )
+                self.assertIn("outcome: failed", failure_markdown)
+                self.assertIn("# Review failed", failure_markdown)
+
+    def test_published_schema_rejects_strings_the_parser_rejects(self) -> None:
+        schema = json.loads(
+            (ROOT / "references" / "review-result.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        finding_properties = schema["properties"]["findings"]["items"]["properties"]
+
+        self.assertEqual(finding_properties["title"]["pattern"], r"\S")
+        self.assertEqual(finding_properties["content"]["pattern"], r"\S")
+        self.assertEqual(
+            finding_properties["location"]["properties"]["path"]["pattern"],
+            r"\S",
+        )
+
+    def test_invalid_utf8_review_output_is_retryable(self) -> None:
+        self.add_slice("api")
+
+        def runner(cmd, cwd, input_text, output_file, slice_data):
+            output_file.write_bytes(b"\xff")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        rc, summary = run_reviews(
+            self.review_dir,
+            command_runner=runner,
+            stdout=io.StringIO(),
+        )
+
+        self.assertEqual(rc, 2)
+        self.assertIn("review output is unreadable", summary["err"][0]["msg"])
+        item = ReviewState.load(self.review_dir).data["slices"]["api"]
+        self.assertEqual(item["runs"][0]["status"], "failed")
+        self.assertEqual(item["next_pass"], 1)
+        artifact = Path(item["runs"][0]["output_file"]).read_text(encoding="utf-8")
+        self.assertIn("outcome: failed", artifact)
+
+    def test_valid_follow_up_archives_prior_open_findings_as_superseded(self) -> None:
+        self.add_slice("api")
+        first_result = [_finding(title="First"), _finding(title="Second")]
+        run_reviews(
+            self.review_dir,
+            command_runner=_writes_review_result(first_result),
+            stdout=io.StringIO(),
+        )
+        with ReviewState.locked(self.review_dir) as state:
+            first_run = state.data["slices"]["api"]["runs"][0]
+            ignored_id = first_run["findings"][0]["id"]
+            superseded_id = first_run["findings"][1]["id"]
+            state.ignore_finding(ignored_id, "Not actionable in this transaction.")
+            state.save()
+
+        run_reviews(
+            self.review_dir,
+            command_runner=_writes_review_result([]),
+            stdout=io.StringIO(),
+        )
+
+        state = ReviewState.load(self.review_dir)
+        runs = state.data["slices"]["api"]["runs"]
+        self.assertTrue(state.data["slices"]["api"]["complete"])
+        self.assertIsNone(runs[0]["findings"])
+        archive = json.loads(Path(runs[0]["findings_archive"]).read_text(encoding="utf-8"))
+        archived_by_id = {finding["id"]: finding for finding in archive["findings"]}
+        self.assertEqual(archived_by_id[ignored_id]["resolution"]["kind"], "rejected")
+        self.assertEqual(archived_by_id[superseded_id]["status"], "superseded")
+        self.assertEqual(
+            archived_by_id[superseded_id]["resolution"]["successor_run_id"],
+            runs[1]["id"],
+        )
+
+    def test_failed_follow_up_preserves_prior_open_findings(self) -> None:
+        self.add_slice("api")
+        run_reviews(
+            self.review_dir,
+            command_runner=_writes_review_result([_finding(title="Still actionable")]),
+            stdout=io.StringIO(),
+        )
+        before = ReviewState.load(self.review_dir).data["slices"]["api"]["runs"][0]
+        finding_id = before["findings"][0]["id"]
+
+        rc, summary = run_reviews(
+            self.review_dir,
+            command_runner=_writes("not JSON"),
+            stdout=io.StringIO(),
+        )
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(summary["st"], "failed")
+        state = ReviewState.load(self.review_dir)
+        runs = state.data["slices"]["api"]["runs"]
+        self.assertEqual(runs[0]["findings"][0]["id"], finding_id)
+        self.assertEqual(runs[0]["findings"][0]["status"], "open")
+        self.assertIsNone(runs[0]["findings_archive"])
+        self.assertEqual(runs[1]["status"], "failed")
+        self.assertFalse(state.data["slices"]["api"]["complete"])
+
+    def test_archived_findings_are_validated_when_state_loads(self) -> None:
+        self.add_slice("api")
+        run_reviews(
+            self.review_dir,
+            command_runner=_writes_review_result([_finding()]),
+            stdout=io.StringIO(),
+        )
+        with ReviewState.locked(self.review_dir) as state:
+            run = state.data["slices"]["api"]["runs"][0]
+            state.ignore_finding(run["findings"][0]["id"], "Expected behavior.")
+            state.save()
+
+        state_path = self.review_dir / "_state.json"
+        original_state = state_path.read_text(encoding="utf-8")
+        state_data = json.loads(original_state)
+        archive_path = Path(state_data["slices"]["api"]["runs"][0]["findings_archive"])
+        original_archive = archive_path.read_text(encoding="utf-8")
+
+        archive_path.unlink()
+        with self.assertRaisesRegex(ReviewStateError, "could not read findings archive"):
+            ReviewState.load(self.review_dir)
+        archive_path.write_text(original_archive, encoding="utf-8")
+
+        archive_path.write_text("not JSON", encoding="utf-8")
+        with self.assertRaisesRegex(ReviewStateError, "could not read findings archive"):
+            ReviewState.load(self.review_dir)
+        archive_path.write_text(original_archive, encoding="utf-8")
+
+        archive_data = json.loads(original_archive)
+        archive_data["slice"] = "other"
+        archive_path.write_text(json.dumps(archive_data), encoding="utf-8")
+        with self.assertRaisesRegex(ReviewStateError, "invalid findings archive metadata"):
+            ReviewState.load(self.review_dir)
+        archive_path.write_text(original_archive, encoding="utf-8")
+
+        state_data["slices"]["api"]["runs"][0]["findings_archive"] = str(
+            self.review_dir / "history" / "other.json"
+        )
+        state_path.write_text(json.dumps(state_data), encoding="utf-8")
+        with self.assertRaisesRegex(ReviewStateError, "unexpected findings archive path"):
+            ReviewState.load(self.review_dir)
+        state_path.write_text(original_state, encoding="utf-8")
+
+    def test_markdown_render_failure_is_retryable(self) -> None:
+        self.add_slice("api")
+        original_write = review_state_module._atomic_write_text
+
+        def fail_markdown(path: Path, text: str) -> None:
+            if Path(path).suffix == ".md":
+                raise OSError("read-only artifact directory")
+            original_write(path, text)
+
+        with mock.patch.object(
+            review_state_module,
+            "_atomic_write_text",
+            side_effect=fail_markdown,
+        ):
+            rc, summary = run_reviews(
+                self.review_dir,
+                command_runner=_writes_review_result([_finding()]),
+                stdout=io.StringIO(),
+            )
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(summary["st"], "failed")
+        self.assertIn("could not persist review artifacts", summary["err"][0]["msg"])
+        state = ReviewState.load(self.review_dir)
+        item = state.data["slices"]["api"]
+        self.assertEqual(item["runs"][0]["status"], "failed")
+        self.assertEqual(item["next_pass"], 1)
+        self.assertFalse(item["complete"])
+
+    def test_archive_write_failure_is_retryable_and_preserves_open_findings(self) -> None:
+        self.add_slice("api")
+        run_reviews(
+            self.review_dir,
+            command_runner=_writes_review_result([_finding(title="Still open")]),
+            stdout=io.StringIO(),
+        )
+        initial = ReviewState.load(self.review_dir).data["slices"]["api"]["runs"][0]
+        finding_id = initial["findings"][0]["id"]
+        original_markdown = Path(initial["output_file"]).read_text(encoding="utf-8")
+        original_write = review_state_module._atomic_write_text
+
+        def fail_archive(path: Path, text: str) -> None:
+            if Path(path).parent.name == "history":
+                raise OSError("history is read-only")
+            original_write(path, text)
+
+        with mock.patch.object(
+            review_state_module,
+            "_atomic_write_text",
+            side_effect=fail_archive,
+        ):
+            rc, summary = run_reviews(
+                self.review_dir,
+                command_runner=_writes_review_result([]),
+                stdout=io.StringIO(),
+            )
+
+        self.assertEqual(rc, 2)
+        self.assertIn("could not persist review artifacts", summary["err"][0]["msg"])
+        state = ReviewState.load(self.review_dir)
+        runs = state.data["slices"]["api"]["runs"]
+        self.assertEqual(runs[0]["findings"][0]["id"], finding_id)
+        self.assertEqual(runs[0]["findings"][0]["status"], "open")
+        self.assertIsNone(runs[0]["findings_archive"])
+        self.assertEqual(runs[1]["status"], "failed")
+        self.assertEqual(
+            Path(runs[0]["output_file"]).read_text(encoding="utf-8"),
+            original_markdown,
+        )
+        failed_output = Path(runs[1]["output_file"]).read_text(encoding="utf-8")
+        self.assertTrue(failed_output.startswith('{"schema_version": 1'))
+        self.assertNotIn("outcome: no_findings", failed_output)
+
+    def test_terminal_ignore_archive_failure_preserves_state_and_markdown(self) -> None:
+        self.add_slice("api")
+        run_reviews(
+            self.review_dir,
+            command_runner=_writes_review_result([_finding()]),
+            stdout=io.StringIO(),
+        )
+        before = ReviewState.load(self.review_dir).data["slices"]["api"]["runs"][0]
+        finding_id = before["findings"][0]["id"]
+        output_path = Path(before["output_file"])
+        original_markdown = output_path.read_text(encoding="utf-8")
+        original_write = review_state_module._atomic_write_text
+
+        def fail_archive(path: Path, text: str) -> None:
+            if Path(path).parent.name == "history":
+                raise OSError("history is read-only")
+            original_write(path, text)
+
+        with mock.patch.object(
+            review_state_module,
+            "_atomic_write_text",
+            side_effect=fail_archive,
+        ):
+            with self.assertRaises(OSError):
+                with ReviewState.locked(self.review_dir) as state:
+                    state.ignore_finding(finding_id, "Expected behavior.")
+
+        after = ReviewState.load(self.review_dir).data["slices"]["api"]["runs"][0]
+        self.assertEqual(after["findings"][0]["status"], "open")
+        self.assertIsNone(after["findings_archive"])
+        self.assertEqual(output_path.read_text(encoding="utf-8"), original_markdown)
+
+    def test_terminal_markdown_failure_removes_new_archive(self) -> None:
+        self.add_slice("api")
+        run_reviews(
+            self.review_dir,
+            command_runner=_writes_review_result([_finding()]),
+            stdout=io.StringIO(),
+        )
+        before = ReviewState.load(self.review_dir).data["slices"]["api"]["runs"][0]
+        finding_id = before["findings"][0]["id"]
+        output_path = Path(before["output_file"])
+        original_markdown = output_path.read_text(encoding="utf-8")
+        archive_path = self.review_dir / "history" / f"{before['id']}.json"
+        original_write = review_state_module._atomic_write_text
+
+        def fail_markdown(path: Path, text: str) -> None:
+            if Path(path) == output_path:
+                raise OSError("review Markdown is read-only")
+            original_write(path, text)
+
+        with mock.patch.object(
+            review_state_module,
+            "_atomic_write_text",
+            side_effect=fail_markdown,
+        ):
+            with self.assertRaises(OSError):
+                with ReviewState.locked(self.review_dir) as state:
+                    state.ignore_finding(finding_id, "Expected behavior.")
+
+        after = ReviewState.load(self.review_dir).data["slices"]["api"]["runs"][0]
+        self.assertEqual(after["findings"][0]["status"], "open")
+        self.assertFalse(archive_path.exists())
+        self.assertEqual(output_path.read_text(encoding="utf-8"), original_markdown)
+
+    def test_terminal_artifacts_roll_back_when_state_save_fails(self) -> None:
+        self.add_slice("api")
+        run_reviews(
+            self.review_dir,
+            command_runner=_writes_review_result([_finding()]),
+            stdout=io.StringIO(),
+        )
+        before = ReviewState.load(self.review_dir).data["slices"]["api"]["runs"][0]
+        finding_id = before["findings"][0]["id"]
+        output_path = Path(before["output_file"])
+        original_markdown = output_path.read_text(encoding="utf-8")
+        archive_path = self.review_dir / "history" / f"{before['id']}.json"
+        original_replace = review_state_module.os.replace
+
+        def fail_state_save(source, destination):
+            if Path(destination).name == "_state.json":
+                raise OSError("state directory is read-only")
+            original_replace(source, destination)
+
+        with ReviewState.locked(self.review_dir) as state:
+            state.ignore_finding(finding_id, "Expected behavior.")
+            with mock.patch.object(
+                review_state_module.os,
+                "replace",
+                side_effect=fail_state_save,
+            ):
+                with self.assertRaises(OSError):
+                    state.save()
+
+        after = ReviewState.load(self.review_dir).data["slices"]["api"]["runs"][0]
+        self.assertEqual(after["findings"][0]["status"], "open")
+        self.assertFalse(archive_path.exists())
+        self.assertEqual(output_path.read_text(encoding="utf-8"), original_markdown)
+
+    def test_completion_artifacts_roll_back_when_state_save_fails(self) -> None:
+        self.add_slice("api")
+        run_reviews(
+            self.review_dir,
+            command_runner=_writes_review_result([_finding()]),
+            stdout=io.StringIO(),
+        )
+        with ReviewState.locked(self.review_dir) as state:
+            first_run = state.data["slices"]["api"]["runs"][0]
+            first_output = Path(first_run["output_file"])
+            first_markdown = first_output.read_text(encoding="utf-8")
+            first_archive = self.review_dir / "history" / f"{first_run['id']}.json"
+            reservation = state.reserve_eligible()[0]
+            _write_review_result(reservation.output_file, [])
+            raw_result = reservation.output_file.read_text(encoding="utf-8")
+            state.save()
+
+        original_replace = review_state_module.os.replace
+
+        def fail_state_save(source, destination):
+            if Path(destination).name == "_state.json":
+                raise OSError("state directory is read-only")
+            original_replace(source, destination)
+
+        with ReviewState.locked(self.review_dir) as state:
+            state.complete_run(
+                run_id=reservation.run_id,
+                slice_name="api",
+                status="no_findings",
+                exit_code=0,
+                classification="no_findings",
+                findings=[],
+            )
+            with mock.patch.object(
+                review_state_module.os,
+                "replace",
+                side_effect=fail_state_save,
+            ):
+                with self.assertRaises(OSError):
+                    state.save()
+
+        runs = ReviewState.load(self.review_dir).data["slices"]["api"]["runs"]
+        self.assertEqual(runs[0]["status"], "findings")
+        self.assertEqual(runs[0]["findings"][0]["status"], "open")
+        self.assertEqual(runs[1]["status"], "running")
+        self.assertFalse(first_archive.exists())
+        self.assertEqual(first_output.read_text(encoding="utf-8"), first_markdown)
+        self.assertEqual(reservation.output_file.read_text(encoding="utf-8"), raw_result)
+
+    def test_terminal_dedupe_archive_failure_preserves_state_and_markdown(self) -> None:
+        self.add_slice("canonical")
+        self.add_slice("duplicate")
+        run_reviews(
+            self.review_dir,
+            command_runner=_writes_review_result([_finding()]),
+            stdout=io.StringIO(),
+        )
+        before = ReviewState.load(self.review_dir)
+        canonical = before.data["slices"]["canonical"]["runs"][0]["findings"][0]
+        duplicate_run = before.data["slices"]["duplicate"]["runs"][0]
+        duplicate = duplicate_run["findings"][0]
+        output_path = Path(duplicate_run["output_file"])
+        original_markdown = output_path.read_text(encoding="utf-8")
+
+        with mock.patch.object(
+            review_state_module,
+            "_atomic_write_text",
+            side_effect=OSError("history is read-only"),
+        ):
+            with self.assertRaises(OSError):
+                with ReviewState.locked(self.review_dir) as state:
+                    state.dedupe_finding(duplicate["id"], canonical["id"])
+
+        after = ReviewState.load(self.review_dir).data["slices"]["duplicate"]["runs"][0]
+        self.assertEqual(after["findings"][0]["status"], "open")
+        self.assertIsNone(after["findings_archive"])
+        self.assertEqual(output_path.read_text(encoding="utf-8"), original_markdown)
+
     def test_finding_slice_advances_pass_number(self) -> None:
         self.add_slice("api")
         calls = {"count": 0}
@@ -1171,9 +1561,9 @@ class RunnerTests(unittest.TestCase):
         def runner(cmd, cwd, input_text, output_file, slice_data):
             calls["count"] += 1
             if calls["count"] == 1:
-                output_file.write_text("[P2] Validate retry state", encoding="utf-8")
+                _write_review_result(output_file, [_finding(title="Validate retry state")])
             else:
-                output_file.write_text("No findings.", encoding="utf-8")
+                _write_review_result(output_file, [])
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
         run_reviews(self.review_dir, command_runner=runner, stdout=io.StringIO())
@@ -1195,10 +1585,12 @@ class RunnerTests(unittest.TestCase):
         def runner(cmd, cwd, input_text, output_file, slice_data):
             name = slice_data["name"]
             if name == "quiet":
-                output_file.write_text("No issues found.", encoding="utf-8")
+                _write_review_result(output_file, [])
                 return subprocess.CompletedProcess(cmd, 0, "", "")
             if name == "finding":
-                output_file.write_text("[P3] Missing edge-case test", encoding="utf-8")
+                finding = _finding(title="Missing edge-case test")
+                finding["severity"] = "P3"
+                _write_review_result(output_file, [finding])
                 return subprocess.CompletedProcess(cmd, 0, "", "")
             return subprocess.CompletedProcess(cmd, 1, "bad", "worse")
 
@@ -1223,7 +1615,7 @@ class RunnerTests(unittest.TestCase):
             with lock:
                 started.append(slice_data["name"])
             barrier.wait(timeout=2)
-            output_file.write_text("No findings.", encoding="utf-8")
+            _write_review_result(output_file, [])
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
         run_reviews(self.review_dir, command_runner=runner, stdout=io.StringIO())
@@ -1251,14 +1643,14 @@ class RunnerTests(unittest.TestCase):
                 fast_started.set()
                 if not slow_started.wait(timeout=2):
                     raise AssertionError("slow slice did not start before fast slice finished")
-                output_file.write_text("No findings.", encoding="utf-8")
+                _write_review_result(output_file, [])
                 fast_finished.set()
                 return subprocess.CompletedProcess(cmd, 0, "", "")
 
             slow_started.set()
             if not slow_can_finish.wait(timeout=2):
                 raise AssertionError("slow slice was not released")
-            output_file.write_text("No findings.", encoding="utf-8")
+            _write_review_result(output_file, [])
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
         def invoke() -> None:
@@ -1283,7 +1675,7 @@ class RunnerTests(unittest.TestCase):
                 state = ReviewState.load(self.review_dir)
                 fast_status = state.data["slices"]["fast"]["runs"][0]["status"]
                 slow_status = state.data["slices"]["slow"]["runs"][0]["status"]
-                if fast_status == "quiet" and slow_status == "running":
+                if fast_status == "no_findings" and slow_status == "running":
                     break
                 time.sleep(0.01)
             else:
@@ -1308,7 +1700,7 @@ class RunnerTests(unittest.TestCase):
                 fail_then_quiet.called = True
                 output_file.write_text("partial stderr context", encoding="utf-8")
                 return subprocess.CompletedProcess(cmd, 1, "", "failed")
-            output_file.write_text("No findings.", encoding="utf-8")
+            _write_review_result(output_file, [])
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
         run_reviews(self.review_dir, command_runner=fail_then_quiet, stdout=io.StringIO())
@@ -1333,70 +1725,6 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(state.data["slices"]["api"]["runs"][0]["status"], "failed")
         self.assertIn("failed to launch", (self.review_dir / "_errors.md").read_text(encoding="utf-8"))
 
-    def test_ignored_count_less_than_findings_leaves_state_unchanged(self) -> None:
-        self.add_slice("api")
-        run_reviews(self.review_dir, command_runner=_writes("[P1] One\n[P2] Two"), stdout=io.StringIO())
-
-        with ReviewState.locked(self.review_dir) as state:
-            changed, message = state.report_ignored_findings(ignored_count=1, slice_name="api")
-            state.save()
-
-        self.assertFalse(changed)
-        self.assertIn("unchanged", message)
-        state = ReviewState.load(self.review_dir)
-        self.assertFalse(state.data["slices"]["api"]["complete"])
-        self.assertEqual(state.data["slices"]["api"]["runs"][0]["status"], "findings")
-        self.assertEqual(state.data["slices"]["api"]["next_pass"], 2)
-
-    def test_ignored_count_matching_findings_completes_slice(self) -> None:
-        self.add_slice("api")
-        run_reviews(self.review_dir, command_runner=_writes("[P1] One\n[P2] Two"), stdout=io.StringIO())
-
-        with ReviewState.locked(self.review_dir) as state:
-            changed, message = state.report_ignored_findings(ignored_count=2, slice_name="api")
-            state.save()
-
-        self.assertTrue(changed)
-        self.assertIn("complete", message)
-        state = ReviewState.load(self.review_dir)
-        self.assertTrue(state.data["slices"]["api"]["complete"])
-        self.assertTrue(state.data["completed"])
-        self.assertEqual(state.data["slices"]["api"]["runs"][0]["status"], "ignored")
-        self.assertEqual(state.data["slices"]["api"]["runs"][0]["ignored_count"], 2)
-
-        out = io.StringIO()
-        rc, summary = run_reviews(self.review_dir, command_runner=_should_not_run, stdout=out)
-        self.assertEqual(rc, 0)
-        self.assertEqual(out.getvalue(), "")
-        self.assertEqual(summary["st"], "no_work")
-
-    def test_ignored_report_without_slice_requires_unambiguous_run(self) -> None:
-        self.add_slice("api")
-        self.add_slice("ui")
-        run_reviews(self.review_dir, command_runner=_writes("[P2] Finding"), stdout=io.StringIO())
-
-        with ReviewState.locked(self.review_dir) as state:
-            with self.assertRaises(ReviewStateError):
-                state.report_ignored_findings(ignored_count=1)
-
-    def test_ignored_report_targets_latest_finding_run_for_slice(self) -> None:
-        self.add_slice("api")
-        run_reviews(self.review_dir, command_runner=_writes("[P2] First pass"), stdout=io.StringIO())
-        run_reviews(self.review_dir, command_runner=_writes("[P2] Second pass"), stdout=io.StringIO())
-
-        with ReviewState.locked(self.review_dir) as state:
-            with self.assertRaises(ReviewStateError):
-                state.report_ignored_findings(ignored_count=1, slice_name="api", pass_number=1)
-            changed, message = state.report_ignored_findings(ignored_count=1, slice_name="api")
-            state.save()
-
-        self.assertTrue(changed)
-        self.assertIn("pass 2", message)
-        state = ReviewState.load(self.review_dir)
-        self.assertEqual(state.data["slices"]["api"]["runs"][0]["status"], "findings")
-        self.assertEqual(state.data["slices"]["api"]["runs"][1]["status"], "ignored")
-        self.assertTrue(state.data["slices"]["api"]["complete"])
-
     def test_stale_running_reservation_is_recovered_and_retried(self) -> None:
         self.add_slice("api")
         with ReviewState.locked(self.review_dir) as state:
@@ -1404,15 +1732,43 @@ class RunnerTests(unittest.TestCase):
             state.data["slices"]["api"]["runs"][0]["runner_pid"] = -1
             state.save()
 
-        run_reviews(self.review_dir, command_runner=_writes("No findings."), stdout=io.StringIO())
+        run_reviews(self.review_dir, command_runner=_writes_review_result([]), stdout=io.StringIO())
 
         state = ReviewState.load(self.review_dir)
         runs = state.data["slices"]["api"]["runs"]
         self.assertEqual(runs[0]["status"], "failed")
         self.assertIn("stale running", runs[0]["error"])
-        self.assertEqual(runs[1]["status"], "quiet")
+        self.assertEqual(runs[1]["status"], "no_findings")
         self.assertTrue(_single_review_file(self.review_dir, "*-1-api-retry2.md").exists())
         self.assertTrue(state.data["slices"]["api"]["complete"])
+
+    def test_stale_run_from_reactivated_definition_is_ignored_without_error(self) -> None:
+        self.add_slice("api")
+        with ReviewState.locked(self.review_dir) as state:
+            state.reserve_eligible()
+            state.remove_slice("api")
+            state.add_slice(
+                name="api",
+                mode="native",
+                target={"uncommitted": True},
+                prompt=None,
+                cwd=self.root,
+            )
+            old_run = state.data["slices"]["api"]["runs"][0]
+            old_run["runner_pid"] = -1
+            reservations = state.reserve_eligible()
+            state.save()
+
+        state = ReviewState.load(self.review_dir)
+        item = state.data["slices"]["api"]
+        old_run = item["runs"][0]
+        self.assertEqual(old_run["status"], "ignored")
+        self.assertEqual(old_run["classification"], "superseded_stale_recovered")
+        self.assertIsNone(old_run["error"])
+        self.assertIsNone(item["last_error"])
+        self.assertIsNone(state.data["last_error"])
+        self.assertEqual(len(reservations), 1)
+        self.assertEqual(item["runs"][1]["status"], "running")
 
     def test_reused_pid_running_reservation_is_recovered(self) -> None:
         self.add_slice("api")
@@ -1423,11 +1779,11 @@ class RunnerTests(unittest.TestCase):
             run["runner_key"] = f"{os.getpid()}:not-this-process"
             state.save()
 
-        run_reviews(self.review_dir, command_runner=_writes("No findings."), stdout=io.StringIO())
+        run_reviews(self.review_dir, command_runner=_writes_review_result([]), stdout=io.StringIO())
 
         runs = ReviewState.load(self.review_dir).data["slices"]["api"]["runs"]
         self.assertEqual(runs[0]["status"], "failed")
-        self.assertEqual(runs[1]["status"], "quiet")
+        self.assertEqual(runs[1]["status"], "no_findings")
 
     def test_stale_removed_reservation_is_ignored(self) -> None:
         self.add_slice("obsolete")
@@ -1460,16 +1816,19 @@ class RunnerTests(unittest.TestCase):
             run["runner_pid"] = -1
             state.save()
 
-        run_reviews(self.review_dir, command_runner=_writes("[P2] Retry finding"), stdout=io.StringIO())
+        run_reviews(
+            self.review_dir,
+            command_runner=_writes_review_result([_finding(title="Retry finding")]),
+            stdout=io.StringIO(),
+        )
 
         with ReviewState.locked(self.review_dir) as state:
             changed = state.complete_run(
                 run_id=stale.run_id,
                 slice_name="api",
-                status="quiet",
+                status="no_findings",
                 exit_code=0,
-                classification="quiet",
-                finding_count=0,
+                classification="no_findings",
             )
             state.save()
 
@@ -1492,7 +1851,7 @@ class RunnerTests(unittest.TestCase):
                 status="findings",
                 exit_code=0,
                 classification="findings",
-                finding_count=1,
+                findings=[_finding()],
             )
             followups = state.reserve_eligible()
             state.save()
@@ -1515,7 +1874,7 @@ class RunnerTests(unittest.TestCase):
                         status="findings",
                         exit_code=0,
                         classification="findings",
-                        finding_count=1,
+                        findings=[_finding()],
                     )
                 state.save()
 
@@ -1533,7 +1892,7 @@ class RunnerTests(unittest.TestCase):
                 status="findings",
                 exit_code=0,
                 classification="findings",
-                finding_count=1,
+                findings=[_finding()],
             )
             state.add_slice(
                 name="docs",
@@ -1556,10 +1915,9 @@ class RunnerTests(unittest.TestCase):
             state.complete_run(
                 run_id=ui.run_id,
                 slice_name="ui",
-                status="quiet",
+                status="no_findings",
                 exit_code=0,
-                classification="quiet",
-                finding_count=0,
+                classification="no_findings",
             )
             followups = state.reserve_eligible()
             state.save()
@@ -1568,13 +1926,6 @@ class RunnerTests(unittest.TestCase):
             {reservation.slice_name: reservation.pass_number for reservation in followups},
             {"api": 6, "docs": 1},
         )
-
-    def test_uncertain_success_logs_diagnostic_and_completes(self) -> None:
-        self.add_slice("api")
-        run_reviews(self.review_dir, command_runner=_writes("Inspected the changes."), stdout=io.StringIO())
-        state = ReviewState.load(self.review_dir)
-        self.assertTrue(state.data["slices"]["api"]["complete"])
-        self.assertIn("uncertain", (self.review_dir / "_errors.md").read_text(encoding="utf-8"))
 
     def test_empty_and_missing_outputs_are_failed_retryable(self) -> None:
         self.add_slice("empty")
@@ -1594,10 +1945,10 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(state.data["slices"]["empty"]["runs"][0]["status"], "failed")
         self.assertEqual(state.data["slices"]["missing"]["runs"][0]["status"], "failed")
 
-        run_reviews(self.review_dir, command_runner=_writes("No findings."), stdout=io.StringIO())
+        run_reviews(self.review_dir, command_runner=_writes_review_result([]), stdout=io.StringIO())
         state = ReviewState.load(self.review_dir)
-        self.assertEqual(state.data["slices"]["empty"]["runs"][1]["status"], "quiet")
-        self.assertEqual(state.data["slices"]["missing"]["runs"][1]["status"], "quiet")
+        self.assertEqual(state.data["slices"]["empty"]["runs"][1]["status"], "no_findings")
+        self.assertEqual(state.data["slices"]["missing"]["runs"][1]["status"], "no_findings")
         self.assertTrue(_single_review_file(self.review_dir, "*-1-empty-retry2.md").exists())
         self.assertTrue(_single_review_file(self.review_dir, "*-1-missing-retry2.md").exists())
 
@@ -1607,7 +1958,7 @@ class RunnerTests(unittest.TestCase):
         def fail_then_quiet(cmd, cwd, input_text, output_file, slice_data):
             if len(slice_data["runs"]) == 1:
                 return subprocess.CompletedProcess(cmd, 1, "", "failed")
-            output_file.write_text("No findings.", encoding="utf-8")
+            _write_review_result(output_file, [])
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
         run_reviews(self.review_dir, command_runner=fail_then_quiet, stdout=io.StringIO())
@@ -1644,7 +1995,7 @@ class RunnerTests(unittest.TestCase):
             with lock:
                 calls.append(slice_data["name"])
             time.sleep(0.1)
-            output_file.write_text("No findings.", encoding="utf-8")
+            _write_review_result(output_file, [])
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
         with ThreadPoolExecutor(max_workers=2) as executor:
@@ -1704,7 +2055,7 @@ class RunnerTests(unittest.TestCase):
         def findings_runner(cmd, cwd, input_text, output_file, slice_data):
             started.set()
             self.assertTrue(release.wait(timeout=2))
-            output_file.write_text("[P2] Finding", encoding="utf-8")
+            _write_review_result(output_file, [_finding()])
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
         runner_result: list[tuple[int, dict]] = []
@@ -1750,6 +2101,41 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(summary["rem"], 1)
         self.assertEqual(ReviewState.load(self.review_dir).data["slices"]["api"]["runs"], [])
 
+    def test_await_reviews_keeps_ids_after_findings_are_archived(self) -> None:
+        self.add_slice("api")
+        with ReviewState.locked(self.review_dir) as state:
+            reservation = state.reserve_eligible()[0]
+            state.save()
+
+        result: list[tuple[int, dict]] = []
+        waiter = threading.Thread(
+            target=lambda: result.append(
+                await_reviews(self.review_dir, stdout=io.StringIO())
+            )
+        )
+        waiter.start()
+        time.sleep(0.05)
+
+        with ReviewState.locked(self.review_dir) as state:
+            state.complete_run(
+                run_id=reservation.run_id,
+                slice_name="api",
+                status="findings",
+                exit_code=0,
+                classification="findings",
+                findings=[_finding()],
+            )
+            finding_id = state.data["slices"]["api"]["runs"][0]["findings"][0]["id"]
+            state.ignore_finding(finding_id, "Expected behavior.")
+            state.save()
+
+        waiter.join(timeout=2)
+        self.assertFalse(waiter.is_alive())
+        rc, summary = result[0]
+        self.assertEqual(rc, 0)
+        self.assertEqual(summary["out"][0]["ids"], [finding_id])
+        self.assertEqual(summary["out"][0]["st"], "ignored_findings")
+
     def test_await_reviews_reports_stale_active_wave_without_retrying(self) -> None:
         self.add_slice("api")
         with ReviewState.locked(self.review_dir) as state:
@@ -1776,7 +2162,7 @@ class RunnerTests(unittest.TestCase):
         def runner(cmd, cwd, input_text, output_file, slice_data):
             started.set()
             self.assertTrue(release.wait(timeout=2))
-            output_file.write_text("No findings.", encoding="utf-8")
+            _write_review_result(output_file, [])
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
         run_thread = threading.Thread(
@@ -1833,7 +2219,7 @@ class RunnerTests(unittest.TestCase):
                 status="findings",
                 exit_code=0,
                 classification="findings",
-                finding_count=1,
+                findings=[_finding()],
             )
             later = state.reserve_eligible()[0]
             state.save()
@@ -1859,15 +2245,27 @@ class RunnerTests(unittest.TestCase):
             self.assertRegex(output_file.name, TIMESTAMPED_REVIEW_FILE_RE)
             self.assertTrue(output_file.name.endswith("-1-api.md"))
             self.assertEqual(slice_data["target"], {"uncommitted": True})
-            self.assertEqual(cmd[:4], ["codex", "exec", "review", "--ephemeral"])
+            self.assertEqual(cmd[:3], ["codex", "exec", "--ephemeral"])
+            self.assertEqual(cmd[cmd.index("--sandbox") + 1], "read-only")
             self.assertNotIn("-m", cmd)
             self.assertNotIn('model_reasoning_effort="high"', cmd)
             self.assertIn("project_doc_fallback_filenames=[]", cmd)
-            self.assertIn("--uncommitted", cmd)
-            self.assertEqual(cmd[-2:], ["-o", str(output_file)])
-            task_config = next(arg for arg in cmd if arg.startswith("developer_instructions="))
-            self.assertIn(str(self.review_dir / "task.md"), task_config)
-            output_file.write_text("No findings.", encoding="utf-8")
+            self.assertIn("--output-schema", cmd)
+            schema_index = cmd.index("--output-schema")
+            self.assertEqual(
+                Path(cmd[schema_index + 1]),
+                ROOT / "references" / "review-result.schema.json",
+            )
+            self.assertNotIn("--uncommitted", cmd)
+            self.assertEqual(cmd[-3:-1], ["-o", str(output_file)])
+            self.assertIn(str(self.review_dir / "task.md"), cmd[-1])
+            self.assertIn(str(ROOT / "references" / "review-result.schema.json"), cmd[-1])
+            self.assertIn("Return only one JSON object", cmd[-1])
+            self.assertIn(
+                "Review the current staged, unstaged, and untracked changes.",
+                cmd[-1],
+            )
+            _write_review_result(output_file, [])
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
         run_reviews(self.review_dir, command_runner=runner, stdout=io.StringIO())
@@ -1883,6 +2281,8 @@ class RunnerTests(unittest.TestCase):
             'model_source: "harness-default"\n'
             "reasoning: null\n"
             'reasoning_source: "harness-default"\n'
+            "schema_version: 1\n"
+            "outcome: no_findings\n"
             "---\n\nNo findings.",
             artifact,
         )
@@ -1914,7 +2314,7 @@ class RunnerTests(unittest.TestCase):
 
         run_reviews(
             self.review_dir,
-            command_runner=_writes("No findings."),
+            command_runner=_writes_review_result([]),
             stdout=io.StringIO(),
         )
 
@@ -1948,15 +2348,15 @@ class RunnerTests(unittest.TestCase):
             self.review_dir / "1-commit.md",
         )
 
-        self.assertIn("--base", base_cmd)
-        self.assertEqual(base_cmd[base_cmd.index("--base") + 1], "main")
+        self.assertNotIn("--base", base_cmd)
         self.assertNotIn("--uncommitted", base_cmd)
-        self.assertEqual(base_cmd[-2:], ["-o", str(self.review_dir / "1-base.md")])
+        self.assertEqual(base_cmd[-3:-1], ["-o", str(self.review_dir / "1-base.md")])
+        self.assertIn("Review the current branch against base main", base_cmd[-1])
         self.assertIsNone(base_input)
-        self.assertIn("--commit", commit_cmd)
-        self.assertEqual(commit_cmd[commit_cmd.index("--commit") + 1], "abc123")
+        self.assertNotIn("--commit", commit_cmd)
         self.assertNotIn("--uncommitted", commit_cmd)
-        self.assertEqual(commit_cmd[-2:], ["-o", str(self.review_dir / "1-commit.md")])
+        self.assertEqual(commit_cmd[-3:-1], ["-o", str(self.review_dir / "1-commit.md")])
+        self.assertIn("Review the changes introduced by commit abc123.", commit_cmd[-1])
         self.assertIsNone(commit_input)
 
     def test_build_review_command_uses_positional_prompt_and_output(self) -> None:
@@ -2046,11 +2446,221 @@ class CliTests(unittest.TestCase):
             "remove_slice.py",
             "run_reviews.py",
             "await_reviews.py",
-            "report_ignored_findings.py",
+            "ignore_finding.py",
+            "dedupe_finding.py",
         ):
             proc = self.run_cli(str(SCRIPTS / script), "--help")
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertIn("usage:", proc.stdout)
+
+    def test_ignore_finding_records_reason_and_archives_terminal_run(self) -> None:
+        review_dir = init_review_state(self.root, "Review finding decisions.")
+        with ReviewState.locked(review_dir) as state:
+            state.add_slice(
+                name="api",
+                mode="native",
+                target={"uncommitted": True},
+                prompt=None,
+                cwd=self.root,
+            )
+            reservation = state.reserve_eligible()[0]
+            state.complete_run(
+                run_id=reservation.run_id,
+                slice_name="api",
+                status="findings",
+                exit_code=0,
+                classification="findings",
+                findings=[_finding()],
+            )
+            finding_id = state.data["slices"]["api"]["runs"][0]["findings"][0]["id"]
+            state.save()
+
+        proc = self.run_cli(
+            str(SCRIPTS / "ignore_finding.py"),
+            "--review-dir",
+            str(review_dir),
+            "--id",
+            finding_id,
+            "--reason",
+            "Protected by the outer transaction.",
+        )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        state = ReviewState.load(review_dir)
+        run = state.data["slices"]["api"]["runs"][0]
+        self.assertTrue(state.data["slices"]["api"]["complete"])
+        self.assertIsNone(run["findings"])
+        archive_path = Path(run["findings_archive"])
+        archive = json.loads(archive_path.read_text(encoding="utf-8"))
+        finding = archive["findings"][0]
+        self.assertEqual(finding["id"], finding_id)
+        self.assertEqual(finding["status"], "ignored")
+        self.assertEqual(finding["resolution"]["kind"], "rejected")
+        self.assertEqual(finding["resolution"]["text"], "Protected by the outer transaction.")
+        markdown = Path(run["output_file"]).read_text(encoding="utf-8")
+        self.assertIn("Ignored: Protected by the outer transaction.", markdown)
+
+    def test_ignore_finding_reads_and_persists_reason_file(self) -> None:
+        review_dir = init_review_state(self.root, "Review finding decisions.")
+        with ReviewState.locked(review_dir) as state:
+            state.add_slice(
+                name="api",
+                mode="native",
+                target={"uncommitted": True},
+                prompt=None,
+                cwd=self.root,
+            )
+            reservation = state.reserve_eligible()[0]
+            state.complete_run(
+                run_id=reservation.run_id,
+                slice_name="api",
+                status="findings",
+                exit_code=0,
+                classification="findings",
+                findings=[_finding()],
+            )
+            finding_id = state.data["slices"]["api"]["runs"][0]["findings"][0]["id"]
+            state.save()
+        reason_file = self.root / "reason.md"
+        reason_file.write_text("Covered by the transaction boundary.\n", encoding="utf-8")
+
+        proc = self.run_cli(
+            str(SCRIPTS / "ignore_finding.py"),
+            "--review-dir",
+            str(review_dir),
+            "--id",
+            finding_id,
+            "--reason-file",
+            str(reason_file),
+        )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        run = ReviewState.load(review_dir).data["slices"]["api"]["runs"][0]
+        archive = json.loads(Path(run["findings_archive"]).read_text(encoding="utf-8"))
+        self.assertEqual(
+            archive["findings"][0]["resolution"]["text"],
+            "Covered by the transaction boundary.",
+        )
+
+    def test_ignore_finding_reports_invalid_utf8_reason_file_without_traceback(self) -> None:
+        reason_file = self.root / "invalid-reason.md"
+        reason_file.write_bytes(b"\xff")
+
+        proc = self.run_cli(
+            str(SCRIPTS / "ignore_finding.py"),
+            "--review-dir",
+            str(self.root / "missing-review"),
+            "--id",
+            "f_12345678",
+            "--reason-file",
+            str(reason_file),
+        )
+
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("error:", proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+
+    def test_dedupe_finding_links_to_open_canonical_and_uses_ignore_semantics(self) -> None:
+        review_dir = init_review_state(self.root, "Review duplicate findings.")
+        with ReviewState.locked(review_dir) as state:
+            state.add_slice(
+                name="api",
+                mode="native",
+                target={"uncommitted": True},
+                prompt=None,
+                cwd=self.root,
+            )
+            reservation = state.reserve_eligible()[0]
+            state.complete_run(
+                run_id=reservation.run_id,
+                slice_name="api",
+                status="findings",
+                exit_code=0,
+                classification="findings",
+                findings=[_finding(title="Canonical"), _finding(title="Duplicate")],
+            )
+            findings = state.data["slices"]["api"]["runs"][0]["findings"]
+            canonical_id = findings[0]["id"]
+            duplicate_id = findings[1]["id"]
+            state.save()
+
+        dedupe = self.run_cli(
+            str(SCRIPTS / "dedupe_finding.py"),
+            "--review-dir",
+            str(review_dir),
+            "--id",
+            duplicate_id,
+            "--canonical-id",
+            canonical_id,
+        )
+
+        self.assertEqual(dedupe.returncode, 0, dedupe.stderr)
+        state = ReviewState.load(review_dir)
+        run = state.data["slices"]["api"]["runs"][0]
+        duplicate = next(finding for finding in run["findings"] if finding["id"] == duplicate_id)
+        self.assertFalse(state.data["slices"]["api"]["complete"])
+        self.assertEqual(duplicate["status"], "ignored")
+        self.assertEqual(
+            duplicate["resolution"],
+            {
+                "kind": "duplicate",
+                "finding_id": canonical_id,
+                "at": duplicate["resolution"]["at"],
+            },
+        )
+
+        ignored = self.run_cli(
+            str(SCRIPTS / "ignore_finding.py"),
+            "--review-dir",
+            str(review_dir),
+            "--id",
+            canonical_id,
+            "--reason",
+            "Not actionable.",
+        )
+        self.assertEqual(ignored.returncode, 0, ignored.stderr)
+        self.assertTrue(ReviewState.load(review_dir).data["slices"]["api"]["complete"])
+
+    def test_dedupe_finding_rejects_duplicate_chains(self) -> None:
+        review_dir = init_review_state(self.root, "Review duplicate chains.")
+        with ReviewState.locked(review_dir) as state:
+            state.add_slice(
+                name="api",
+                mode="native",
+                target={"uncommitted": True},
+                prompt=None,
+                cwd=self.root,
+            )
+            reservation = state.reserve_eligible()[0]
+            state.complete_run(
+                run_id=reservation.run_id,
+                slice_name="api",
+                status="findings",
+                exit_code=0,
+                classification="findings",
+                findings=[
+                    _finding(title="First"),
+                    _finding(title="Canonical"),
+                    _finding(title="Third"),
+                ],
+            )
+            findings = state.data["slices"]["api"]["runs"][0]["findings"]
+            first_id, canonical_id, third_id = [finding["id"] for finding in findings]
+            state.dedupe_finding(first_id, canonical_id)
+            state.save()
+
+        proc = self.run_cli(
+            str(SCRIPTS / "dedupe_finding.py"),
+            "--review-dir",
+            str(review_dir),
+            "--id",
+            canonical_id,
+            "--canonical-id",
+            third_id,
+        )
+
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("canonical finding cannot become a duplicate", proc.stderr)
 
     def test_cli_paths_with_spaces_and_outside_skill_dir(self) -> None:
         init = self.run_cli(
@@ -2306,6 +2916,98 @@ class CliTests(unittest.TestCase):
         self.assertEqual(invalid.returncode, 2)
         self.assertIn("choose exactly one", invalid.stderr)
 
+    def test_runtime_clis_reject_legacy_in_progress_session_without_modifying_it(self) -> None:
+        review_dir = self.root / ".review" / "legacy-session"
+        review_dir.mkdir(parents=True)
+        (review_dir / "task.md").write_text("Review legacy session.\n", encoding="utf-8")
+        legacy_state = {
+            "schema_version": 1,
+            "session": {
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "review_dir": str(review_dir),
+                "root": str(self.root),
+                "target": {"kind": "uncommitted"},
+            },
+            "slices": {
+                "api": {
+                    "name": "api",
+                    "mode": "native",
+                    "target": {"uncommitted": True},
+                    "prompt": None,
+                    "cwd": str(self.root),
+                    "model": None,
+                    "model_source": "harness-default",
+                    "reasoning": None,
+                    "reasoning_source": "harness-default",
+                    "next_pass": 1,
+                    "complete": False,
+                    "last_error": None,
+                    "source": "classifier",
+                    "user_directive": None,
+                    "removed": False,
+                    "definition_version": 1,
+                    "runs": [
+                        {
+                            "id": "legacy-run",
+                            "pass": 1,
+                            "output_file": str(review_dir / "1-api.md"),
+                            "status": "running",
+                            "started_at": "2026-01-01T00:00:00+00:00",
+                            "ended_at": None,
+                            "exit_code": None,
+                            "classification": None,
+                            "finding_count": None,
+                            "ignored_count": 0,
+                            "runner_pid": 123,
+                            "runner_key": None,
+                            "error": None,
+                            "definition_version": 1,
+                            "model": None,
+                            "model_source": "harness-default",
+                            "reasoning": None,
+                            "reasoning_source": "harness-default",
+                        }
+                    ],
+                }
+            },
+            "history": [],
+            "completed": False,
+            "last_error": None,
+        }
+        state_path = review_dir / "_state.json"
+        original = json.dumps(legacy_state, indent=2, sort_keys=True) + "\n"
+        state_path.write_text(original, encoding="utf-8")
+        invocations = (
+            ("run_reviews.py", "--review-dir", str(review_dir)),
+            ("await_reviews.py", "--review-dir", str(review_dir)),
+            (
+                "ignore_finding.py",
+                "--review-dir",
+                str(review_dir),
+                "--id",
+                "f_12345678",
+                "--reason",
+                "Legacy.",
+            ),
+            (
+                "dedupe_finding.py",
+                "--review-dir",
+                str(review_dir),
+                "--id",
+                "f_12345678",
+                "--canonical-id",
+                "f_abcdefgh",
+            ),
+        )
+
+        for invocation in invocations:
+            with self.subTest(script=invocation[0]):
+                proc = self.run_cli(str(SCRIPTS / invocation[0]), *invocation[1:])
+                expected = 1 if invocation[0] in {"run_reviews.py", "await_reviews.py"} else 2
+                self.assertEqual(proc.returncode, expected, proc.stderr)
+                self.assertIn("unsupported review state schema: 1", proc.stderr)
+                self.assertEqual(state_path.read_text(encoding="utf-8"), original)
+
     def test_cli_clear_errors_for_missing_state_and_invalid_args(self) -> None:
         missing = self.run_cli(
             str(SCRIPTS / "add_slice.py"),
@@ -2342,14 +3044,20 @@ class CliTests(unittest.TestCase):
 
         bad_review_dir = self.root / "not-a-review-dir"
         bad_review_dir.write_text("", encoding="utf-8")
-        for script in ("run_reviews.py", "await_reviews.py", "report_ignored_findings.py"):
+        for script in ("run_reviews.py", "await_reviews.py", "ignore_finding.py", "dedupe_finding.py"):
             proc = self.run_cli(
                 str(SCRIPTS / script),
                 "--review-dir",
                 str(bad_review_dir),
-                *(["--count", "1"] if script == "report_ignored_findings.py" else []),
+                *(
+                    ["--id", "f_missing", "--reason", "Not actionable."]
+                    if script == "ignore_finding.py"
+                    else ["--id", "f_missing", "--canonical-id", "f_other"]
+                    if script == "dedupe_finding.py"
+                    else []
+                ),
             )
-            expected_returncode = 2 if script == "report_ignored_findings.py" else 1
+            expected_returncode = 2 if script in {"ignore_finding.py", "dedupe_finding.py"} else 1
             self.assertEqual(proc.returncode, expected_returncode)
             self.assertIn("error:", proc.stderr)
             self.assertNotIn("Traceback", proc.stderr)
@@ -2370,48 +3078,6 @@ class CliTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 2)
             self.assertIn("error:", proc.stderr)
             self.assertNotIn("Traceback", proc.stderr)
-
-    def test_report_ignored_findings_cli_completes_slice(self) -> None:
-        review_dir = Path(
-            self.run_cli(
-                str(SCRIPTS / "init_state.py"),
-                "--root",
-                str(self.root),
-                "--task",
-                "Review ignored finding reporting.",
-            ).stdout.strip()
-        )
-        with ReviewState.locked(review_dir) as state:
-            state.add_slice(
-                name="api",
-                mode="native",
-                target={"uncommitted": True},
-                prompt=None,
-                cwd=self.root,
-            )
-            reservation = state.reserve_eligible()[0]
-            state.complete_run(
-                run_id=reservation.run_id,
-                slice_name="api",
-                status="findings",
-                exit_code=0,
-                classification="findings",
-                finding_count=2,
-            )
-            state.save()
-
-        proc = self.run_cli(
-            str(SCRIPTS / "report_ignored_findings.py"),
-            "--review-dir",
-            str(review_dir),
-            "--slice",
-            "api",
-            "--count",
-            "2",
-        )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("complete", proc.stdout)
-        self.assertTrue(ReviewState.load(review_dir).data["slices"]["api"]["complete"])
 
     def test_concurrent_add_slice_cli_has_no_lost_updates(self) -> None:
         review_dir = Path(
@@ -2480,7 +3146,7 @@ class CliTests(unittest.TestCase):
             "with open(os.environ['CODEX_INVOCATION_LOG'], 'a', encoding='utf-8') as log:\n"
             "    log.write('called\\n')\n"
             "out = sys.argv[sys.argv.index('-o') + 1]\n"
-            "open(out, 'w', encoding='utf-8').write('No findings.')\n",
+            "open(out, 'w', encoding='utf-8').write('{\"schema_version\":1,\"findings\":[]}')\n",
             encoding="utf-8",
         )
         fake_codex.chmod(0o755)
@@ -2507,7 +3173,7 @@ class CliTests(unittest.TestCase):
         state = ReviewState.load(review_dir)
         runs = state.data["slices"]["api"]["runs"]
         self.assertEqual(len(runs), 1)
-        self.assertEqual(runs[0]["status"], "quiet")
+        self.assertEqual(runs[0]["status"], "no_findings")
         self.assertEqual(invocation_log.read_text(encoding="utf-8").splitlines(), ["called"])
 
     def test_run_reviews_rejects_legacy_state_above_ten_active_slices(self) -> None:
@@ -2585,7 +3251,7 @@ class CliTests(unittest.TestCase):
             "    with open(log_path, encoding='utf-8') as log:\n"
             "        if len(log.readlines()) == 10:\n"
             "            out = sys.argv[sys.argv.index('-o') + 1]\n"
-            "            open(out, 'w', encoding='utf-8').write('No findings.')\n"
+            "            open(out, 'w', encoding='utf-8').write('{\"schema_version\":1,\"findings\":[]}')\n"
             "            raise SystemExit(0)\n"
             "    time.sleep(0.01)\n"
             "raise SystemExit(9)\n",
@@ -2644,7 +3310,7 @@ class CliTests(unittest.TestCase):
             "import os, sys\n"
             "open(os.environ['CAPTURED_PROMPT'], 'w', encoding='utf-8').write(sys.argv[-1])\n"
             "out = sys.argv[sys.argv.index('-o') + 1]\n"
-            "open(out, 'w', encoding='utf-8').write('No findings.')\n"
+            "open(out, 'w', encoding='utf-8').write('{\"schema_version\":1,\"findings\":[]}')\n"
             "assert sys.argv[-1] != '-'\n",
             encoding="utf-8",
         )
@@ -2683,7 +3349,7 @@ class CliTests(unittest.TestCase):
             "sys.stderr.write('CHILD STDERR\\n')\n"
             "time.sleep(0.05)\n"
             "out = sys.argv[sys.argv.index('-o') + 1]\n"
-            "open(out, 'w', encoding='utf-8').write('No findings.')\n",
+            "open(out, 'w', encoding='utf-8').write('{\"schema_version\":1,\"findings\":[]}')\n",
             encoding="utf-8",
         )
         fake_codex.chmod(0o755)
@@ -2958,7 +3624,7 @@ class CliTests(unittest.TestCase):
                 self.assertTrue(release.wait(timeout=2))
                 if fail:
                     return subprocess.CompletedProcess(cmd, 7, "failed stdout", "failed stderr")
-                output_file.write_text("No findings.", encoding="utf-8")
+                _write_review_result(output_file, [])
                 return subprocess.CompletedProcess(cmd, 0, "", "")
 
             run_thread = threading.Thread(
@@ -3030,6 +3696,10 @@ class CliTests(unittest.TestCase):
         self.assertIn("with the target unchanged", normalized)
         self.assertIn("Complete Report mode after consuming the wave for any `rem` value", normalized)
         self.assertIn("### Barrier", text)
+        self.assertIn('scripts/ignore_finding.py', text)
+        self.assertIn('scripts/dedupe_finding.py', text)
+        self.assertIn('references/review-result.schema.json', text)
+        self.assertNotIn('report_ignored_findings.py', text)
         self.assertIn('`"ok":true` and `"rem":0`', normalized)
         self.assertNotIn("--summary-json", text)
         self.assertNotIn("--no-stdout", text)
@@ -3059,6 +3729,30 @@ def _writes(text: str):
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     return runner
+
+
+def _finding(*, title: str = "Finding") -> dict[str, object]:
+    return {
+        "severity": "P1",
+        "title": title,
+        "content": "The cache can be initialized by two workers at once.",
+        "location": {
+            "path": "src/cache.py",
+            "start_line": 42,
+            "end_line": 45,
+        },
+    }
+
+
+def _writes_review_result(findings: list[dict[str, object]]):
+    return _writes(json.dumps({"schema_version": 1, "findings": findings}))
+
+
+def _write_review_result(path: Path, findings: list[dict[str, object]]) -> None:
+    path.write_text(
+        json.dumps({"schema_version": 1, "findings": findings}),
+        encoding="utf-8",
+    )
 
 
 def _should_not_run(cmd, cwd, input_text, output_file, slice_data):
