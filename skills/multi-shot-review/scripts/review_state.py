@@ -1631,6 +1631,70 @@ def _error_record_for_run(
     }
 
 
+def _running_run_ids(state: ReviewState) -> set[str]:
+    return {
+        str(run["id"])
+        for item in state.data["slices"].values()
+        for run in item.get("runs", [])
+        if run.get("status") == "running"
+    }
+
+
+def _await_run_ids(
+    review_dir: Path,
+    run_ids: set[str],
+) -> tuple[int, list[dict[str, Any]], list[dict[str, Any]]]:
+    while run_ids:
+        time.sleep(0.25)
+        with ReviewState.locked(review_dir) as state:
+            state._recover_stale_running_runs()
+            state._refresh_completed()
+            state.save()
+            remaining = _remaining_count(state)
+            selected = [
+                (slice_name, run)
+                for slice_name, item in state.data["slices"].items()
+                for run in item.get("runs", [])
+                if run.get("id") in run_ids
+            ]
+            if any(run.get("status") == "running" for _slice_name, run in selected):
+                continue
+
+            errors: list[dict[str, Any]] = []
+            out: list[dict[str, Any]] = []
+            for slice_name, run in selected:
+                status = str(run.get("status"))
+                if status in {"failed", "timeout"}:
+                    errors.append(
+                        _error_record_for_run(
+                            review_dir,
+                            slice_name=slice_name,
+                            pass_number=int(run["pass"]),
+                            output_file=Path(run["output_file"]),
+                            run_id=str(run["id"]),
+                            status=status,
+                            code=run.get("exit_code"),
+                            msg=run.get("error"),
+                        )
+                    )
+                elif status in {"quiet", "uncertain", "findings", "ignored"}:
+                    out.append(
+                        {
+                            "f": _relative_path(Path(run["output_file"])),
+                            "p": int(run["pass"]),
+                            "s": slice_name,
+                            "st": "done",
+                        }
+                    )
+            return remaining, out, errors
+
+    with ReviewState.locked(review_dir) as state:
+        state._recover_stale_running_runs()
+        state._refresh_completed()
+        state.save()
+        return _remaining_count(state), [], []
+
+
 def compact_summary_json(summary: dict[str, Any], *, pretty: bool = False) -> str:
     if pretty:
         return json.dumps(summary, indent=2, sort_keys=True)
@@ -1661,6 +1725,44 @@ def _emit_summary(
     if stdout_json and not no_stdout:
         stdout.write(compact_summary_json(summary, pretty=pretty_json) + "\n")
         stdout.flush()
+
+
+def await_reviews(
+    review_dir: Path,
+    *,
+    stdout: Any = sys.stdout,
+    stdout_json: bool = False,
+    pretty_json: bool = False,
+) -> tuple[int, dict[str, Any]]:
+    """Wait for the currently running review wave without reserving work."""
+    review_dir = review_dir.resolve()
+    with ReviewState.locked(review_dir) as state:
+        run_ids = _running_run_ids(state)
+        state._recover_stale_running_runs()
+        state._refresh_completed()
+        state.save()
+
+    remaining, out_records, err_records = _await_run_ids(review_dir, run_ids)
+    ok = not err_records
+    if err_records:
+        status = "partial" if out_records else "failed"
+    elif run_ids:
+        status = "partial" if remaining else "done"
+    else:
+        status = "no_work"
+    summary = _summary(
+        review_dir,
+        status=status,
+        ok=ok,
+        ran=0,
+        remaining=remaining,
+        out_records=out_records,
+        err_records=err_records,
+    )
+    if stdout_json:
+        stdout.write(compact_summary_json(summary, pretty=pretty_json) + "\n")
+        stdout.flush()
+    return (0 if ok else 2), summary
 
 
 def run_reviews(
@@ -1711,45 +1813,11 @@ def run_reviews(
             }
 
     if not reservations:
-        waited_errors: list[dict[str, Any]] = []
-        waited_out: list[dict[str, Any]] = []
         if any_running:
-            while True:
-                time.sleep(0.25)
-                with ReviewState.locked(review_dir) as state:
-                    state._recover_stale_running_runs()
-                    state._refresh_completed()
-                    state.save()
-                    remaining = _remaining_count(state)
-                    if state._has_running_runs():
-                        continue
-                    for slice_name, item in state.data["slices"].items():
-                        for run in item.get("runs", []):
-                            if run.get("id") not in active_run_ids:
-                                continue
-                            if run.get("status") in {"failed", "timeout"}:
-                                waited_errors.append(
-                                    _error_record_for_run(
-                                        review_dir,
-                                        slice_name=slice_name,
-                                        pass_number=int(run["pass"]),
-                                        output_file=Path(run["output_file"]),
-                                        run_id=str(run["id"]),
-                                        status=str(run["status"]),
-                                        code=run.get("exit_code"),
-                                        msg=run.get("error"),
-                                    )
-                                )
-                            elif run.get("status") in {"quiet", "uncertain", "findings", "ignored"}:
-                                waited_out.append(
-                                    {
-                                        "f": _relative_path(Path(run["output_file"])),
-                                        "p": int(run["pass"]),
-                                        "s": slice_name,
-                                        "st": "done",
-                                    }
-                                )
-                    break
+            remaining, waited_out, waited_errors = _await_run_ids(review_dir, active_run_ids)
+        else:
+            waited_errors = []
+            waited_out = []
         ok = not waited_errors
         status = "failed" if waited_errors else ("partial" if remaining else "no_work")
         summary = _summary(

@@ -28,6 +28,7 @@ from review_state import (  # noqa: E402
     ReviewState,
     ReviewStateError,
     add_related_task,
+    await_reviews,
     build_review_command,
     classify_output,
     count_findings,
@@ -1695,6 +1696,159 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(summary["err"][0]["s"], "api")
         self.assertEqual(first_result[0][0], 2)
 
+    def test_await_reviews_joins_active_wave_without_reserving_followup(self) -> None:
+        self.add_slice("api")
+        started = threading.Event()
+        release = threading.Event()
+
+        def findings_runner(cmd, cwd, input_text, output_file, slice_data):
+            started.set()
+            self.assertTrue(release.wait(timeout=2))
+            output_file.write_text("[P2] Finding", encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        runner_result: list[tuple[int, dict]] = []
+        runner = threading.Thread(
+            target=lambda: runner_result.append(
+                run_reviews(self.review_dir, command_runner=findings_runner, stdout=io.StringIO())
+            )
+        )
+        runner.start()
+        self.assertTrue(started.wait(timeout=2))
+
+        await_result: list[tuple[int, dict]] = []
+        waiter = threading.Thread(
+            target=lambda: await_result.append(await_reviews(self.review_dir, stdout=io.StringIO()))
+        )
+        waiter.start()
+        time.sleep(0.05)
+        self.assertTrue(waiter.is_alive())
+        release.set()
+        runner.join(timeout=2)
+        waiter.join(timeout=2)
+
+        self.assertFalse(runner.is_alive())
+        self.assertFalse(waiter.is_alive())
+        rc, summary = await_result[0]
+        self.assertEqual(rc, 0)
+        self.assertEqual(summary["st"], "partial")
+        self.assertEqual(summary["ran"], 0)
+        self.assertEqual(summary["rem"], 1)
+        self.assertEqual(summary["out"][0]["s"], "api")
+        runs = ReviewState.load(self.review_dir).data["slices"]["api"]["runs"]
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0]["status"], "findings")
+
+    def test_await_reviews_with_no_active_wave_starts_no_work(self) -> None:
+        self.add_slice("api")
+
+        rc, summary = await_reviews(self.review_dir, stdout=io.StringIO())
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(summary["st"], "no_work")
+        self.assertEqual(summary["ran"], 0)
+        self.assertEqual(summary["rem"], 1)
+        self.assertEqual(ReviewState.load(self.review_dir).data["slices"]["api"]["runs"], [])
+
+    def test_await_reviews_reports_stale_active_wave_without_retrying(self) -> None:
+        self.add_slice("api")
+        with ReviewState.locked(self.review_dir) as state:
+            state.reserve_eligible()
+            state.data["slices"]["api"]["runs"][0]["runner_pid"] = -1
+            state.save()
+
+        rc, summary = await_reviews(self.review_dir, stdout=io.StringIO())
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(summary["st"], "failed")
+        self.assertEqual(summary["ran"], 0)
+        self.assertEqual(summary["rem"], 1)
+        self.assertEqual(summary["err"][0]["s"], "api")
+        runs = ReviewState.load(self.review_dir).data["slices"]["api"]["runs"]
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0]["status"], "failed")
+
+    def test_await_reviews_accounts_for_captured_run_removed_while_running(self) -> None:
+        self.add_slice("api")
+        started = threading.Event()
+        release = threading.Event()
+
+        def runner(cmd, cwd, input_text, output_file, slice_data):
+            started.set()
+            self.assertTrue(release.wait(timeout=2))
+            output_file.write_text("No findings.", encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        run_thread = threading.Thread(
+            target=lambda: run_reviews(
+                self.review_dir,
+                command_runner=runner,
+                stdout=io.StringIO(),
+            )
+        )
+        run_thread.start()
+        self.assertTrue(started.wait(timeout=2))
+
+        await_result: list[tuple[int, dict]] = []
+        await_thread = threading.Thread(
+            target=lambda: await_result.append(await_reviews(self.review_dir, stdout=io.StringIO()))
+        )
+        await_thread.start()
+        with ReviewState.locked(self.review_dir) as state:
+            state.remove_slice("api")
+            state.save()
+        release.set()
+        run_thread.join(timeout=2)
+        await_thread.join(timeout=2)
+
+        self.assertFalse(run_thread.is_alive())
+        self.assertFalse(await_thread.is_alive())
+        rc, summary = await_result[0]
+        self.assertEqual(rc, 0)
+        self.assertEqual(summary["st"], "done")
+        self.assertEqual(summary["rem"], 0)
+        self.assertEqual(summary["out"][0]["s"], "api")
+        self.assertEqual(
+            ReviewState.load(self.review_dir).data["slices"]["api"]["runs"][0]["status"],
+            "ignored",
+        )
+
+    def test_await_reviews_returns_before_later_wave_finishes(self) -> None:
+        self.add_slice("api")
+        with ReviewState.locked(self.review_dir) as state:
+            captured = state.reserve_eligible()[0]
+            state.save()
+
+        result: list[tuple[int, dict]] = []
+        await_thread = threading.Thread(
+            target=lambda: result.append(await_reviews(self.review_dir, stdout=io.StringIO()))
+        )
+        await_thread.start()
+        time.sleep(0.05)
+
+        with ReviewState.locked(self.review_dir) as state:
+            state.complete_run(
+                run_id=captured.run_id,
+                slice_name="api",
+                status="findings",
+                exit_code=0,
+                classification="findings",
+                finding_count=1,
+            )
+            later = state.reserve_eligible()[0]
+            state.save()
+
+        await_thread.join(timeout=2)
+
+        self.assertFalse(await_thread.is_alive())
+        rc, summary = result[0]
+        self.assertEqual(rc, 0)
+        self.assertEqual(summary["st"], "partial")
+        self.assertEqual([(record["p"], record["s"]) for record in summary["out"]], [(1, "api")])
+        runs = ReviewState.load(self.review_dir).data["slices"]["api"]["runs"]
+        self.assertEqual([run["status"] for run in runs], ["findings", "running"])
+        self.assertEqual(runs[1]["id"], later.run_id)
+
     def test_runner_builds_expected_native_command(self) -> None:
         self.add_slice("api")
 
@@ -1891,6 +2045,7 @@ class CliTests(unittest.TestCase):
             "classify_slices.py",
             "remove_slice.py",
             "run_reviews.py",
+            "await_reviews.py",
             "report_ignored_findings.py",
         ):
             proc = self.run_cli(str(SCRIPTS / script), "--help")
@@ -2187,14 +2342,14 @@ class CliTests(unittest.TestCase):
 
         bad_review_dir = self.root / "not-a-review-dir"
         bad_review_dir.write_text("", encoding="utf-8")
-        for script in ("run_reviews.py", "report_ignored_findings.py"):
+        for script in ("run_reviews.py", "await_reviews.py", "report_ignored_findings.py"):
             proc = self.run_cli(
                 str(SCRIPTS / script),
                 "--review-dir",
                 str(bad_review_dir),
-                *([] if script == "run_reviews.py" else ["--count", "1"]),
+                *(["--count", "1"] if script == "report_ignored_findings.py" else []),
             )
-            expected_returncode = 1 if script == "run_reviews.py" else 2
+            expected_returncode = 2 if script == "report_ignored_findings.py" else 1
             self.assertEqual(proc.returncode, expected_returncode)
             self.assertIn("error:", proc.stderr)
             self.assertNotIn("Traceback", proc.stderr)
@@ -2778,10 +2933,94 @@ class CliTests(unittest.TestCase):
         self.assertNotIn("CHILD STDOUT", stream_proc.stdout)
         self.assertNotIn("CHILD STDERR", stream_proc.stderr)
 
+    def test_await_reviews_cli_emits_one_final_json_and_propagates_failure(self) -> None:
+        def invoke(*, fail: bool) -> tuple[subprocess.CompletedProcess[str], tuple[int, dict]]:
+            review_dir = init_review_state(
+                self.root,
+                "Await a failing review." if fail else "Await a successful review.",
+            )
+            with ReviewState.locked(review_dir) as state:
+                state.add_slice(
+                    name="api",
+                    mode="native",
+                    target={"uncommitted": True},
+                    prompt=None,
+                    cwd=self.root,
+                )
+                state.save()
+
+            started = threading.Event()
+            release = threading.Event()
+            run_result: list[tuple[int, dict]] = []
+
+            def runner(cmd, cwd, input_text, output_file, slice_data):
+                started.set()
+                self.assertTrue(release.wait(timeout=2))
+                if fail:
+                    return subprocess.CompletedProcess(cmd, 7, "failed stdout", "failed stderr")
+                output_file.write_text("No findings.", encoding="utf-8")
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+
+            run_thread = threading.Thread(
+                target=lambda: run_result.append(
+                    run_reviews(review_dir, command_runner=runner, stdout=io.StringIO())
+                )
+            )
+            run_thread.start()
+            self.assertTrue(started.wait(timeout=2))
+            state_path = review_dir / "_state.json"
+            before_capture = state_path.stat()
+            await_proc = subprocess.Popen(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "await_reviews.py"),
+                    "--review-dir",
+                    str(review_dir),
+                ],
+                cwd=self.root,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                after_capture = state_path.stat()
+                if (after_capture.st_ino, after_capture.st_mtime_ns) != (
+                    before_capture.st_ino,
+                    before_capture.st_mtime_ns,
+                ):
+                    break
+                time.sleep(0.01)
+            else:
+                self.fail("awaiter did not capture the active wave")
+            self.assertIsNone(await_proc.poll())
+            release.set()
+            stdout, stderr = await_proc.communicate(timeout=5)
+            run_thread.join(timeout=2)
+
+            self.assertFalse(run_thread.is_alive())
+            self.assertEqual(stderr, "")
+            self.assertEqual(stdout.count("\n"), 1)
+            return subprocess.CompletedProcess(await_proc.args, await_proc.returncode, stdout, stderr), run_result[0]
+
+        success, success_run = invoke(fail=False)
+        self.assertEqual(success.returncode, 0)
+        self.assertTrue(json.loads(success.stdout)["ok"])
+        self.assertEqual(success_run[0], 0)
+
+        failure, failure_run = invoke(fail=True)
+        self.assertEqual(failure.returncode, 2)
+        failure_summary = json.loads(failure.stdout)
+        self.assertFalse(failure_summary["ok"])
+        self.assertEqual(failure_summary["err"][0]["code"], 7)
+        self.assertEqual(failure_run[0], 2)
+
     def test_skill_documents_report_and_barrier_protocols(self) -> None:
         text = (ROOT / "SKILL.md").read_text(encoding="utf-8")
         normalized = " ".join(text.split())
         self.assertIn('python3 "$SKILL_DIR/scripts/run_reviews.py" --review-dir "$REVIEW_DIR"', text)
+        self.assertIn('python3 "$SKILL_DIR/scripts/await_reviews.py" --review-dir "$REVIEW_DIR"', text)
+        self.assertIn("The awaiter is a pure join", text)
         self.assertIn("review wave exclusively in the foreground", text)
         self.assertIn("timeout of at least one hour", text)
         self.assertIn("--child-timeout-seconds 3600", text)

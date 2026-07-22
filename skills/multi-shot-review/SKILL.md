@@ -60,6 +60,15 @@ review Markdown paths in `out`, and diagnostics in `err`. Treat each finding as 
 validate it against the code and task, then deduplicate overlapping findings. Finish when every
 emitted result and diagnostic has been accounted for.
 
+If the harness detaches while the wave continues, await that wave in the foreground:
+
+```bash
+python3 "$SKILL_DIR/scripts/await_reviews.py" --review-dir "$REVIEW_DIR"
+```
+
+Repeat after any further detachment. The awaiter is a pure join: it captures the active wave, waits
+silently, and emits one final JSON summary.
+
 5. Complete the chosen mode:
 
 ### Report
