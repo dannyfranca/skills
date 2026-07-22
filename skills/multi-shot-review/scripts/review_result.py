@@ -125,7 +125,7 @@ def render_review_markdown(
         line_range = str(start_line) if end_line == start_line else f"{start_line}-{end_line}"
         lines.extend(
             [
-                f"## {finding['id']} · {finding['severity']} · {finding['title']}",
+                f"## {finding['severity']} · {finding['title']} · {finding['id']}",
                 "",
                 f"**Location:** `{location['path']}:{line_range}`",
                 "",

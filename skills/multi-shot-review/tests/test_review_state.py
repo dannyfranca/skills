@@ -1125,8 +1125,10 @@ class RunnerTests(unittest.TestCase):
         if not artifact.is_absolute():
             artifact = Path.cwd() / artifact
         markdown = artifact.read_text(encoding="utf-8")
-        self.assertIn(summary["out"][0]["ids"][0], markdown)
-        self.assertIn("P1 · Race in cache initialization", markdown)
+        self.assertIn(
+            f"## P1 · Race in cache initialization · {summary['out'][0]['ids'][0]}",
+            markdown,
+        )
         self.assertIn("`src/cache.py:42-45`", markdown)
 
         run = ReviewState.load(self.review_dir).data["slices"]["api"]["runs"][0]
