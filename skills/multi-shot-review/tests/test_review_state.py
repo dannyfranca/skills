@@ -24,6 +24,7 @@ sys.path.insert(0, str(SCRIPTS))
 import classify_slices  # noqa: E402
 import review_state as review_state_module  # noqa: E402
 from review_config import ReviewConfig  # noqa: E402
+from harnesses import HarnessProfile  # noqa: E402
 from review_state import (  # noqa: E402
     ReviewState,
     ReviewStateError,
@@ -50,7 +51,8 @@ class ReviewStateTests(unittest.TestCase):
         self.assertTrue(state_path.exists())
         self.assertRegex(self.review_dir.name, TIMESTAMPED_REVIEW_DIR_RE)
         state = ReviewState.load(self.review_dir)
-        self.assertEqual(state.data["schema_version"], 2)
+        self.assertEqual(state.data["schema_version"], 3)
+        self.assertEqual(state.data["classifications"], [])
         self.assertEqual(state.data["slices"], {})
         self.assertFalse(state.data["completed"])
         task_text = (self.review_dir / "task.md").read_text(encoding="utf-8")
@@ -328,6 +330,35 @@ class ReviewStateTests(unittest.TestCase):
         (self.review_dir / "_state.json").write_text(json.dumps({"schema_version": 999}), encoding="utf-8")
         with self.assertRaises(ReviewStateError):
             ReviewState.load(self.review_dir)
+
+    def test_schema_validation_rejects_inconsistent_classification_outcomes(self) -> None:
+        with ReviewState.locked(self.review_dir) as state:
+            classification_id = state.start_classification(
+                review_state_module.resolve_profile(
+                    None, override_source="slice-override"
+                )
+            )
+            state.complete_classification(classification_id, 0)
+            state.save()
+
+        valid = json.loads(
+            (self.review_dir / "_state.json").read_text(encoding="utf-8")
+        )
+        invalid_outcomes = (
+            {"status": "running", "ended_at": valid["classifications"][0]["ended_at"]},
+            {"status": "running", "exit_code": 0},
+            {"status": "succeeded", "exit_code": 7},
+            {"status": "failed", "exit_code": 0},
+        )
+        for changes in invalid_outcomes:
+            with self.subTest(changes=changes):
+                candidate = json.loads(json.dumps(valid))
+                candidate["classifications"][0].update(changes)
+                (self.review_dir / "_state.json").write_text(
+                    json.dumps(candidate), encoding="utf-8"
+                )
+                with self.assertRaises(ReviewStateError):
+                    ReviewState.load(self.review_dir)
 
     def test_schema_validation_rejects_missing_session_root(self) -> None:
         state_data = json.loads((self.review_dir / "_state.json").read_text(encoding="utf-8"))
@@ -747,6 +778,15 @@ class ReviewStateTests(unittest.TestCase):
 
 
 class ClassifierTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.home_tmp = tempfile.TemporaryDirectory()
+        self.home_patch = mock.patch.dict(os.environ, {"HOME": self.home_tmp.name})
+        self.home_patch.start()
+
+    def tearDown(self) -> None:
+        self.home_patch.stop()
+        self.home_tmp.cleanup()
+
     def test_clean_classifier_uses_state_scripts_without_schema_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "repo"
@@ -827,8 +867,18 @@ class ClassifierTests(unittest.TestCase):
             self.assertIn("durable slice definition", " ".join(prompt.split()))
             self.assertNotIn("Keep each slice narrow", prompt)
             self.assertNotIn("Prefer the smallest useful set of slices", prompt)
-            stored_prompt = ReviewState.load(review_dir).data["slices"]["api"]["prompt"]
+            stored_state = ReviewState.load(review_dir).data
+            stored_prompt = stored_state["slices"]["api"]["prompt"]
             self.assertNotIn("Check compatibility boundaries.", stored_prompt)
+            self.assertEqual(len(stored_state["classifications"]), 1)
+            classification = stored_state["classifications"][0]
+            self.assertEqual(classification["harness"], "codex")
+            self.assertIsNone(classification["model"])
+            self.assertIsNone(classification["reasoning"])
+            self.assertEqual(classification["status"], "succeeded")
+            self.assertEqual(classification["exit_code"], 0)
+            self.assertIsNotNone(classification["started_at"])
+            self.assertIsNotNone(classification["ended_at"])
 
     def test_classifier_uses_resolved_config_execution_settings_and_review_file(
         self,
@@ -840,8 +890,10 @@ class ClassifierTests(unittest.TestCase):
             agents.mkdir()
             (agents / "multi-shot-review.toml").write_text(
                 'review_file = "SECURITY"\n'
-                'classifier_model = "classifier-x"\n'
-                'classifier_reasoning = "medium"\n',
+                '[classifier]\n'
+                'harness = "codex"\n'
+                'model = "classifier-x"\n'
+                'reasoning = "medium"\n',
                 encoding="utf-8",
             )
             review_dir = init_review_state(root, "Review the current changes.")
@@ -880,6 +932,56 @@ class ClassifierTests(unittest.TestCase):
             self.assertEqual(cmd[cmd.index("-m") + 1], "classifier-x")
             self.assertIn('model_reasoning_effort="medium"', cmd)
 
+    def test_classifier_uses_claude_code_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            review_dir = init_review_state(root, "Review the current changes.")
+            with ReviewState.locked(review_dir) as state:
+                state.add_slice(
+                    name="api",
+                    mode="native",
+                    target={"uncommitted": True},
+                    prompt=None,
+                    cwd=root,
+                )
+                state.save()
+
+            with mock.patch.object(
+                classify_slices,
+                "load_review_config",
+                return_value=ReviewConfig(
+                    classifier=HarnessProfile(
+                        "claude-code",
+                        model="sonnet",
+                        reasoning="high",
+                    )
+                ),
+            ), mock.patch.object(
+                classify_slices,
+                "load_classifier_guidance",
+                return_value="(no additional scoped guidance)",
+            ), mock.patch.object(
+                classify_slices.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess([], 0),
+            ) as run:
+                with mock.patch.object(
+                    sys,
+                    "argv",
+                    ["classify_slices.py", "--review-dir", str(review_dir)],
+                ):
+                    self.assertEqual(classify_slices.main(), 0)
+
+            cmd = run.call_args.args[0]
+            self.assertEqual(cmd[0], "claude")
+            self.assertEqual(cmd[cmd.index("--model") + 1], "sonnet")
+            self.assertEqual(cmd[cmd.index("--effort") + 1], "high")
+            self.assertIn("--allowedTools", cmd)
+            classification = ReviewState.load(review_dir).data["classifications"][0]
+            self.assertEqual(classification["harness"], "claude-code")
+            self.assertEqual(classification["model"], "sonnet")
+
     def test_clean_classifier_rejects_success_without_active_slices(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "repo"
@@ -901,6 +1003,87 @@ class ClassifierTests(unittest.TestCase):
                     ["classify_slices.py", "--review-dir", str(review_dir)],
                 ):
                     self.assertEqual(classify_slices.main(), 2)
+
+            classification = ReviewState.load(review_dir).data["classifications"][0]
+            self.assertEqual(classification["status"], "failed")
+            self.assertEqual(classification["exit_code"], 2)
+
+    def test_classifier_interruption_is_recorded_as_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            review_dir = init_review_state(root, "Review the current changes.")
+
+            with mock.patch.object(
+                classify_slices,
+                "load_classifier_guidance",
+                return_value="(no additional scoped guidance)",
+            ), mock.patch.object(
+                classify_slices.subprocess,
+                "run",
+                side_effect=KeyboardInterrupt,
+            ):
+                with mock.patch.object(
+                    sys,
+                    "argv",
+                    ["classify_slices.py", "--review-dir", str(review_dir)],
+                ):
+                    with self.assertRaises(KeyboardInterrupt):
+                        classify_slices.main()
+
+            classification = ReviewState.load(review_dir).data["classifications"][0]
+            self.assertEqual(classification["status"], "failed")
+            self.assertEqual(classification["exit_code"], 130)
+
+    def test_classifier_recovers_attempt_abandoned_by_killed_process(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            review_dir = init_review_state(root, "Review the current changes.")
+            with ReviewState.locked(review_dir) as state:
+                state.start_classification(
+                    review_state_module.resolve_profile(
+                        None, override_source="slice-override"
+                    )
+                )
+                state.add_slice(
+                    name="api",
+                    mode="native",
+                    target={"uncommitted": True},
+                    prompt=None,
+                    cwd=root,
+                )
+                state.save()
+
+            with mock.patch.object(
+                classify_slices,
+                "load_classifier_guidance",
+                return_value="(no additional scoped guidance)",
+            ), mock.patch.object(
+                classify_slices.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess([], 0),
+            ):
+                with mock.patch.object(
+                    sys,
+                    "argv",
+                    ["classify_slices.py", "--review-dir", str(review_dir)],
+                ):
+                    self.assertEqual(classify_slices.main(), 0)
+
+            classifications = ReviewState.load(review_dir).data["classifications"]
+            self.assertEqual(
+                [(item["status"], item["exit_code"]) for item in classifications],
+                [("failed", 1), ("succeeded", 0)],
+            )
+
+    def test_classifier_lock_rejects_overlapping_invocations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            review_dir = Path(tmp) / "review"
+            with ReviewState.classifier_locked(review_dir):
+                with self.assertRaisesRegex(ReviewStateError, "already running"):
+                    with ReviewState.classifier_locked(review_dir):
+                        pass
 
     def test_classifier_failure_preserves_partial_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2278,7 +2461,7 @@ class RunnerTests(unittest.TestCase):
         self.assertIsNone(run["reasoning"])
         self.assertEqual(run["reasoning_source"], "harness-default")
         artifact = Path(run["output_file"]).read_text(encoding="utf-8")
-        self.assertTrue(artifact.startswith("---\nmodel: null\n"))
+        self.assertTrue(artifact.startswith('---\nharness: "codex"\n'))
         self.assertIn(
             'model_source: "harness-default"\n'
             "reasoning: null\n"
@@ -2432,6 +2615,7 @@ class CliTests(unittest.TestCase):
         return subprocess.run(
             [sys.executable, *args],
             cwd=cwd or self.root,
+            env={**os.environ, "HOME": self.tmp.name},
             input=input_text,
             text=True,
             stdout=subprocess.PIPE,
@@ -2693,8 +2877,10 @@ class CliTests(unittest.TestCase):
         agents = self.root / ".agents"
         agents.mkdir()
         (agents / "multi-shot-review.toml").write_text(
-            'slice_default_model = "configured-slice"\n'
-            'slice_default_reasoning = "high"\n',
+            '[slice_default]\n'
+            'harness = "codex"\n'
+            'model = "configured-slice"\n'
+            'reasoning = "high"\n',
             encoding="utf-8",
         )
         review_dir = Path(
@@ -2727,10 +2913,26 @@ class CliTests(unittest.TestCase):
             "--reasoning",
             "low",
         )
+        changed_harness = self.run_cli(
+            str(SCRIPTS / "add_slice.py"),
+            "--review-dir",
+            str(review_dir),
+            "--name",
+            "changed-harness",
+            "--uncommitted",
+            "--harness",
+            "claude-code",
+        )
 
         self.assertEqual(configured.returncode, 0, configured.stderr)
         self.assertEqual(explicit.returncode, 0, explicit.stderr)
+        self.assertEqual(changed_harness.returncode, 0, changed_harness.stderr)
         state = ReviewState.load(review_dir)
+        self.assertEqual(state.data["slices"]["configured"]["harness"], "codex")
+        self.assertEqual(
+            state.data["slices"]["configured"]["harness_source"],
+            "configured-default",
+        )
         self.assertEqual(state.data["slices"]["configured"]["model"], "configured-slice")
         self.assertEqual(
             state.data["slices"]["configured"]["model_source"],
@@ -2751,6 +2953,20 @@ class CliTests(unittest.TestCase):
             state.data["slices"]["explicit"]["reasoning_source"],
             "slice-override",
         )
+        self.assertEqual(
+            state.data["slices"]["changed-harness"]["harness"],
+            "claude-code",
+        )
+        self.assertEqual(
+            state.data["slices"]["changed-harness"]["harness_source"],
+            "slice-override",
+        )
+        self.assertIsNone(state.data["slices"]["changed-harness"]["model"])
+        self.assertEqual(
+            state.data["slices"]["changed-harness"]["model_source"],
+            "harness-default",
+        )
+        self.assertIsNone(state.data["slices"]["changed-harness"]["reasoning"])
 
     def test_add_slice_rejects_cwd_outside_session_repository(self) -> None:
         review_dir = Path(
@@ -3106,7 +3322,14 @@ class CliTests(unittest.TestCase):
         with (review_dir / "_state.lock").open("a+", encoding="utf-8") as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             procs = [
-                subprocess.Popen(cmd, cwd=self.root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                subprocess.Popen(
+                    cmd,
+                    cwd=self.root,
+                    env={**os.environ, "HOME": self.tmp.name},
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
                 for cmd in commands
             ]
             time.sleep(0.1)
