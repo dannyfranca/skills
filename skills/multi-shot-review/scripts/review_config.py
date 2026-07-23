@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from harnesses import HarnessError, HarnessProfile, get_harness
 from review_state import ReviewStateError
 
 
@@ -16,21 +17,18 @@ CONFIG_FILENAME = "multi-shot-review.toml"
 DEFAULT_REVIEW_FILE = "REVIEW"
 _SUPPORTED_KEYS = {
     "review_file",
-    "classifier_model",
-    "classifier_reasoning",
-    "slice_default_model",
-    "slice_default_reasoning",
+    "classifier",
+    "slice_default",
 }
+_PROFILE_KEYS = {"harness", "model", "reasoning"}
 _REVIEW_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 @dataclass(frozen=True)
 class ReviewConfig:
     review_file: str = DEFAULT_REVIEW_FILE
-    classifier_model: str | None = None
-    classifier_reasoning: str | None = None
-    slice_default_model: str | None = None
-    slice_default_reasoning: str | None = None
+    classifier: HarnessProfile | None = None
+    slice_default: HarnessProfile | None = None
 
 
 def load_review_config(root: Path, *, home: Path | None = None) -> ReviewConfig:
@@ -38,7 +36,7 @@ def load_review_config(root: Path, *, home: Path | None = None) -> ReviewConfig:
 
     root = root.resolve()
     home = (Path.home() if home is None else home).resolve()
-    merged: dict[str, str] = {}
+    merged: dict[str, Any] = {}
     for path in _config_chain(root, home):
         merged.update(_load_config_file(path))
     return ReviewConfig(**merged)
@@ -59,7 +57,7 @@ def _config_chain(root: Path, home: Path) -> tuple[Path, ...]:
     return tuple(location / ".agents" / CONFIG_FILENAME for location in locations)
 
 
-def _load_config_file(path: Path) -> dict[str, str]:
+def _load_config_file(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     if not path.is_file():
@@ -75,24 +73,59 @@ def _load_config_file(path: Path) -> dict[str, str]:
     if unknown:
         names = ", ".join(sorted(unknown))
         raise ReviewStateError(f"unsupported review config setting(s) in {path}: {names}")
-    validated: dict[str, str] = {}
+    validated: dict[str, Any] = {}
     for key, value in data.items():
-        validated[key] = _validate_setting(path, key, value)
+        if key == "review_file":
+            validated[key] = _validate_review_file(path, value)
+        else:
+            validated[key] = _validate_profile(path, key, value)
     return validated
 
 
-def _validate_setting(path: Path, key: str, value: Any) -> str:
+def _validate_review_file(path: Path, value: Any) -> str:
     if not isinstance(value, str) or not value.strip():
-        raise ReviewStateError(f"review config {key} must be a non-empty string: {path}")
+        raise ReviewStateError(f"review config review_file must be a non-empty string: {path}")
     value = value.strip()
-    if key == "review_file":
-        if (
-            not _REVIEW_FILE_RE.fullmatch(value)
-            or value.lower().endswith(".md")
-            or "/" in value
-            or "\\" in value
-        ):
-            raise ReviewStateError(
-                f"review config review_file must be a basename without .md: {path}"
-            )
+    if (
+        not _REVIEW_FILE_RE.fullmatch(value)
+        or value.lower().endswith(".md")
+        or "/" in value
+        or "\\" in value
+    ):
+        raise ReviewStateError(
+            f"review config review_file must be a basename without .md: {path}"
+        )
     return value
+
+
+def _validate_profile(path: Path, key: str, value: Any) -> HarnessProfile:
+    if not isinstance(value, dict):
+        raise ReviewStateError(f"review config {key} must be a TOML table: {path}")
+    unknown = set(value) - _PROFILE_KEYS
+    if unknown:
+        names = ", ".join(sorted(unknown))
+        raise ReviewStateError(
+            f"unsupported review config {key} setting(s) in {path}: {names}"
+        )
+    if "harness" not in value:
+        raise ReviewStateError(f"review config {key}.harness is required: {path}")
+    validated: dict[str, str | None] = {}
+    for field in _PROFILE_KEYS:
+        field_value = value.get(field)
+        if field_value is None and field != "harness":
+            validated[field] = None
+            continue
+        if not isinstance(field_value, str) or not field_value.strip():
+            raise ReviewStateError(
+                f"review config {key}.{field} must be a non-empty string: {path}"
+            )
+        validated[field] = field_value.strip()
+    try:
+        get_harness(str(validated["harness"]))
+    except HarnessError as exc:
+        raise ReviewStateError(f"review config {key}: {exc}: {path}") from exc
+    return HarnessProfile(
+        harness=str(validated["harness"]),
+        model=validated["model"],
+        reasoning=validated["reasoning"],
+    )

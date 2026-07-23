@@ -10,94 +10,112 @@ import sys
 from pathlib import Path
 
 from review_config import load_review_config
+from harnesses import HarnessError, get_harness, resolve_profile
 from review_instructions import load_classifier_guidance
 from review_state import ReviewState, ReviewStateError
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Let a clean Codex session contextually add and remove review slices."
+        description="Let a clean harness session contextually add and remove review slices."
     )
     parser.add_argument("--review-dir", required=True, type=Path)
     parser.add_argument("--user-directives-file", type=Path)
     parser.add_argument("--executor-context-file", type=Path)
+    parser.add_argument("--harness")
     parser.add_argument("--model")
     parser.add_argument("--reasoning")
     args = parser.parse_args()
 
     try:
         review_dir = args.review_dir.resolve()
-        with ReviewState.locked(review_dir) as state:
-            root = Path(state.data["session"]["root"])
-            target = dict(state.data["session"]["target"])
-        config = load_review_config(root)
-        review_instructions = load_classifier_guidance(
-            root,
-            target,
-            review_file=config.review_file,
-        )
-        prompt = _classifier_prompt(
-            review_dir=review_dir,
-            root=root,
-            target=target,
-            review_instructions=review_instructions,
-            user_directives=_read_optional(args.user_directives_file),
-            user_directives_file=(
-                args.user_directives_file.resolve()
-                if args.user_directives_file is not None
-                else None
-            ),
-            executor_context=_read_optional(args.executor_context_file),
-        )
-        cmd = [
-            "codex",
-            "exec",
-            "--ephemeral",
-            "--sandbox",
-            "workspace-write",
-            "--skip-git-repo-check",
-            "-C",
-            str(review_dir),
-        ]
-        classifier_model = (
-            args.model if args.model is not None else config.classifier_model
-        )
-        if classifier_model is not None and not classifier_model.strip():
-            raise ReviewStateError("classifier model must be a non-empty string")
-        if classifier_model is not None:
-            cmd.extend(["-m", classifier_model])
-        classifier_reasoning = (
-            args.reasoning
-            if args.reasoning is not None
-            else config.classifier_reasoning
-        )
-        if classifier_reasoning is not None and not classifier_reasoning.strip():
-            raise ReviewStateError("classifier reasoning must be a non-empty string")
-        if classifier_reasoning is not None:
-            cmd.extend(
-                ["-c", f'model_reasoning_effort="{classifier_reasoning}"']
-            )
-        cmd.extend(
-            [
-                "-c",
-                "project_doc_fallback_filenames=[]",
-                prompt,
-            ]
-        )
-        proc = subprocess.run(cmd, cwd=review_dir, check=False)
-        if proc.returncode == 0:
+        with ReviewState.classifier_locked(review_dir):
             with ReviewState.locked(review_dir) as state:
-                if not any(
-                    not item.get("removed")
-                    for item in state.data["slices"].values()
-                ):
-                    raise ReviewStateError(
-                        "classifier completed without any active review slices"
-                    )
-        return proc.returncode
-    except (OSError, ReviewStateError) as exc:
+                if state.recover_running_classifications():
+                    state.save()
+            return _run_classifier(args, review_dir)
+    except (HarnessError, OSError, ReviewStateError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+
+
+def _run_classifier(args: argparse.Namespace, review_dir: Path) -> int:
+    """Resolve and run one classifier while the session lock is held."""
+
+    with ReviewState.locked(review_dir) as state:
+        root = Path(state.data["session"]["root"])
+        target = dict(state.data["session"]["target"])
+
+    config = load_review_config(root)
+    review_instructions = load_classifier_guidance(
+        root,
+        target,
+        review_file=config.review_file,
+    )
+    prompt = _classifier_prompt(
+        review_dir=review_dir,
+        root=root,
+        target=target,
+        review_instructions=review_instructions,
+        user_directives=_read_optional(args.user_directives_file),
+        user_directives_file=(
+            args.user_directives_file.resolve()
+            if args.user_directives_file is not None
+            else None
+        ),
+        executor_context=_read_optional(args.executor_context_file),
+    )
+    profile = resolve_profile(
+        config.classifier,
+        harness=args.harness,
+        model=args.model,
+        reasoning=args.reasoning,
+        override_source="slice-override",
+    )
+    skill_dir = Path(__file__).resolve().parents[1]
+    invocation = get_harness(profile.harness).classifier_invocation(
+        prompt=prompt,
+        review_dir=review_dir,
+        profile=profile,
+        add_slice_script=skill_dir / "scripts" / "add_slice.py",
+        remove_slice_script=skill_dir / "scripts" / "remove_slice.py",
+    )
+    with ReviewState.locked(review_dir) as state:
+        classification_id = state.start_classification(profile)
+        state.save()
+    try:
+        proc = subprocess.run(
+            invocation.command,
+            cwd=review_dir,
+            input=invocation.input_text,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        with ReviewState.locked(review_dir) as state:
+            state.complete_classification(classification_id, 127)
+            state.save()
+        raise
+    except BaseException as exc:
+        exit_code = 130 if isinstance(exc, KeyboardInterrupt) else 1
+        with ReviewState.locked(review_dir) as state:
+            state.complete_classification(classification_id, exit_code)
+            state.save()
+        raise
+    with ReviewState.locked(review_dir) as state:
+        effective_exit_code = proc.returncode
+        if proc.returncode == 0 and not any(
+            not item.get("removed")
+            for item in state.data["slices"].values()
+        ):
+            effective_exit_code = 2
+        state.complete_classification(classification_id, effective_exit_code)
+        state.save()
+    if effective_exit_code != proc.returncode:
+        raise ReviewStateError(
+            "classifier completed without any active review slices"
+        )
+    return proc.returncode
 
 
 def _classifier_prompt(
@@ -145,10 +163,11 @@ Manage slices only by executing these scripts:
 Call them as many times as needed. For focused slices, send the complete reviewer prompt through
 `--prompt-file -`. For native slices, pass the session target flag.
 
-Each add may pass `--model <model>` and/or `--reasoning <effort>` when a specific choice materially
-suits that slice. Otherwise omit the option; the tool applies its configured slice default or
-leaves the choice to the review harness. Treat model and reasoning choices as part of the durable
-slice definition, not as prompt text.
+Each add may pass `--harness <harness>`, `--model <model>`, and/or `--reasoning <effort>` when a
+specific choice materially suits that slice. Otherwise omit the option; the tool applies its
+configured slice default or leaves the choice to the review harness. Scoped REVIEW guidance may
+require one or more of these choices. Treat harness, model, and reasoning choices as part of the
+durable slice definition, not as prompt text.
 
 Normally omit `--user-directive-file`. If the supplemental user directions explicitly authorize
 changing a user-controlled slice, pass this exact source file to the mutation:

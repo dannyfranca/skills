@@ -94,6 +94,8 @@ def validate_stored_finding(value: Any, *, owner: str = "finding") -> dict[str, 
 def render_review_markdown(
     findings: list[dict[str, Any]],
     *,
+    harness: str,
+    harness_source: str,
     model: str | None,
     model_source: str,
     reasoning: str | None,
@@ -104,6 +106,8 @@ def render_review_markdown(
     outcome = "findings" if findings else "no_findings"
     lines = [
         "---",
+        f"harness: {json.dumps(harness)}",
+        f"harness_source: {json.dumps(harness_source)}",
         f"model: {model_value}",
         f"model_source: {json.dumps(model_source)}",
         f"reasoning: {reasoning_value}",
@@ -161,6 +165,8 @@ def render_review_markdown(
 def render_review_failure_markdown(
     error: str,
     *,
+    harness: str,
+    harness_source: str,
     model: str | None,
     model_source: str,
     reasoning: str | None,
@@ -172,6 +178,8 @@ def render_review_failure_markdown(
     return "\n".join(
         [
             "---",
+            f"harness: {json.dumps(harness)}",
+            f"harness_source: {json.dumps(harness_source)}",
             f"model: {model_value}",
             f"model_source: {json.dumps(model_source)}",
             f"reasoning: {reasoning_value}",

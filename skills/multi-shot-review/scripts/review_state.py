@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""State management and runner helpers for multi-shot Codex reviews."""
+"""State management and runner helpers for multi-shot reviews."""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from harnesses import HarnessError, ResolvedProfile, get_harness, resolve_profile
 from review_result import (
     RESULT_SCHEMA_VERSION,
     RESULT_SCHEMA_PATH,
@@ -35,8 +36,15 @@ from review_result import (
 )
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 MAX_ACTIVE_SLICES = 10
+HARNESS_SOURCES = frozenset(
+    {
+        "slice-override",
+        "configured-default",
+        "built-in-default",
+    }
+)
 EXECUTION_SOURCES = frozenset(
     {
         "slice-override",
@@ -70,6 +78,17 @@ def _validate_execution_choice(
         raise ReviewStateError(
             f"{owner} {field} must be null exactly when {field}_source is harness-default"
         )
+
+
+def _validate_harness_choice(value: Any, source: Any, *, owner: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ReviewStateError(f"{owner} must have a harness string")
+    try:
+        get_harness(value)
+    except HarnessError as exc:
+        raise ReviewStateError(f"{owner} has invalid harness: {exc}") from exc
+    if source not in HARNESS_SOURCES:
+        raise ReviewStateError(f"{owner} has invalid harness_source")
 
 
 def now_iso() -> str:
@@ -439,6 +458,38 @@ class LockedReviewState(AbstractContextManager["ReviewState"]):
         self.state = None
 
 
+class LockedClassifierSession(AbstractContextManager[None]):
+    """Prevent overlapping classifiers and make abandoned attempts detectable."""
+
+    def __init__(self, review_dir: Path):
+        self.review_dir = review_dir.resolve()
+        self._fh: Any = None
+
+    def __enter__(self) -> None:
+        try:
+            self.review_dir.mkdir(parents=True, exist_ok=True)
+            self._fh = (self.review_dir / "_classifier.lock").open(
+                "a+", encoding="utf-8"
+            )
+            fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            self._release()
+            raise ReviewStateError("classifier is already running") from exc
+        except OSError as exc:
+            self._release()
+            raise ReviewStateError(f"could not open classifier lock: {exc}") from exc
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+        self._release()
+        return False
+
+    def _release(self) -> None:
+        if self._fh is not None:
+            fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
+            self._fh.close()
+            self._fh = None
+
+
 class ReviewState:
     """Rich wrapper around the persisted review session state."""
 
@@ -464,6 +515,7 @@ class ReviewState:
                 "root": str(root.resolve()),
                 "target": target,
             },
+            "classifications": [],
             "slices": {},
             "history": [],
             "completed": False,
@@ -486,6 +538,10 @@ class ReviewState:
     @classmethod
     def locked(cls, review_dir: Path) -> LockedReviewState:
         return LockedReviewState(review_dir)
+
+    @classmethod
+    def classifier_locked(cls, review_dir: Path) -> LockedClassifierSession:
+        return LockedClassifierSession(review_dir)
 
     def save(self) -> None:
         tmp_name: str | None = None
@@ -564,6 +620,10 @@ class ReviewState:
             raise ReviewStateError(f"state session has invalid target: {exc}") from exc
         if not isinstance(data.get("slices"), dict):
             raise ReviewStateError("state slices must be an object")
+        if not isinstance(data.get("classifications"), list):
+            raise ReviewStateError("state classifications must be an array")
+        for classification in data["classifications"]:
+            self._validate_classification(classification)
         if not isinstance(data.get("history"), list):
             raise ReviewStateError("state history must be an array")
         if not isinstance(data.get("completed"), bool):
@@ -592,6 +652,11 @@ class ReviewState:
                     raise ReviewStateError(f"prompt slice {name!r} must have prompt text")
             if not isinstance(item.get("cwd"), str) or not item["cwd"]:
                 raise ReviewStateError(f"slice {name!r} must have cwd")
+            _validate_harness_choice(
+                item.get("harness"),
+                item.get("harness_source"),
+                owner=f"slice {name!r}",
+            )
             _validate_execution_choice(
                 item.get("model"),
                 item.get("model_source"),
@@ -714,6 +779,11 @@ class ReviewState:
             field="model",
             owner=f"slice {slice_name!r} run",
         )
+        _validate_harness_choice(
+            run.get("harness"),
+            run.get("harness_source"),
+            owner=f"slice {slice_name!r} run",
+        )
         _validate_execution_choice(
             run.get("reasoning"),
             run.get("reasoning_source"),
@@ -723,6 +793,59 @@ class ReviewState:
         definition_version = run.get("definition_version", 1)
         if type(definition_version) is not int or definition_version < 1:
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid definition version")
+
+    @staticmethod
+    def _validate_classification(value: Any) -> None:
+        if not isinstance(value, dict):
+            raise ReviewStateError("state classification entries must be objects")
+        expected = {
+            "id",
+            "harness",
+            "model",
+            "reasoning",
+            "started_at",
+            "ended_at",
+            "status",
+            "exit_code",
+        }
+        if set(value) != expected:
+            raise ReviewStateError("state classification entry has invalid fields")
+        for field in ("id", "harness", "started_at"):
+            if not isinstance(value[field], str) or not value[field]:
+                raise ReviewStateError(f"state classification has invalid {field}")
+        try:
+            get_harness(value["harness"])
+        except HarnessError as exc:
+            raise ReviewStateError(f"state classification has invalid harness: {exc}") from exc
+        for field in ("model", "reasoning", "ended_at"):
+            if value[field] is not None and (
+                not isinstance(value[field], str) or not value[field].strip()
+            ):
+                raise ReviewStateError(f"state classification has invalid {field}")
+        if value["status"] not in {"running", "succeeded", "failed"}:
+            raise ReviewStateError("state classification has invalid status")
+        if value["exit_code"] is not None and type(value["exit_code"]) is not int:
+            raise ReviewStateError("state classification has invalid exit_code")
+        status = value["status"]
+        ended_at = value["ended_at"]
+        exit_code = value["exit_code"]
+        if status == "running":
+            if ended_at is not None or exit_code is not None:
+                raise ReviewStateError(
+                    "state running classification must not have terminal fields"
+                )
+        elif ended_at is None or exit_code is None:
+            raise ReviewStateError(
+                "state terminal classification must have terminal fields"
+            )
+        elif status == "succeeded" and exit_code != 0:
+            raise ReviewStateError(
+                "state succeeded classification must have exit_code 0"
+            )
+        elif status == "failed" and exit_code == 0:
+            raise ReviewStateError(
+                "state failed classification must have nonzero exit_code"
+            )
 
     @staticmethod
     def _validate_native_target(slice_name: str, target: Any) -> None:
@@ -757,6 +880,50 @@ class ReviewState:
         if "/" in name or "\\" in name or name in {".", ".."}:
             raise ReviewStateError("slice names cannot contain path separators or dot names")
 
+    def start_classification(self, profile: ResolvedProfile) -> str:
+        classification_id = uuid.uuid4().hex
+        self.data["classifications"].append(
+            {
+                "id": classification_id,
+                "harness": profile.harness,
+                "model": profile.model,
+                "reasoning": profile.reasoning,
+                "started_at": now_iso(),
+                "ended_at": None,
+                "status": "running",
+                "exit_code": None,
+            }
+        )
+        return classification_id
+
+    def recover_running_classifications(self) -> int:
+        """Fail attempts abandoned after their exclusive process lock was released."""
+
+        recovered = 0
+        for item in self.data["classifications"]:
+            if item["status"] != "running":
+                continue
+            item["ended_at"] = now_iso()
+            item["exit_code"] = 1
+            item["status"] = "failed"
+            recovered += 1
+        return recovered
+
+    def complete_classification(self, classification_id: str, exit_code: int) -> None:
+        matches = [
+            item
+            for item in self.data["classifications"]
+            if item["id"] == classification_id
+        ]
+        if len(matches) != 1:
+            raise ReviewStateError(f"classification not found: {classification_id}")
+        item = matches[0]
+        if item["status"] != "running":
+            raise ReviewStateError(f"classification is already complete: {classification_id}")
+        item["ended_at"] = now_iso()
+        item["exit_code"] = exit_code
+        item["status"] = "succeeded" if exit_code == 0 else "failed"
+
     def add_slice(
         self,
         *,
@@ -765,6 +932,8 @@ class ReviewState:
         target: dict[str, Any] | None,
         prompt: str | None,
         cwd: Path,
+        harness: str = "codex",
+        harness_source: str = "built-in-default",
         model: str | None = None,
         model_source: str | None = None,
         reasoning: str | None = None,
@@ -794,6 +963,7 @@ class ReviewState:
                 raise ReviewStateError("prompt slices cannot be combined with native target flags")
             if not prompt or not prompt.strip():
                 raise ReviewStateError("prompt slices require non-empty prompt text")
+        _validate_harness_choice(harness, harness_source, owner="slice")
         if model_source is None:
             model_source = "harness-default" if model is None else "slice-override"
         if reasoning_source is None:
@@ -818,6 +988,8 @@ class ReviewState:
             "target": target,
             "prompt": prompt,
             "cwd": str(cwd.resolve()),
+            "harness": harness,
+            "harness_source": harness_source,
             "model": model,
             "model_source": model_source,
             "reasoning": reasoning,
@@ -975,6 +1147,8 @@ class ReviewState:
                 "runner_key": _process_key(os.getpid()),
                 "error": None,
                 "definition_version": item.get("definition_version", 1),
+                "harness": item["harness"],
+                "harness_source": item["harness_source"],
                 "model": item.get("model"),
                 "model_source": item["model_source"],
                 "reasoning": item.get("reasoning"),
@@ -1082,6 +1256,8 @@ class ReviewState:
                     output_path,
                     render_review_markdown(
                         findings or [],
+                        harness=run["harness"],
+                        harness_source=run["harness_source"],
                         model=run.get("model"),
                         model_source=run["model_source"],
                         reasoning=run.get("reasoning"),
@@ -1350,6 +1526,8 @@ class ReviewState:
             Path(run["output_file"]),
             render_review_markdown(
                 run.get("findings") or [],
+                harness=run["harness"],
+                harness_source=run["harness_source"],
                 model=run.get("model"),
                 model_source=run["model_source"],
                 reasoning=run.get("reasoning"),
@@ -1388,6 +1566,8 @@ class ReviewState:
         previous_archive = run.get("findings_archive")
         rendered = render_review_markdown(
             run.get("findings") or [],
+            harness=run["harness"],
+            harness_source=run["harness_source"],
             model=run.get("model"),
             model_source=run["model_source"],
             reasoning=run.get("reasoning"),
@@ -1506,21 +1686,6 @@ class ReviewState:
 
 def build_review_command(slice_data: dict[str, Any], output_file: Path) -> tuple[list[str], str | None]:
     task_prompt = build_task_context_prompt(output_file.parent)
-    cmd = [
-        "codex",
-        "exec",
-        "--ephemeral",
-        "--sandbox",
-        "read-only",
-    ]
-    if slice_data.get("model") is not None:
-        cmd.extend(["-m", slice_data["model"]])
-    if slice_data.get("reasoning") is not None:
-        cmd.extend(
-            ["-c", f'model_reasoning_effort="{slice_data["reasoning"]}"']
-        )
-    cmd.extend(["-c", "project_doc_fallback_filenames=[]"])
-    cmd.extend(["--output-schema", str(RESULT_SCHEMA_PATH)])
     session_target = slice_data.get("session_target")
     target = (
         _native_target_from_session(session_target)
@@ -1558,8 +1723,28 @@ def build_review_command(slice_data: dict[str, Any], output_file: Path) -> tuple
         else "Review this target comprehensively for actionable defects."
     )
     prompt = f"{task_prompt}{target_prompt}\nSlice instructions:\n{slice_prompt}"
-    cmd.extend(["-o", str(output_file), prompt])
-    return cmd, None
+    profile = ResolvedProfile(
+        harness=slice_data.get("harness", "codex"),
+        harness_source=slice_data.get("harness_source", "built-in-default"),
+        model=slice_data.get("model"),
+        model_source=slice_data.get(
+            "model_source",
+            "harness-default" if slice_data.get("model") is None else "slice-override",
+        ),
+        reasoning=slice_data.get("reasoning"),
+        reasoning_source=slice_data.get(
+            "reasoning_source",
+            "harness-default"
+            if slice_data.get("reasoning") is None
+            else "slice-override",
+        ),
+    )
+    invocation = get_harness(profile.harness).review_invocation(
+        prompt=prompt,
+        output_file=output_file,
+        profile=profile,
+    )
+    return invocation.command, invocation.input_text
 
 
 def _pid_is_alive(pid: int) -> bool:
@@ -1690,6 +1875,20 @@ def run_reserved_review(
             slice_data,
         )
         _write_completed_process_logs(proc, stdout_log, stderr_log)
+        if proc.returncode == 0:
+            try:
+                get_harness(slice_data.get("harness", "codex")).materialize_review_result(
+                    stdout_log=stdout_log,
+                    output_file=enriched.output_file,
+                )
+            except (HarnessError, OSError, UnicodeError) as exc:
+                _append_runner_error(stderr_log, str(exc))
+                proc = subprocess.CompletedProcess(
+                    cmd,
+                    1,
+                    proc.stdout,
+                    proc.stderr,
+                )
     except subprocess.TimeoutExpired as exc:
         timeout_msg = f"review command timed out after {exc.timeout} seconds"
         proc = subprocess.CompletedProcess(cmd, 124, exc.stdout or "", exc.stderr or "")
@@ -1704,6 +1903,16 @@ def run_reserved_review(
         _write_completed_process_logs(proc, stdout_log, stderr_log)
         return ReviewExecution(reservation=enriched, proc=proc, stdout_log=stdout_log, stderr_log=stderr_log, launch_error=exc)
     return ReviewExecution(reservation=enriched, proc=proc, stdout_log=stdout_log, stderr_log=stderr_log)
+
+
+def _append_runner_error(stderr_log: Path, error: str) -> None:
+    try:
+        with stderr_log.open("a", encoding="utf-8") as fh:
+            if stderr_log.stat().st_size:
+                fh.write("\n")
+            fh.write(f"[runner] {error}\n")
+    except (OSError, UnicodeError):
+        pass
 
 
 def evaluate_completed_process(
@@ -1793,6 +2002,10 @@ def _write_failure_review_artifact(
             reservation.output_file,
             render_review_failure_markdown(
                 error,
+                harness=reservation.slice_data.get("harness", "codex"),
+                harness_source=reservation.slice_data.get(
+                    "harness_source", "built-in-default"
+                ),
                 model=reservation.slice_data.get("model"),
                 model_source=reservation.slice_data["model_source"],
                 reasoning=reservation.slice_data.get("reasoning"),
@@ -2213,6 +2426,10 @@ def parse_add_slice_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--commit")
     parser.add_argument("--prompt-file", type=Path)
     parser.add_argument(
+        "--harness",
+        help="Use a specific harness for this slice instead of the configured default.",
+    )
+    parser.add_argument(
         "--model",
         help="Use a specific model for this slice instead of the configured or harness default.",
     )
@@ -2276,34 +2493,28 @@ def add_slice_from_args(args: argparse.Namespace, *, stdin: Any = sys.stdin) -> 
             if args.user_directive_file is not None
             else None
         )
-        if args.model is not None:
-            model = args.model
-            model_source = "slice-override"
-        elif config.slice_default_model is not None:
-            model = config.slice_default_model
-            model_source = "configured-default"
-        else:
-            model = None
-            model_source = "harness-default"
-        if args.reasoning is not None:
-            reasoning = args.reasoning
-            reasoning_source = "slice-override"
-        elif config.slice_default_reasoning is not None:
-            reasoning = config.slice_default_reasoning
-            reasoning_source = "configured-default"
-        else:
-            reasoning = None
-            reasoning_source = "harness-default"
+        try:
+            profile = resolve_profile(
+                config.slice_default,
+                harness=args.harness,
+                model=args.model,
+                reasoning=args.reasoning,
+                override_source="slice-override",
+            )
+        except HarnessError as exc:
+            raise ReviewStateError(str(exc)) from exc
         state.add_slice(
             name=args.name,
             mode=mode,
             target=target,
             prompt=prompt,
             cwd=cwd,
-            model=model,
-            model_source=model_source,
-            reasoning=reasoning,
-            reasoning_source=reasoning_source,
+            harness=profile.harness,
+            harness_source=profile.harness_source,
+            model=profile.model,
+            model_source=profile.model_source,
+            reasoning=profile.reasoning,
+            reasoning_source=profile.reasoning_source,
             source="user" if user_directive is not None else "classifier",
             user_directive=user_directive,
         )
