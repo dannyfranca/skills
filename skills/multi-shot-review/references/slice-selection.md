@@ -36,9 +36,9 @@ preserving its runs and history. Use `remove_slice.py` to tombstone an obsolete 
 mutations remain if classification stops early; the next clean classifier reasons from that state.
 To revise an active classifier slice, remove it and add the same name with its new definition.
 
-Pass `--model <model>` only when a specific model materially suits a slice. Omitting it uses the
-configured slice default or the harness default. Apply the same rule to `--reasoning <effort>`.
-Both selections are persisted with the slice and snapshotted for every run.
+Pass `--harness <harness>` only when a specific harness materially suits a slice. Apply the same
+rule to `--model <model>` and `--reasoning <effort>`. Omitting them uses the configured slice
+profile or harness defaults. All selections are persisted with the slice and snapshotted per run.
 
 Classifier calls normally omit `--user-directive-file`. A parent acting on an explicit user request
 supplies that file, making the mutation user-controlled. A classifier may pass a forwarded

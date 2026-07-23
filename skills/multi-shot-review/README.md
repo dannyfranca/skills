@@ -12,31 +12,43 @@ Configuration files are named:
 ```
 
 The resolver starts at `$HOME` and loads each configuration down the directory chain to the
-repository root. Settings merge independently; the nearest configured value wins.
+repository root. The nearest value wins. Execution profiles are atomic: a nearer `classifier` or
+`slice_default` table replaces the whole parent profile.
 
 All settings are optional:
 
 ```toml
 review_file = "REVIEW"
-classifier_model = "model-name"
-classifier_reasoning = "high"
-slice_default_model = "model-name"
-slice_default_reasoning = "high"
+
+[classifier]
+harness = "codex"
+model = "model-name"
+reasoning = "high"
+
+[slice_default]
+harness = "claude-code"
+model = "sonnet"
+reasoning = "high"
 ```
 
 - `review_file`: review-instruction basename. Defaults to `REVIEW`. It must not contain a path or
   the `.md` suffix.
-- `classifier_model`: model used by the slice classifier.
-- `classifier_reasoning`: reasoning effort used by the slice classifier.
-- `slice_default_model`: model used when a slice does not choose one explicitly.
-- `slice_default_reasoning`: reasoning effort used when a slice does not choose one explicitly.
+- `classifier`: harness profile used by the slice classifier.
+- `slice_default`: harness profile used when a slice does not override it.
+- `harness`: required profile field. Supported IDs are `codex` and `claude-code`.
+- `model` and `reasoning`: optional, non-empty, harness-specific strings.
 
-Unknown settings and invalid values are rejected.
+Unknown settings, incomplete profiles, invalid values, and the former flat model/reasoning keys are
+rejected. With no profile, the harness defaults to `codex`; model and reasoning remain the harness
+defaults.
 
-When no model or reasoning is configured, the corresponding command omits `-m` or
-`model_reasoning_effort` and lets the Codex harness select its default.
-`classify_slices.py --model/--reasoning` override the configured classifier defaults.
-`add_slice.py --model/--reasoning` override the configured slice defaults for that slice.
+`classify_slices.py` and `add_slice.py` accept `--harness`, `--model`, and `--reasoning` overrides.
+Changing the configured harness without also overriding model/reasoning clears those choices, so a
+Codex model cannot leak into Claude Code or vice versa. An explicitly selected unavailable harness
+fails; it never falls back silently.
+
+`REVIEW.md` guidance may tell the classifier to select a harness for applicable slices. For adding
+another built-in, see [Extending review harnesses](docs/extending-harnesses.md).
 
 ## Review-instruction resolution
 
@@ -70,16 +82,18 @@ The resolved content is classifier-only. The classifier receives scoped guidance
 paths or loader details. Review slices do not receive it automatically. When relevant, the
 classifier translates only the concrete requirement into a focused slice prompt.
 
-## Model and reasoning audit data
+## Harness audit data
 
-Model and reasoning selections are durable:
+Execution selections are durable:
 
-- Slice definitions store `model`, `model_source`, `reasoning`, and `reasoning_source`.
-- Every run snapshots all four fields, so later configuration or slice-definition changes do not
+- Slice definitions store `harness`, `model`, `reasoning`, and their source fields.
+- Every run snapshots all six fields, so later configuration or slice-definition changes do not
   alter prior run identity.
 - Successful review Markdown artifacts include matching YAML frontmatter.
+- Classifier attempts store only harness/model/reasoning, timestamps, status, and exit code.
 
-Each source field is one of:
+Harness sources are `slice-override`, `configured-default`, or `built-in-default`. Model and
+reasoning sources are:
 
 - `slice-override`
 - `configured-default`
@@ -118,5 +132,5 @@ from the prior run. Failed follow-ups leave them active.
 
 When a run becomes terminal, its finding records move to `history/<run-id>.json`; `_state.json`
 keeps one archive reference. Generated Markdown remains beside the run and includes ignored or
-superseded resolutions for human audit. Sessions use state schema version 2; older in-progress
+superseded resolutions for human audit. Sessions use state schema version 3; older in-progress
 sessions are intentionally unsupported.

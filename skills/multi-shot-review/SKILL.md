@@ -1,6 +1,6 @@
 ---
 name: multi-shot-review
-description: Review code changes through classified, narrowly scoped parallel Codex passes. Use for iterative review barriers by default or one-wave review reports when explicitly requested.
+description: Review code changes through classified, narrowly scoped parallel harness passes. Use for iterative review barriers by default or one-wave review reports when explicitly requested.
 ---
 
 # Multi-Shot Review
@@ -33,6 +33,8 @@ contains exact task context.
 python3 "$SKILL_DIR/scripts/classify_slices.py" \
   --review-dir "$REVIEW_DIR"
 ```
+
+Use `--harness`, `--model`, or `--reasoning` only to override the configured classifier profile.
 
 When useful, pass verbatim supplemental user directions with
 `--user-directives-file <path>` and advisory parent context with
@@ -116,6 +118,7 @@ Only an explicit user request authorizes parent-driven mutation. Preserve that r
 python3 "$SKILL_DIR/scripts/add_slice.py" \
   --review-dir "$REVIEW_DIR" \
   --name "<slice-name>" \
+  --harness "<harness>" \
   --prompt-file "<prompt-file>" \
   --user-directive-file "<verbatim-user-request-file>"
 ```
