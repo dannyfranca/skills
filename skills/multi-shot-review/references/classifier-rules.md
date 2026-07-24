@@ -40,12 +40,11 @@ effectively.
 
 ## Reclassification
 
-Reason from current active slices, tombstones, runs, history, and the current Git target. Keep
-suitable slices unchanged. Consolidate redundant classifier-owned slices when broader coverage
-better controls cognitive load, including after runs exist. Add missing slices, remove obsolete
-ones, and reactivate an appropriate tombstone by adding its existing name. At the ceiling, remove
-or consolidate an active slice before adding a replacement. Partial earlier classification is
-valid context.
+Slice prompts are durable boundaries, not change logs. Preserve them unless **coverage drift**
+makes the set incomplete, mis-scoped, obsolete, or incoherent.
+
+In-scope remediation reruns unchanged. On drift, mutate only affected slices; reuse tombstones,
+consolidate when needed, respect the ceiling, and preserve partial mutations.
 
 ## Authority
 

@@ -47,8 +47,9 @@ The launcher automatically resolves global and changed-path review instruction c
 classifier-only context. Reviewers receive only concrete requirements that the classifier
 deliberately translates into focused slice prompts.
 
-Run classification again after material target changes, partial classifier failure, or a user
-request to reconsider slices. Successful prior mutations remain context.
+Reclassify on **coverage drift**: the target, task, or guidance makes slices incomplete, mis-scoped,
+obsolete, or incoherent. Also reclassify after partial failure or explicit request. Otherwise rerun
+incomplete slices.
 
 4. Run one review wave exclusively in the foreground with a timeout of at least one hour:
 
