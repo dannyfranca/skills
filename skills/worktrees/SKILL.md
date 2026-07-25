@@ -5,7 +5,7 @@ description: Git worktree location and setup conventions. Use when creating a wo
 
 Ensure the source branch is up to date with the remote branch, or create from remote if needed.
 
-Create worktrees at `<repo-root>/.worktrees/<task-slug>`.
+Create worktrees at `<repo-root>/.worktrees/<YYYYMMDD-HHMM>-<repo-name>-<task-slug>`.
 
 Use a short kebab-case task slug. Ensure `.worktrees/` is gitignored.
 
