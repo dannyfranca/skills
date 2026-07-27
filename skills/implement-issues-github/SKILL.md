@@ -11,6 +11,7 @@ Read [`../to-tickets-gh/references/tracker.md`](../to-tickets-gh/references/trac
 - Epic(s): their open descendant leaves
 - `drain-ready`: repeatedly query the repository-wide Ready frontier until empty
 - any combination of explicit leaves and Epics
+- One PR per leaf
 
 ## Modes
 
