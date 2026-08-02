@@ -32,10 +32,13 @@ If an explicit leaf is blocked outside the selection, show the required expansio
    - Continue when GitHub reflects all three changes.
 4. Derive a short kebab-case feature slug from its title. Use `$worktrees` to create `<repo-root>/.worktrees/issue-<leaf-number>-<feature-slug>` on branch `issue-<leaf-number>-<feature-slug>`. Continue when the hydrated worktree is on that branch.
 5. Implement it using `/implement`, then run `/multi-shot-review`. Continue when the review is quiet.
-6. Commit and push the branch. Open a ready-for-review PR whose body contains `Closes #<leaf-number>`. Continue when the commit, remote branch, and PR exist.
-7. Drive the leaf to its mode's completion state. Continue when GitHub reflects that state.
-8. Refresh dependent leaves. Close an Epic when all descendants close; reopen it when an open descendant appears. Continue when dependent labels and Epic states match their descendants.
-9.  Return to step 1 until the completion criterion holds.
+6. Commit and push the branch with `/micro-commits`.
+7. Open a `ready-for-review` PR whose body contains `Closes #<leaf-number>`.
+    - If on `autonomous` mode, merge the PR. Continue when the code is merged
+    - If on `review` mode, continue when the commit, remote branch, and PR exist
+8. Drive the leaf to its mode's completion state. Continue when GitHub reflects that state.
+9. Refresh dependent leaves. Close an Epic when all descendants close; reopen it when an open descendant appears. Continue when dependent labels and Epic states match their descendants.
+10. Return to step 1 until the completion criterion holds.
 
 ## Completion Criterion
 
