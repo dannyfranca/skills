@@ -10,9 +10,9 @@ Read [`../to-tickets-gh/references/tracker.md`](../to-tickets-gh/references/trac
 - leaf issue(s): exactly those issues
 - Epic(s): their open descendant leaves
 - `drain-ready`: repeatedly query the repository-wide Ready frontier until empty
-- any combination of explicit leaves and Epics
+- any combination of explicit leaves and Epics, where Epics resolve to leaves
 - One PR per leaf
-- If pointed to an Epic, loop over one leaf at a time
+- If pointed to a(n) Epic(s), loop over one leaf at a time
 
 ## Modes
 
@@ -25,13 +25,17 @@ If an explicit leaf is blocked outside the selection, show the required expansio
 
 1. Refresh ticket states: label every unblocked, unassigned Backlog leaf `ready-for-agent`; remove that label from blocked leaves. Continue when every affected label matches the refreshed state.
 2. Select an unassigned `ready-for-agent` leaf in scope. Continue with one leaf, or evaluate the completion criterion when none remain.
-3. Assign it, add `in-progress`, and remove `ready-for-agent`. Continue when GitHub reflects all three changes.
-4. Derive a short kebab-case feature slug from its title. Use `$worktrees` to create `<repo-root>/.worktrees/issue-<number>-<feature-slug>` on branch `issue-<number>-<feature-slug>`. Continue when the hydrated worktree is on that branch.
+3. Mutate issue Metadata:
+   - Assign it to the user you are authenticated as
+   - add `in-progress`
+   - remove `ready-for-agent`
+   - Continue when GitHub reflects all three changes.
+4. Derive a short kebab-case feature slug from its title. Use `$worktrees` to create `<repo-root>/.worktrees/issue-<leaf-number>-<feature-slug>` on branch `issue-<leaf-number>-<feature-slug>`. Continue when the hydrated worktree is on that branch.
 5. Implement it using `/implement`, then run `/multi-shot-review`. Continue when the review is quiet.
-6. Commit and push the branch. Open a ready-for-review PR whose body contains `Closes #<number>`. Continue when the commit, remote branch, and PR exist.
+6. Commit and push the branch. Open a ready-for-review PR whose body contains `Closes #<leaf-number>`. Continue when the commit, remote branch, and PR exist.
 7. Drive the leaf to its mode's completion state. Continue when GitHub reflects that state.
 8. Refresh dependent leaves. Close an Epic when all descendants close; reopen it when an open descendant appears. Continue when dependent labels and Epic states match their descendants.
-9. Return to step 1 until the completion criterion holds.
+9.  Return to step 1 until the completion criterion holds.
 
 ## Completion Criterion
 
