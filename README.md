@@ -23,4 +23,5 @@ npx skills add dannyfranca/skills --skill multi-shot-review
 - `multi-shot-review` — Classify risky changes into narrow, repeated Codex review passes.
 - `to-tickets-gh` — Publish tracer-bullet tickets as GitHub issues.
 - `to-tickets-local` — Publish tracer-bullet tickets as local files.
+- `update-codex-await` — Rebase, test, build, and install the long-await Codex fork.
 - `worktrees` — Apply Git worktree setup conventions.
