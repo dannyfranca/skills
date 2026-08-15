@@ -107,7 +107,7 @@ prepare() {
   read_timeout
 
   local version release_tag remote_ref expected_remote_oid patch_commit patch_parent old_tag
-  local update_branch installed_commit
+  local update_branch installed_commit upstream_version
   version=$(npm view @openai/codex version)
   [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "npm returned non-stable version: $version"
   release_tag="rust-v${version}"
@@ -127,9 +127,11 @@ prepare() {
   [[ -n "$old_tag" ]] || die "$patch_branch must contain one patch commit atop a stable release tag"
 
   installed_commit=$(sed -n '1p' "$install_state_dir/installed-commit" 2>/dev/null || true)
+  upstream_version=$("$install_dir/codex-upstream" --version 2>/dev/null || true)
   if [[ "$patch_parent" == "$(git -C "$repo_dir" rev-parse "${release_tag}^{commit}")" \
     && "$installed_commit" == "$patch_commit" \
-    && -x "$install_dir/codex" ]]; then
+    && -x "$install_dir/codex" \
+    && "$upstream_version" == "codex-cli $version" ]]; then
     printf 'UP_TO_DATE: Codex %s, patch %s\n' "$version" "$patch_commit"
     return
   fi
@@ -200,6 +202,7 @@ finish() {
     git -C "$repo_dir" push origin "refs/tags/await-v${version}"
   fi
 
+  npm install --global "@openai/codex@${version}"
   mkdir -p "$install_dir" "$install_state_dir"
   temp_binary="$install_dir/.codex-await.new"
   install -m 0755 "$binary" "$temp_binary"
