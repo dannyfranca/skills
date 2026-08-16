@@ -14,7 +14,7 @@ die() {
 
 require_commands() {
   local command_name
-  for command_name in git gh npm cargo curl tar strip uname; do
+  for command_name in git gh npm cargo curl tar strip uname find cmp; do
     command -v "$command_name" >/dev/null || die "missing command: $command_name"
   done
   [[ "$(uname -s)" == "Linux" && "$(uname -m)" == "x86_64" ]] \
@@ -40,6 +40,30 @@ read_timeout() {
   local timeout
   timeout=$(sed -n 's/^[[:space:]]*background_terminal_max_timeout[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*$/\1/p' "$config_file" 2>/dev/null | tail -n 1)
   printf 'Configured background terminal timeout: %s ms\n' "${timeout:-default}"
+}
+
+find_upstream_code_mode_host() {
+  local npm_root="$1"
+  local -a candidates
+  mapfile -t candidates < <(
+    find "$npm_root/@openai/codex/node_modules/@openai" \
+      -type f -path '*/vendor/*/bin/codex-code-mode-host' -print 2>/dev/null
+  )
+  [[ "${#candidates[@]}" -eq 1 ]] \
+    || die "expected one official codex-code-mode-host, found ${#candidates[@]}"
+  printf '%s\n' "${candidates[0]}"
+}
+
+verify_installed_cli() {
+  local version="$1"
+  [[ "$($install_dir/codex --version)" == "codex-cli $version" ]] \
+    || die "installed patched Codex version mismatch"
+  [[ "$($install_dir/codex-upstream --version)" == "codex-cli $version" ]] \
+    || die "installed official Codex version mismatch"
+  [[ -x "$install_dir/codex-code-mode-host" ]] \
+    || die "missing installed codex-code-mode-host"
+  "$install_dir/codex-code-mode-host" --help >/dev/null \
+    || die "installed codex-code-mode-host failed its smoke test"
 }
 
 ensure_nextest() {
@@ -107,7 +131,7 @@ prepare() {
   read_timeout
 
   local version release_tag remote_ref expected_remote_oid patch_commit patch_parent old_tag
-  local update_branch installed_commit upstream_version
+  local update_branch installed_commit upstream_version npm_root upstream_host
   version=$(npm view @openai/codex version)
   [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "npm returned non-stable version: $version"
   release_tag="rust-v${version}"
@@ -128,10 +152,15 @@ prepare() {
 
   installed_commit=$(sed -n '1p' "$install_state_dir/installed-commit" 2>/dev/null || true)
   upstream_version=$("$install_dir/codex-upstream" --version 2>/dev/null || true)
+  npm_root=$(npm root -g)
+  upstream_host=$(find_upstream_code_mode_host "$npm_root")
   if [[ "$patch_parent" == "$(git -C "$repo_dir" rev-parse "${release_tag}^{commit}")" \
     && "$installed_commit" == "$patch_commit" \
     && -x "$install_dir/codex" \
-    && "$upstream_version" == "codex-cli $version" ]]; then
+    && -x "$install_dir/codex-code-mode-host" \
+    && -x "$upstream_host" ]] \
+    && cmp --silent "$install_dir/codex-code-mode-host" "$upstream_host" \
+    && [[ "$upstream_version" == "codex-cli $version" ]]; then
     printf 'UP_TO_DATE: Codex %s, patch %s\n' "$version" "$patch_commit"
     return
   fi
@@ -167,7 +196,8 @@ finish() {
   local release_tag="${update_state[1]}"
   local expected_remote_oid="${update_state[2]}"
   local update_branch="${update_state[3]}"
-  local head parent binary npm_root upstream_launcher temp_binary temp_link state_temp
+  local head parent binary npm_root upstream_launcher upstream_host
+  local temp_binary temp_host temp_link state_temp
   head=$(git -C "$repo_dir" rev-parse HEAD)
   parent=$(git -C "$repo_dir" rev-parse HEAD^)
   [[ "$parent" == "$(git -C "$repo_dir" rev-parse "${release_tag}^{commit}")" ]] \
@@ -204,17 +234,27 @@ finish() {
 
   npm install --global "@openai/codex@${version}"
   mkdir -p "$install_dir" "$install_state_dir"
-  temp_binary="$install_dir/.codex-await.new"
-  install -m 0755 "$binary" "$temp_binary"
-  strip --strip-debug --strip-unneeded "$temp_binary"
-  mv "$temp_binary" "$install_dir/codex"
-
   npm_root=$(npm root -g)
   upstream_launcher="$npm_root/@openai/codex/bin/codex.js"
   [[ -x "$upstream_launcher" ]] || die "official npm Codex launcher not found: $upstream_launcher"
+  upstream_host=$(find_upstream_code_mode_host "$npm_root")
+  [[ -x "$upstream_host" ]] || die "official codex-code-mode-host is not executable: $upstream_host"
+
+  temp_binary="$install_dir/.codex-await.new"
+  install -m 0755 "$binary" "$temp_binary"
+  strip --strip-debug --strip-unneeded "$temp_binary"
+  temp_host="$install_dir/.codex-code-mode-host.new"
+  install -m 0755 "$upstream_host" "$temp_host"
   temp_link="$install_dir/.codex-upstream.new"
   ln -s "$upstream_launcher" "$temp_link"
+
+  "$temp_host" --help >/dev/null \
+    || die "staged codex-code-mode-host failed its smoke test"
+  mv "$temp_host" "$install_dir/codex-code-mode-host"
+  mv "$temp_binary" "$install_dir/codex"
   mv "$temp_link" "$install_dir/codex-upstream"
+
+  verify_installed_cli "$version"
 
   state_temp="$install_state_dir/.installed-commit.new"
   printf '%s\n' "$head" >"$state_temp"
@@ -226,8 +266,6 @@ finish() {
     git -C "$repo_dir" branch --delete "$update_branch"
   fi
 
-  "$install_dir/codex" --version
-  "$install_dir/codex-upstream" --version
   printf 'INSTALLED: %s (patch %s)\n' "$install_dir/codex" "$head"
 }
 

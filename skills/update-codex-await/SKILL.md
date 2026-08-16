@@ -14,6 +14,7 @@ disable-model-invocation: true
    - Non-empty stdin keeps upstream interactive bounds.
 4. If upstream now satisfies the contract without the patch, run `scripts/update.sh abort`. Report that the fork patch is obsolete; do not change the installed CLI.
 5. If cherry-pick conflicts exist, resolve only what is needed for the contract. Keep one patch commit atop the stable tag, then run `git cherry-pick --continue`.
-6. Run `scripts/update.sh finish`.
+6. Run `scripts/update.sh finish`. It installs and smoke-tests the version-matched
+   `codex-code-mode-host` beside the patched CLI.
 
 Never stash, reset user work, change Codex config, target prereleases, or run the full workspace test suite.
