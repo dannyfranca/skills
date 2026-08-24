@@ -314,12 +314,22 @@ def linux_active_paths(proc: Path = Path("/proc"), uid: int | None = None) -> se
             uid_line = next(line for line in status.splitlines() if line.startswith("Uid:"))
             if int(uid_line.split()[2]) != effective_uid:
                 continue
-            paths.add((process_dir / "cwd").resolve(strict=True))
         except FileNotFoundError:
             continue
         except PermissionError as exc:
             raise JanitorError(f"active-process detection denied for {process_dir}") from exc
         except (StopIteration, ValueError, OSError) as exc:
+            raise JanitorError(f"active-process detection failed for {process_dir}: {exc}") from exc
+        try:
+            paths.add((process_dir / "cwd").resolve(strict=True))
+        except FileNotFoundError:
+            continue
+        except PermissionError:
+            # Linux hides cwd for some non-dumpable same-user processes, such
+            # as the user systemd manager and desktop security services. Their
+            # unreadable cwd must not make process discovery unusable systemwide.
+            continue
+        except OSError as exc:
             raise JanitorError(f"active-process detection failed for {process_dir}: {exc}") from exc
     return paths
 

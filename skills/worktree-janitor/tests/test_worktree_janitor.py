@@ -1003,6 +1003,29 @@ class JanitorTests(unittest.TestCase):
 
         self.assertEqual(janitor_module.linux_active_paths(proc, uid=42), {active.resolve()})
 
+    def test_linux_activity_skips_same_user_process_with_unreadable_cwd(self) -> None:
+        proc = self.base / "proc"
+        readable = proc / "101"
+        blocked = proc / "202"
+        readable.mkdir(parents=True)
+        blocked.mkdir()
+        active = self.base / "linux-active"
+        active.mkdir()
+        for process in (readable, blocked):
+            (process / "status").write_text("Name:\ttest\nUid:\t7\t42\t42\t42\n", encoding="utf-8")
+        (readable / "cwd").symlink_to(active, target_is_directory=True)
+        (blocked / "cwd").symlink_to(self.base, target_is_directory=True)
+        original_resolve = Path.resolve
+
+        def resolve(path, *args, **kwargs):
+            if path == blocked / "cwd":
+                raise PermissionError("injected procfs restriction")
+            return original_resolve(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "resolve", autospec=True, side_effect=resolve):
+            paths = janitor_module.linux_active_paths(proc, uid=42)
+        self.assertEqual(paths, {active.resolve()})
+
     def test_linux_activity_failure_preserves_worktree(self) -> None:
         worktree = self.add_worktree("linux-audit-failure")
         missing_proc = self.base / "missing-proc"
