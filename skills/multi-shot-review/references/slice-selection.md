@@ -16,22 +16,20 @@ The session stores only a target descriptor:
 - `commit`: inspect the named commit.
 
 This is live Git context, not a pinned snapshot. Focused prompts state the target explicitly.
-Native slices receive the matching `--uncommitted`, `--base`, or `--commit` flag.
+The classifier writes that target into each complete slice prompt.
 
 ## Scoped classifier guidance
 
 The launcher may provide guidance already resolved to changed-path scopes. Discovery, precedence,
 source filenames, and loading are launcher responsibilities, not classifier responsibilities.
 
-Use applicable guidance when selecting slices. If it materially affects reviewer behavior,
-translate only the relevant concrete requirement into a focused slice prompt. Do not pass the full
-guidance, identify its source, or assume a native slice receives it.
-
-Repository instructions, explicit user directions, and built-in lens rules remain separate inputs.
+Use applicable guidance when selecting slices and deliver review policy directly in each prompt
+as specified by `classifier-rules.md`. Review-instruction discovery and inheritance remain the
+launcher's responsibility.
 
 ## State mutations
 
-Use `add_slice.py` for new focused or native slices. Adding a removed name reactivates it while
+Use `add_slice.py --prompt-file` for new slices. Adding a removed name reactivates it while
 preserving its runs and history. Use `remove_slice.py` to tombstone an obsolete slice. Successful
 mutations remain if classification stops early; the next clean classifier reasons from that state.
 To revise an active classifier slice, remove it and add the same name with its new definition.

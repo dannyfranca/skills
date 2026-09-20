@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Discover and render classifier-only REVIEW instructions."""
+"""Resolve scoped REVIEW policy for the classifier to include in slice prompts."""
 
 from __future__ import annotations
 

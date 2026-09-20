@@ -78,9 +78,19 @@ At project scopes, an override file masks the base file even when the override i
 global scope, an empty override falls through to a non-empty base file. Shared ancestor
 instructions are loaded once.
 
-The resolved content is classifier-only. The classifier receives scoped guidance without source
-paths or loader details. Review slices do not receive it automatically. When relevant, the
-classifier translates only the concrete requirement into a focused slice prompt.
+The classifier receives resolved guidance with its path scopes. Repository guidance overrides
+global guidance on conflicts; closer scopes override broader scopes; explicit user directions
+take precedence. The classifier carries applicable review policy directly into each complete
+slice prompt, preserving wording, scope, and precedence. The runner adds only the output-format
+contract, without additional review criteria.
+
+Without review policy, the classifier creates a broad review of the whole change when it fits
+comfortably in one session, or splits it into coherent content slices to control context. There
+are no mandatory lenses or slice counts. Reviewers may read any supporting context, but findings
+and review opinions must concern their assigned changes only.
+
+Classifier-created slices use `--prompt-file`, including whole-change reviews. The legacy native
+target flags remain available for explicit whole-target slices; they carry no scoped review policy.
 
 ## Harness audit data
 

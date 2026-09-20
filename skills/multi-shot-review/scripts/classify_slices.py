@@ -147,11 +147,8 @@ Review target: {json.dumps(target, sort_keys=True)}
 Inspect the target yourself with Git commands in the repository. Read changed code and applicable
 repository rules described by slice-selection.md.
 
-The tooling may provide already-resolved scoped guidance below. Treat it as classifier-only. Use it
-to select slices and, when material, translate only relevant concrete requirements into focused
-slice prompts. Never tell a reviewer to load the source guidance, copy it wholesale into a slice
-prompt, or assume a native slice receives it. When this guidance must govern reviewer behavior, use
-a focused slice prompt.
+The tooling provides resolved scoped guidance below. Apply it using the authority and reviewer
+prompt rules in classifier-rules.md.
 
 Additional scoped guidance:
 {review_instructions}
@@ -160,8 +157,8 @@ Manage slices only by executing these scripts:
 - add/reactivate: {add_slice}
 - remove: {remove_slice}
 
-Call them as many times as needed. For focused slices, send the complete reviewer prompt through
-`--prompt-file -`. For native slices, pass the session target flag.
+Call them as many times as needed. Send every complete reviewer prompt through `--prompt-file -`,
+including whole-change reviews.
 
 Each add may pass `--harness <harness>`, `--model <model>`, and/or `--reasoning <effort>` when a
 specific choice materially suits that slice. Otherwise omit the option; the tool applies its

@@ -58,23 +58,6 @@ class ReviewStateTests(unittest.TestCase):
         task_text = (self.review_dir / "task.md").read_text(encoding="utf-8")
         self.assertIn("Implement the requested API change.", task_text)
         self.assertIn("No related/future tasks registered.", task_text)
-        self.assertIn(
-            "Report actionable findings introduced, worsened, or made reachable by the change "
-            "when they have plausible production impact or imminent maintainability impact.",
-            task_text,
-        )
-        self.assertIn(
-            "Missing-test findings require a meaningful regression path.",
-            task_text,
-        )
-        self.assertIn(
-            "Return no findings when this threshold is unmet.",
-            task_text,
-        )
-        self.assertIn(
-            "An explicit lower threshold in the original user request takes precedence.",
-            task_text,
-        )
         self.assertTrue((self.review_dir / "related-tasks").is_dir())
         self.assertEqual(state.data["session"]["target"], {"kind": "uncommitted"})
 
@@ -2563,43 +2546,52 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("-c") + 1], 'model_reasoning_effort="high"')
         self.assertIn("project_doc_fallback_filenames=[]", cmd)
         self.assertEqual(cmd[-3:-1], ["-o", str(self.review_dir / "1-api.md")])
-        self.assertIn(str(self.review_dir / "task.md"), cmd[-1])
-        self.assertIn("Slice instructions:\nReview only API code.", cmd[-1])
+        self.assertEqual(
+            cmd[-1],
+            "Review only API code.\n\n"
+            f"Return only one JSON object matching {ROOT / 'references' / 'review-result.schema.json'}.\n"
+            "Do not wrap the JSON in Markdown fences or add prose outside it.\n",
+        )
 
-    def test_prompt_slice_describes_session_targets_without_native_flags(self) -> None:
-        targets = [
-            (
-                {"kind": "uncommitted"},
-                "Review the current staged, unstaged, and untracked changes.",
-            ),
-            (
-                {"kind": "base", "value": "main"},
-                "Review the current branch against base main, equivalent to `git diff main...HEAD`.",
-            ),
-            (
-                {"kind": "commit", "value": "abc123"},
-                "Review the changes introduced by commit abc123.",
-            ),
-        ]
-
-        for session_target, target_prompt in targets:
-            with self.subTest(target=session_target):
-                cmd, _ = build_review_command(
-                    {
-                        "name": "api",
-                        "mode": "prompt",
-                        "prompt": "Review only API code.",
-                        "session_target": session_target,
-                        "model": "gpt-5.5",
-                        "reasoning": "high",
-                    },
-                    self.review_dir / "1-api.md",
+    def test_runner_preserves_complete_scoped_policy_for_each_harness(self) -> None:
+        policy = (
+            "Review only naming in src/api.py from the current changes.\n"
+            f"Read {self.review_dir / 'task.md'} for the original request.\n"
+            "You may read dependencies for context; report only on assigned changes.\n"
+            "Repository policy for src/api.py: report unclear names even without production impact."
+        )
+        for harness in ("codex", "claude-code"):
+            with ReviewState.locked(self.review_dir) as state:
+                state.add_slice(
+                    name=harness,
+                    mode="prompt",
+                    target=None,
+                    prompt=policy,
+                    cwd=self.root,
+                    harness=harness,
                 )
+                state.save()
 
-                for native_flag in ("--uncommitted", "--base", "--commit"):
-                    self.assertNotIn(native_flag, cmd)
-                self.assertIn(target_prompt, cmd[-1])
-                self.assertIn("Slice instructions:\nReview only API code.", cmd[-1])
+        seen = []
+
+        def runner(cmd, cwd, input_text, output_file, slice_data):
+            seen.append(slice_data["harness"])
+            self.assertEqual(
+                cmd[-1],
+                policy + "\n\n"
+                f"Return only one JSON object matching {ROOT / 'references' / 'review-result.schema.json'}.\n"
+                "Do not wrap the JSON in Markdown fences or add prose outside it.\n",
+            )
+            if slice_data["harness"] == "claude-code":
+                payload = {"structured_output": {"schema_version": 1, "findings": []}}
+                return subprocess.CompletedProcess(cmd, 0, json.dumps(payload), "")
+            _write_review_result(output_file, [])
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        rc, summary = run_reviews(self.review_dir, command_runner=runner, stdout=io.StringIO())
+        self.assertEqual(rc, 0)
+        self.assertTrue(summary["ok"])
+        self.assertCountEqual(seen, ["codex", "claude-code"])
 
 
 class CliTests(unittest.TestCase):
@@ -2996,14 +2988,14 @@ class CliTests(unittest.TestCase):
         self.assertIn("must remain within", proc.stderr)
         self.assertEqual(ReviewState.load(review_dir).data["slices"], {})
 
-    def test_add_slice_rejects_more_than_ten_active_slices(self) -> None:
+    def test_add_slice_allows_content_slicing_beyond_former_limit(self) -> None:
         review_dir = Path(
             self.run_cli(
                 str(SCRIPTS / "init_state.py"),
                 "--root",
                 str(self.root),
                 "--task",
-                "Review at most ten slices.",
+                "Review each independent subsystem.",
             ).stdout.strip()
         )
         for index in range(10):
@@ -3017,7 +3009,7 @@ class CliTests(unittest.TestCase):
             )
             self.assertEqual(proc.returncode, 0, proc.stderr)
 
-        rejected = self.run_cli(
+        added = self.run_cli(
             str(SCRIPTS / "add_slice.py"),
             "--review-dir",
             str(review_dir),
@@ -3026,13 +3018,11 @@ class CliTests(unittest.TestCase):
             "--uncommitted",
         )
 
-        self.assertEqual(rejected.returncode, 2)
-        self.assertIn("maximum of 10 active slices", rejected.stderr)
-        self.assertIn("remove or consolidate", rejected.stderr)
+        self.assertEqual(added.returncode, 0, added.stderr)
         state = ReviewState.load(review_dir)
         self.assertEqual(
             sum(not item["removed"] for item in state.data["slices"].values()),
-            10,
+            11,
         )
 
     def test_compatibility_wrapper_creates_state(self) -> None:
@@ -3401,41 +3391,29 @@ class CliTests(unittest.TestCase):
         self.assertEqual(runs[0]["status"], "no_findings")
         self.assertEqual(invocation_log.read_text(encoding="utf-8").splitlines(), ["called"])
 
-    def test_run_reviews_rejects_legacy_state_above_ten_active_slices(self) -> None:
-        review_dir = Path(
-            self.run_cli(
-                str(SCRIPTS / "init_state.py"),
-                "--root",
-                str(self.root),
-                "--task",
-                "Reject oversized legacy review state.",
-            ).stdout.strip()
-        )
+    def test_run_reviews_runs_content_slices_beyond_former_limit(self) -> None:
+        review_dir = init_review_state(self.root, "Review each independent subsystem.")
         with ReviewState.locked(review_dir) as state:
-            for index in range(10):
+            for index in range(11):
                 state.add_slice(
                     name=f"slice-{index}",
-                    mode="native",
-                    target={"uncommitted": True},
-                    prompt=None,
+                    mode="prompt",
+                    target=None,
+                    prompt=f"Review the changes in subsystem {index}.",
                     cwd=self.root,
                 )
-            legacy = dict(state.data["slices"]["slice-9"])
-            legacy["name"] = "legacy-extra"
-            legacy["runs"] = []
-            state.data["slices"]["legacy-extra"] = legacy
             state.save()
 
-        proc = self.run_cli(
-            str(SCRIPTS / "run_reviews.py"),
-            "--review-dir",
-            str(review_dir),
+        rc, summary = run_reviews(
+            review_dir, command_runner=_writes_review_result([]), stdout=io.StringIO()
         )
 
-        self.assertEqual(proc.returncode, 1)
-        self.assertIn("11 active slices exceeds maximum of 10", proc.stderr)
+        self.assertEqual(rc, 0)
+        self.assertTrue(summary["ok"])
+        self.assertEqual(summary["rem"], 0)
         state = ReviewState.load(review_dir)
-        self.assertTrue(all(not item["runs"] for item in state.data["slices"].values()))
+        self.assertEqual(len(state.data["slices"]), 11)
+        self.assertTrue(all(item["complete"] for item in state.data["slices"].values()))
 
     def test_run_reviews_launches_all_ten_slices_in_one_parallel_wave(self) -> None:
         review_dir = Path(
@@ -3513,7 +3491,10 @@ class CliTests(unittest.TestCase):
                 "Review prompted slices.",
             ).stdout.strip()
         )
-        prompt = "Review the current uncommitted changes.\nSlice: API only.\n"
+        prompt = (
+            "Review the current uncommitted changes.\nSlice: API only.\n"
+            f"Read {review_dir / 'task.md'} for task context.\n"
+        )
         add = self.run_cli(
             str(SCRIPTS / "add_slice.py"),
             "--review-dir",
@@ -3558,7 +3539,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         captured = captured_prompt.read_text(encoding="utf-8")
         self.assertIn(str(review_dir / "task.md"), captured)
-        self.assertIn("Slice instructions:\n" + prompt, captured)
+        self.assertTrue(captured.startswith(prompt + "\n\nReturn only one JSON object"))
         state = ReviewState.load(review_dir)
         self.assertEqual(state.data["slices"]["api-prompt"]["mode"], "prompt")
         self.assertTrue(state.data["slices"]["api-prompt"]["complete"])

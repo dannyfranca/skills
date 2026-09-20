@@ -37,7 +37,6 @@ from review_result import (
 
 
 SCHEMA_VERSION = 3
-MAX_ACTIVE_SLICES = 10
 HARNESS_SOURCES = frozenset(
     {
         "slice-override",
@@ -247,10 +246,6 @@ def build_task_context_prompt(review_dir: Path) -> str:
         "Review task context:\n"
         f"- Read {entrypoint} before reviewing.\n"
         "- It contains the original user request and any related/future tasks.\n"
-        "- Treat related/future tasks as deferred-work context, not as part of the current review scope.\n"
-        "- Avoid flagging missing follow-up work when it is clearly covered by related/future tasks.\n"
-        f"- Return only one JSON object matching {RESULT_SCHEMA_PATH}.\n"
-        "- Do not wrap the JSON in Markdown fences or add prose outside it.\n"
     )
 
 
@@ -297,15 +292,6 @@ def _render_task_entrypoint(review_dir: Path, original_request: str) -> str:
         f"{ORIGINAL_REQUEST_END}\n\n"
         "## Related/Future Tasks\n\n"
         f"{related_section}\n\n"
-        "## Reviewer Guidance\n\n"
-        "- Review the current slice against the original user request.\n"
-        "- Treat related/future tasks as deferred-work context, not as current review scope.\n"
-        "- Do not flag missing follow-up work when it is clearly covered by a related/future task.\n"
-        "- Report actionable findings introduced, worsened, or made reachable by the change when "
-        "they have plausible production impact or imminent maintainability impact.\n"
-        "- Missing-test findings require a meaningful regression path.\n"
-        "- Return no findings when this threshold is unmet.\n"
-        "- An explicit lower threshold in the original user request takes precedence.\n"
     )
 
 
@@ -1011,15 +997,6 @@ class ReviewState:
                 or existing.get("removal_source") == "user"
             ):
                 raise ReviewStateError(f"slice is controlled by an explicit user directive: {name}")
-        active_count = sum(
-            not item.get("removed")
-            for item in self.data["slices"].values()
-        )
-        if active_count >= MAX_ACTIVE_SLICES:
-            raise ReviewStateError(
-                f"maximum of {MAX_ACTIVE_SLICES} active slices reached; "
-                "remove or consolidate an active slice first"
-            )
         if existing is not None:
             existing_snapshot = copy.deepcopy(existing)
             definition["runs"] = existing["runs"]
@@ -1717,12 +1694,18 @@ def build_review_command(slice_data: dict[str, Any], output_file: Path) -> tuple
         else:
             raise ReviewStateError("slice target is invalid")
 
-    slice_prompt = (
+    # Complete slice prompts belong to their author. Legacy native slices use only
+    # task and target context, without an additional review-policy layer.
+    review_prompt = (
         slice_data["prompt"]
         if slice_data["mode"] == "prompt"
-        else "Review this target comprehensively for actionable defects."
+        else f"{task_prompt}{target_prompt}"
     )
-    prompt = f"{task_prompt}{target_prompt}\nSlice instructions:\n{slice_prompt}"
+    prompt = (
+        f"{review_prompt}\n\n"
+        f"Return only one JSON object matching {RESULT_SCHEMA_PATH}.\n"
+        "Do not wrap the JSON in Markdown fences or add prose outside it.\n"
+    )
     profile = ResolvedProfile(
         harness=slice_data.get("harness", "codex"),
         harness_source=slice_data.get("harness_source", "built-in-default"),
@@ -2253,15 +2236,6 @@ def run_reviews(
     any_running = False
     active_run_ids: set[str] = set()
     with ReviewState.locked(review_dir) as state:
-        active_count = sum(
-            not item.get("removed")
-            for item in state.data["slices"].values()
-        )
-        if active_count > MAX_ACTIVE_SLICES:
-            raise ReviewStateError(
-                f"{active_count} active slices exceeds maximum of {MAX_ACTIVE_SLICES}; "
-                "remove or consolidate slices before running reviews"
-            )
         reservations = state.reserve_eligible()
         state.save()
         remaining = _remaining_count(state)

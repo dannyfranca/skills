@@ -1,6 +1,6 @@
 ---
 name: multi-shot-review
-description: Review code changes through classified, narrowly scoped parallel harness passes. Use for iterative review barriers by default or one-wave review reports when explicitly requested.
+description: Review changes in content slices sized for manageable context, using configured harnesses and repository review policy. Use for iterative review barriers or explicitly requested one-wave reports.
 ---
 
 # Multi-Shot Review
@@ -44,8 +44,10 @@ there is no classification plan artifact.
 Selection behavior lives in
 [`references/slice-selection.md`](references/slice-selection.md) and is loaded by the classifier.
 The launcher automatically resolves global and changed-path review instruction chains into
-classifier-only context. Reviewers receive only concrete requirements that the classifier
-deliberately translates into focused slice prompts.
+scoped context. The classifier authors each complete reviewer prompt, including applicable review
+policy with its wording and scope preserved. Without review policy, use broad reviews split by
+content only as needed for context. Reviewers may read supporting context but report only on their
+assigned changes.
 
 Reclassify on **coverage drift**: the target, task, or guidance makes slices incomplete, mis-scoped,
 obsolete, or incoherent. Also reclassify after partial failure or explicit request. Otherwise rerun
@@ -113,7 +115,8 @@ pass, and JSON returns `"ok":true` and `"rem":0`.
 
 ## Explicit user slice changes
 
-Only an explicit user request authorizes parent-driven mutation. Preserve that request:
+Only an explicit user request authorizes parent-driven mutation. Supply a complete prompt using
+the reviewer-prompt contract in `references/classifier-rules.md`, and preserve that request:
 
 ```bash
 python3 "$SKILL_DIR/scripts/add_slice.py" \
