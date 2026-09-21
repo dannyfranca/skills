@@ -26,6 +26,8 @@ python3 "$HOME/.agents/skills/worktree-janitor/scripts/worktree_janitor.py" swee
 
 Complete when the report has `status: "ok"`; otherwise report the failed operations and preserved paths. Exit `0` includes expected safety holds, exit `1` means audit/tool failure, and exit `2` means partial mutation failure.
 
+Orphaned worktrees with a valid pointer to missing `.git/worktrees/<name>` metadata (including a deleted source repository) expire after the dirty-worktree grace period (7 days by default, never earlier than the clean threshold). Their files are deleted without a recovery snapshot; reports mark these removals `recoverable: false`. Active paths, nested repositories, and mount points are preserved. Malformed pointers remain safety holds.
+
 ## Recovery
 
 List recoverable snapshots:

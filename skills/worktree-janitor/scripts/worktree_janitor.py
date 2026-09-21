@@ -81,8 +81,18 @@ class Worktree:
     git_file_identity: tuple[int, int, int]
 
 
+@dataclasses.dataclass(frozen=True)
+class OrphanWorktree:
+    path: Path
+    admin_dir: Path
+    age: dt.timedelta
+    directory_identity: tuple[int, int]
+    pointer_identity: tuple[int, int, int, int]
+
+
 @dataclasses.dataclass
 class Scan:
+    orphan_expired: list[OrphanWorktree] = dataclasses.field(default_factory=list)
     clean_expired: list[Worktree] = dataclasses.field(default_factory=list)
     dirty_expired: list[Worktree] = dataclasses.field(default_factory=list)
     target_cleanup: list[tuple[Worktree, list[Path]]] = dataclasses.field(default_factory=list)
@@ -634,6 +644,67 @@ class Janitor:
             git_file_identity=(git_stat.st_dev, git_stat.st_ino, git_stat.st_mtime_ns),
         )
 
+    def inspect_orphan(self, path: Path) -> OrphanWorktree | None:
+        # A missing admin directory is distinct from malformed or inaccessible metadata.
+        if path.is_symlink() or path.resolve(strict=False) != path or not is_within(path, self.root):
+            return None
+        pointer = path / ".git"
+        try:
+            admin = parse_git_file(pointer)
+        except InvalidWorktree:
+            return None
+        # Require the standard linked-worktree layout. The source repository
+        # itself may have been deleted, so its continued existence is not required.
+        if admin.parent.name != "worktrees" or admin.parent.parent.name != ".git":
+            return None
+        try:
+            admin.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            return None
+        directory_stat = path.stat(follow_symlinks=False)
+        pointer_stat = pointer.stat(follow_symlinks=False)
+        return OrphanWorktree(
+            path=path,
+            admin_dir=admin,
+            age=max(dt.timedelta(), self.now - dt.datetime.fromtimestamp(pointer_stat.st_mtime, dt.timezone.utc)),
+            directory_identity=(directory_stat.st_dev, directory_stat.st_ino),
+            pointer_identity=(pointer_stat.st_dev, pointer_stat.st_ino, pointer_stat.st_mtime_ns, pointer_stat.st_ctime_ns),
+        )
+
+    def orphan_hold_reason(self, orphan: OrphanWorktree) -> str | None:
+        if orphan.age < max(self.policy.clean_age, self.policy.dirty_age):
+            return "orphan_grace"
+
+        def traversal_failed(error: OSError) -> None:
+            raise JanitorError(f"cannot inspect orphan {orphan.path}: {error}")
+
+        for directory, names, files in os.walk(orphan.path, followlinks=False, onerror=traversal_failed):
+            base = Path(directory)
+            if os.path.ismount(base):
+                return "mount_point"
+            if base != orphan.path and ".git" in {*names, *files}:
+                marker = base / ".git"
+                # Review sessions leave empty .git directory markers, not repositories.
+                if marker.is_symlink() or not marker.is_dir() or any(marker.iterdir()):
+                    return "embedded_repository"
+            if "HEAD" in files and "objects" in names and "refs" in names:
+                return "embedded_repository"
+            names[:] = [name for name in names if not (base / name).is_symlink()]
+        return None
+
+    def remove_orphan(self, orphan: OrphanWorktree) -> None:
+        current = self.inspect_orphan(orphan.path)
+        if current != orphan:
+            raise SafetyHold("changed_after_scan", "orphan identity or missing metadata changed after audit")
+        self.ensure_inactive(orphan)
+        reason = self.orphan_hold_reason(orphan)
+        if reason:
+            raise SafetyHold(reason, "orphan became ineligible after audit")
+        self.destructive_attempted = True
+        shutil.rmtree(orphan.path)
+
     def scan(self) -> Scan:
         result = Scan()
         if self.configured_root.is_symlink():
@@ -648,6 +719,17 @@ class Janitor:
             try:
                 worktree = self.inspect(path)
             except InvalidWorktree as exc:
+                orphan = self.inspect_orphan(path)
+                if orphan is not None:
+                    reason = self.orphan_hold_reason(orphan)
+                    if any(cwd == path or is_within(cwd, path) for cwd in active):
+                        reason = "active"
+                    if reason:
+                        result.skipped[reason] += 1
+                        result.events.append({"path": str(path), "status": "preserved", "reason": reason})
+                    else:
+                        result.orphan_expired.append(orphan)
+                    continue
                 result.skipped["invalid"] += 1
                 result.events.append({"path": str(path), "status": "skipped", "reason": "invalid", "detail": str(exc)})
                 continue
@@ -711,7 +793,7 @@ class Janitor:
         if record.get("locked") or (worktree.admin_dir / "locked").exists():
             raise SafetyHold("locked", "worktree became locked")
 
-    def ensure_inactive(self, worktree: Worktree) -> None:
+    def ensure_inactive(self, worktree: Worktree | OrphanWorktree) -> None:
         current_active = {path.resolve(strict=False) for path in self.active_paths_provider()}
         if any(cwd == worktree.path or is_within(cwd, worktree.path) for cwd in current_active):
             raise SafetyHold("active", "worktree became active")
@@ -975,6 +1057,20 @@ class Janitor:
             return self.finish_report(report, free_before)
         if not self.expire_archives(apply, report, changed_repos):
             return self.finish_report(report, free_before)
+        for orphan in scan.orphan_expired:
+            report["planned"]["orphan_worktrees_removed"] += 1
+            event = {"path": str(orphan.path), "action": "remove_orphan_worktree", "recoverable": False}
+            report["events"].append(event)
+            if not apply:
+                continue
+            try:
+                self.remove_orphan(orphan)
+                report["applied"]["orphan_worktrees_removed"] += 1
+            except SafetyHold as hold:
+                self.preserve_after_scan(report, event, hold)
+            except (JanitorError, OSError) as exc:
+                report["failures"].append({"path": str(orphan.path), "operation": "remove_orphan_worktree", "error": str(exc)})
+                return self.finish_report(report, free_before)
         for worktree in scan.clean_expired:
             report["planned"]["clean_worktrees_removed"] += 1
             event = {"path": str(worktree.path), "action": "remove_clean_worktree"}

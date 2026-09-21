@@ -569,6 +569,130 @@ class JanitorTests(unittest.TestCase):
         record = json.loads((self.cache / "state.json").read_text())["archives"][0]
         self.assertIsNotNone(record["expires_at"])
 
+    def orphan_worktree(self, name="orphan", *, age=dt.timedelta(days=7)):
+        path = self.add_worktree(name, age=age)
+        admin = janitor_module.parse_git_file(path / ".git")
+        shutil.rmtree(admin)
+        return path, admin
+
+    def test_old_orphan_is_reported_then_removed_without_git_archive(self) -> None:
+        path, _ = self.orphan_worktree()
+        (path / "unfinished.txt").write_text("abandoned", encoding="utf-8")
+        (path / ".review" / "session" / ".git").mkdir(parents=True)
+        report, code = self.janitor().sweep(False)
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["planned"].get("orphan_worktrees_removed"), 1)
+        self.assertTrue(path.exists())
+        self.assertFalse(self.cache.exists())
+        report, code = self.janitor().sweep(True)
+        self.assertEqual(code, 0, report)
+        self.assertFalse(path.exists())
+        self.assertEqual(report["applied"]["orphan_worktrees_removed"], 1)
+        event = next(e for e in report["events"] if e.get("action") == "remove_orphan_worktree")
+        self.assertFalse(event["recoverable"])
+        self.assertFalse((self.cache / "state.json").exists())
+
+    def test_deleted_source_repository_orphan_is_removed(self) -> None:
+        path, _ = self.orphan_worktree()
+        shutil.rmtree(self.repo)
+        report, code = self.janitor().sweep(True)
+        self.assertEqual(code, 0, report)
+        self.assertFalse(path.exists())
+        self.assertEqual(report["applied"]["orphan_worktrees_removed"], 1)
+
+    def test_nonstandard_missing_pointer_is_not_an_orphan(self) -> None:
+        path = self.root / "ordinary-directory"
+        path.mkdir()
+        (path / ".git").write_text("gitdir: /tmp/worktrees/gone\n", encoding="utf-8")
+        stamp = (self.NOW - dt.timedelta(days=30)).timestamp()
+        os.utime(path / ".git", (stamp, stamp))
+        report, code = self.janitor().sweep(True)
+        self.assertEqual(code, 0, report)
+        self.assertTrue(path.exists())
+        self.assertEqual(report["skipped"]["invalid"], 1)
+
+    def test_recent_active_and_nested_repository_orphans_are_preserved(self) -> None:
+        recent, _ = self.orphan_worktree("recent-orphan", age=dt.timedelta(days=7, seconds=-1))
+        active, _ = self.orphan_worktree("active-orphan")
+        nested, _ = self.orphan_worktree("nested-orphan")
+        run_git("init", "-q", str(nested / "repository"))
+        report, code = self.janitor(active_paths=lambda: {active}).sweep(True)
+        self.assertEqual(code, 0, report)
+        for path in (recent, active, nested):
+            self.assertTrue(path.exists())
+        self.assertEqual(report["skipped"]["orphan_grace"], 1)
+        self.assertEqual(report["skipped"]["active"], 1)
+        self.assertEqual(report["skipped"]["embedded_repository"], 1)
+
+    def test_orphan_repaired_after_scan_is_preserved(self) -> None:
+        path, admin = self.orphan_worktree()
+        candidate = self.janitor()
+        original_scan = candidate.scan
+        def repair_after_scan():
+            result = original_scan()
+            admin.mkdir()
+            return result
+        candidate.scan = repair_after_scan
+        report, code = candidate.sweep(True)
+        self.assertEqual(code, 0, report)
+        self.assertTrue(path.exists())
+        self.assertEqual(report["skipped"]["changed_after_scan"], 1)
+
+    def test_orphan_active_after_scan_is_preserved(self) -> None:
+        path, _ = self.orphan_worktree()
+        calls = 0
+        def active_paths():
+            nonlocal calls
+            calls += 1
+            return set() if calls == 1 else {path}
+        report, code = self.janitor(active_paths=active_paths).sweep(True)
+        self.assertEqual(code, 0, report)
+        self.assertTrue(path.exists())
+        self.assertEqual(report["skipped"]["active"], 1)
+
+    def test_orphan_pointer_replaced_after_scan_is_preserved(self) -> None:
+        path, _ = self.orphan_worktree()
+        candidate = self.janitor()
+        original_scan = candidate.scan
+        def replace_after_scan():
+            result = original_scan()
+            (path / ".git").write_text("gitdir: /another/worktrees/missing\n", encoding="utf-8")
+            return result
+        candidate.scan = replace_after_scan
+        report, code = candidate.sweep(True)
+        self.assertEqual(code, 0, report)
+        self.assertTrue(path.exists())
+        self.assertEqual(report["skipped"]["changed_after_scan"], 1)
+
+    def test_orphan_deletion_failure_is_partial(self) -> None:
+        path, _ = self.orphan_worktree()
+        with mock.patch.object(janitor_module.shutil, "rmtree", side_effect=OSError("cannot delete")):
+            report, code = self.janitor().sweep(True)
+        self.assertEqual(code, 2, report)
+        self.assertTrue(path.exists())
+        self.assertEqual(report["failures"][0]["operation"], "remove_orphan_worktree")
+
+    def test_orphan_mount_point_is_preserved(self) -> None:
+        path, _ = self.orphan_worktree()
+        mount = path / "mounted"
+        mount.mkdir()
+        with mock.patch.object(janitor_module.os.path, "ismount", side_effect=lambda p: p == mount):
+            report, code = self.janitor().sweep(True)
+        self.assertEqual(code, 0, report)
+        self.assertTrue(path.exists())
+        self.assertEqual(report["skipped"]["mount_point"], 1)
+
+    def test_orphan_symlink_does_not_remove_external_files(self) -> None:
+        path, _ = self.orphan_worktree()
+        outside = self.base / "outside"
+        outside.mkdir()
+        (outside / "valuable").write_text("keep", encoding="utf-8")
+        (path / "linked").symlink_to(outside, target_is_directory=True)
+        report, code = self.janitor().sweep(True)
+        self.assertEqual(code, 0, report)
+        self.assertFalse(path.exists())
+        self.assertEqual((outside / "valuable").read_text(), "keep")
+
     def test_active_locked_and_invalid_worktrees_are_preserved(self) -> None:
         active = self.add_worktree("active")
         locked = self.add_worktree("locked")
