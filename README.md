@@ -24,5 +24,6 @@ npx skills add dannyfranca/skills --skill multi-shot-review
 - `to-tickets-gh` — Publish tracer-bullet tickets as GitHub issues.
 - `to-tickets-local` — Publish tracer-bullet tickets as local files.
 - `update-codex-await` — Rebase, test, build, and install the long-await Codex fork.
+- `why-what` — Write a concise Why / What summary of a change.
 - `worktree-janitor` — Clean up expired Git worktrees with recovery snapshots.
 - `worktrees` — Apply Git worktree setup conventions.

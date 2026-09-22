@@ -1,0 +1,6 @@
+interface:
+  display_name: "Why / What"
+  short_description: "Write concise change context"
+  default_prompt: "Use $why-what to write a concise Why / What block for this change."
+policy:
+  allow_implicit_invocation: false
