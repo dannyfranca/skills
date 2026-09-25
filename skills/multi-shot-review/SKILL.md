@@ -34,7 +34,8 @@ python3 "$SKILL_DIR/scripts/classify_slices.py" \
   --review-dir "$REVIEW_DIR"
 ```
 
-Use `--harness`, `--model`, or `--reasoning` only to override the configured classifier profile.
+Join it (see [Joining long runs](#joining-long-runs)). Use `--harness`, `--model`, or
+`--reasoning` only to override the configured classifier profile.
 
 When useful, pass verbatim supplemental user directions with
 `--user-directives-file <path>` and advisory parent context with
@@ -53,27 +54,18 @@ Reclassify on **coverage drift**: the target, task, or guidance makes slices inc
 obsolete, or incoherent. Also reclassify after partial failure or explicit request. Otherwise rerun
 incomplete slices.
 
-4. Run one review wave exclusively in the foreground with a timeout of at least one hour:
+4. Run one review wave, then join it. Complete when you hold the wave's final JSON:
 
 ```bash
 python3 "$SKILL_DIR/scripts/run_reviews.py" --review-dir "$REVIEW_DIR" \
   --child-timeout-seconds 3600
 ```
 
-Wait silently for exit. All eligible slices run in one parallel wave. Reviewers emit the strict
+All eligible slices run in one parallel wave. Reviewers emit the strict
 JSON shape in `references/review-result.schema.json`; the runner validates it, assigns
 session-scoped `f_` IDs, and replaces the raw result with generated Markdown. Invalid results are
 retryable slice failures. Consume only final JSON, finding IDs and Markdown paths in `out`, and
 diagnostics in `err`. Treat each finding as a hypothesis and validate it against the code and task.
-
-If the harness detaches while the wave continues, await that wave in the foreground:
-
-```bash
-python3 "$SKILL_DIR/scripts/await_reviews.py" --review-dir "$REVIEW_DIR"
-```
-
-Repeat after any further detachment. The awaiter is a pure join: it captures the active wave, waits
-silently, and emits one final JSON summary.
 
 5. Complete the chosen mode:
 
@@ -112,6 +104,22 @@ python3 "$SKILL_DIR/scripts/dedupe_finding.py" \
 Run another wave after fixes. A slice also completes when all findings in its latest run are
 ignored or deduplicated. Finish when every finding is fixed or recorded terminal, relevant checks
 pass, and JSON returns `"ok":true` and `"rem":0`.
+
+## Joining long runs
+
+`classify_slices.py` and `run_reviews.py` can run for an hour or more. Start each one, then
+_join_ it: hold its final JSON before the next step. Pick the most efficient join the harness
+offers: a background run with an exit notification first, a foreground run with the longest
+timeout last.
+
+Until the join completes, keep the review target _frozen_: reviewers read live Git. Run one
+script per review directory at a time, and let it run to exit.
+
+If a wave join breaks (detach, timeout, lost session), rejoin with:
+
+```bash
+python3 "$SKILL_DIR/scripts/await_reviews.py" --review-dir "$REVIEW_DIR"
+```
 
 ## Explicit user slice changes
 
