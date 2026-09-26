@@ -18,17 +18,19 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import AbstractContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from harnesses import HarnessError, ResolvedProfile, get_harness, resolve_profile
 from review_result import (
+    JUDGE_SCHEMA_PATH,
     RESULT_SCHEMA_VERSION,
     RESULT_SCHEMA_PATH,
     ReviewResultError,
     assign_finding_ids,
+    parse_judge_verdict,
     parse_review_result,
     render_review_failure_markdown,
     render_review_markdown,
@@ -56,6 +58,12 @@ RELATED_TASKS_DIR = "related-tasks"
 ORIGINAL_REQUEST_START = "<!-- multi-shot-review:original-request:start -->"
 ORIGINAL_REQUEST_END = "<!-- multi-shot-review:original-request:end -->"
 SLICE_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+DEFAULT_MAX_PASSES = 3
+JUDGE_VERDICTS = frozenset({"continue", "stop"})
+# Runs whose findings were all rejected or auto-deduplicated count as clean shots
+# for the shot phase-down rule, because the author kept nothing from them.
+CLEAN_IGNORED_CLASSIFICATIONS = frozenset({"ignored_findings", "auto_duplicates"})
+AUTO_DUPLICATE_TITLE_OVERLAP = 0.6
 
 
 class ReviewStateError(RuntimeError):
@@ -255,6 +263,72 @@ def _require_non_empty_text(value: str, label: str) -> str:
     return value.strip()
 
 
+def _run_is_clean(run: dict[str, Any]) -> bool:
+    if run.get("status") == "no_findings":
+        return True
+    return (
+        run.get("status") == "ignored"
+        and run.get("classification") in CLEAN_IGNORED_CLASSIFICATIONS
+    )
+
+
+def _latest_shot_runs(runs: Iterable[dict[str, Any]]) -> dict[int, dict[str, Any]]:
+    latest: dict[int, dict[str, Any]] = {}
+    for run in runs:
+        latest[int(run.get("shot", 1))] = run
+    return latest
+
+
+def _title_tokens(title: str) -> set[str]:
+    return {token for token in re.findall(r"[a-z0-9]+", title.lower()) if len(token) > 1}
+
+
+def _findings_overlap(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    """Two same-wave findings are one finding when they hit the same lines and wording."""
+
+    left_loc, right_loc = left["location"], right["location"]
+    if left_loc["path"] != right_loc["path"]:
+        return False
+    left_end = left_loc["end_line"] if left_loc["end_line"] is not None else left_loc["start_line"]
+    right_end = (
+        right_loc["end_line"] if right_loc["end_line"] is not None else right_loc["start_line"]
+    )
+    if left_loc["start_line"] > right_end or right_loc["start_line"] > left_end:
+        return False
+    left_tokens, right_tokens = _title_tokens(left["title"]), _title_tokens(right["title"])
+    if not left_tokens or not right_tokens:
+        return False
+    overlap = len(left_tokens & right_tokens) / min(len(left_tokens), len(right_tokens))
+    return overlap >= AUTO_DUPLICATE_TITLE_OVERLAP
+
+
+def _finding_outcome(finding: dict[str, Any]) -> str:
+    resolution = finding.get("resolution") or {}
+    kind = resolution.get("kind")
+    if finding.get("status") == "open":
+        return "reported in the previous pass and not rejected: verify it was addressed"
+    if kind == "rejected":
+        return f"rejected by the author: {resolution.get('text', '')}"
+    if kind == "duplicate":
+        return f"duplicate of {resolution.get('finding_id')}"
+    if kind == "superseded" and resolution.get("successor_run_id"):
+        return "superseded by a later pass: verify it was fixed and report it again if it still applies"
+    return "superseded by a slice definition change"
+
+
+def _finding_history_block(prior_findings: list[dict[str, Any]]) -> str:
+    lines = []
+    for entry in prior_findings:
+        location = f"{entry['path']}:{entry['start_line']}"
+        if entry["end_line"] is not None and entry["end_line"] != entry["start_line"]:
+            location = f"{location}-{entry['end_line']}"
+        lines.append(
+            f"- pass {entry['pass']} shot {entry['shot']} [{entry['severity']}] "
+            f"{entry['title']} ({location}): {entry['outcome']}"
+        )
+    return "\n".join(lines)
+
+
 def _validate_session_target(target: Any) -> dict[str, str]:
     if not isinstance(target, dict):
         raise ReviewStateError("target must be an object")
@@ -410,6 +484,24 @@ class ReviewExecution:
     stderr_log: Path
     launch_error: OSError | None = None
     timed_out: bool = False
+
+
+@dataclass(frozen=True)
+class JudgeExecution:
+    slice_name: str
+    pass_number: int
+    output_file: Path
+    stdout_log: Path
+    stderr_log: Path
+    returncode: int | None
+    definition_version: int = 1
+    verdict: str | None = None
+    reason: str | None = None
+    error: str | None = None
+
+
+class JudgeRuleViolation(ReviewStateError):
+    """A judge verdict that the deterministic part of the decision rule forbids."""
 
 
 class LockedReviewState(AbstractContextManager["ReviewState"]):
@@ -670,6 +762,28 @@ class ReviewState:
             definition_version = item.get("definition_version", 1)
             if type(definition_version) is not int or definition_version < 1:
                 raise ReviewStateError(f"slice {name!r} has invalid definition version")
+            shots = item.get("shots", 1)
+            if type(shots) is not int or shots < 1:
+                raise ReviewStateError(f"slice {name!r} must have a positive shots count")
+            pass_base = item.get("pass_base", 0)
+            if type(pass_base) is not int or pass_base < 0:
+                raise ReviewStateError(f"slice {name!r} has invalid pass base")
+            judgements = item.get("judgements", [])
+            if not isinstance(judgements, list):
+                raise ReviewStateError(f"slice {name!r} judgements must be an array")
+            for judgement in judgements:
+                self._validate_judgement(name, judgement)
+            if item.get("judge_pending") is not None:
+                self._validate_judge_pending(name, item["judge_pending"])
+            window = item.get("pass_window")
+            if window is not None and not (
+                isinstance(window, dict)
+                and type(window.get("start")) is int
+                and window["start"] >= 0
+                and type(window.get("max_passes")) is int
+                and window["max_passes"] >= 1
+            ):
+                raise ReviewStateError(f"slice {name!r} has invalid pass window")
             for run in item["runs"]:
                 self._validate_run(name, run)
                 stored_findings = run.get("findings") or self._load_findings_archive(
@@ -684,6 +798,50 @@ class ReviewState:
                     session_finding_ids.add(finding_id)
 
     @staticmethod
+    def _validate_judgement(slice_name: str, judgement: Any) -> None:
+        if not isinstance(judgement, dict):
+            raise ReviewStateError(f"slice {slice_name!r} has non-object judgement")
+        if type(judgement.get("pass")) is not int or judgement["pass"] < 1:
+            raise ReviewStateError(f"slice {slice_name!r} has judgement with invalid pass")
+        if judgement.get("verdict") not in JUDGE_VERDICTS:
+            raise ReviewStateError(f"slice {slice_name!r} has judgement with invalid verdict")
+        definition_version = judgement.get("definition_version", 1)
+        if type(definition_version) is not int or definition_version < 1:
+            raise ReviewStateError(
+                f"slice {slice_name!r} has judgement with invalid definition version"
+            )
+        for field in ("reason", "at", "harness"):
+            if not isinstance(judgement.get(field), str) or not judgement[field].strip():
+                raise ReviewStateError(
+                    f"slice {slice_name!r} has judgement with invalid {field}"
+                )
+        for field in ("model", "reasoning"):
+            value = judgement.get(field)
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise ReviewStateError(
+                    f"slice {slice_name!r} has judgement with invalid {field}"
+                )
+
+    @staticmethod
+    def _validate_judge_pending(slice_name: str, pending: Any) -> None:
+        if not isinstance(pending, dict):
+            raise ReviewStateError(f"slice {slice_name!r} has non-object judge reservation")
+        for field in ("pass", "definition_version", "runner_pid"):
+            if type(pending.get(field)) is not int or pending[field] < 1:
+                raise ReviewStateError(
+                    f"slice {slice_name!r} has judge reservation with invalid {field}"
+                )
+        if not isinstance(pending.get("started_at"), str):
+            raise ReviewStateError(
+                f"slice {slice_name!r} has judge reservation with invalid started_at"
+            )
+        runner_key = pending.get("runner_key")
+        if runner_key is not None and not isinstance(runner_key, str):
+            raise ReviewStateError(
+                f"slice {slice_name!r} has judge reservation with invalid runner_key"
+            )
+
+    @staticmethod
     def _validate_run(slice_name: str, run: Any) -> None:
         if not isinstance(run, dict):
             raise ReviewStateError(f"slice {slice_name!r} has non-object run entry")
@@ -691,6 +849,9 @@ class ReviewState:
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid id")
         if type(run.get("pass")) is not int or run["pass"] < 1:
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid pass")
+        shot = run.get("shot", 1)
+        if type(shot) is not int or shot < 1:
+            raise ReviewStateError(f"slice {slice_name!r} has run with invalid shot")
         if not isinstance(run.get("output_file"), str) or not run["output_file"]:
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid output_file")
         if run.get("status") not in {"running", "findings", "no_findings", "failed", "timeout", "ignored"}:
@@ -866,7 +1027,15 @@ class ReviewState:
         if "/" in name or "\\" in name or name in {".", ".."}:
             raise ReviewStateError("slice names cannot contain path separators or dot names")
 
+    def require_no_active_slices(self) -> None:
+        if any(not item.get("removed") for item in self.data["slices"].values()):
+            raise ReviewStateError(
+                "session already has active review slices; classification runs once per "
+                "session. Use add_slice.py or remove_slice.py for explicit user changes."
+            )
+
     def start_classification(self, profile: ResolvedProfile) -> str:
+        self.require_no_active_slices()
         classification_id = uuid.uuid4().hex
         self.data["classifications"].append(
             {
@@ -926,10 +1095,13 @@ class ReviewState:
         reasoning_source: str | None = None,
         source: str = "classifier",
         user_directive: str | None = None,
+        shots: int = 1,
     ) -> None:
         self._validate_slice_name(name)
         if source not in {"classifier", "user"}:
             raise ReviewStateError("slice source must be classifier or user")
+        if isinstance(shots, bool) or type(shots) is not int or shots < 1:
+            raise ReviewStateError("slice shots must be a positive integer")
         if source == "user":
             user_directive = _require_non_empty_text(user_directive or "", "user directive")
         if mode not in {"native", "prompt"}:
@@ -987,6 +1159,8 @@ class ReviewState:
             "user_directive": user_directive,
             "removed": False,
             "definition_version": 1,
+            "shots": shots,
+            "judgements": [],
         }
         existing = self.data["slices"].get(name)
         if existing is not None:
@@ -1001,6 +1175,11 @@ class ReviewState:
             existing_snapshot = copy.deepcopy(existing)
             definition["runs"] = existing["runs"]
             definition["next_pass"] = existing["next_pass"]
+            # A new definition earns its own pass window; earlier passes and verdicts judged a different scope.
+            definition["pass_base"] = existing["next_pass"] - 1
+            definition["judgements"] = existing.get("judgements", [])
+            definition["judge_pending"] = None
+            definition["pass_window"] = None
             definition["definition_version"] = existing.get("definition_version", 1) + 1
             superseded_at = now_iso()
             try:
@@ -1093,7 +1272,7 @@ class ReviewState:
         )
         self._refresh_completed()
 
-    def reserve_eligible(self) -> list[Reservation]:
+    def reserve_eligible(self, *, max_passes: int = DEFAULT_MAX_PASSES) -> list[Reservation]:
         reservations: list[Reservation] = []
         self._recover_stale_running_runs()
         if self._has_running_runs():
@@ -1101,57 +1280,367 @@ class ReviewState:
             return reservations
         for name in sorted(self.data["slices"]):
             item = self.data["slices"][name]
-            if item.get("removed") or item["complete"]:
-                continue
-            if any(run.get("status") == "running" for run in item["runs"]):
+            if not self._slice_wants_wave(item):
                 continue
             pass_number = item["next_pass"]
-            output_file = self._next_output_file(pass_number, name, item["runs"])
-            run_id = uuid.uuid4().hex
-            run = {
-                "id": run_id,
-                "pass": pass_number,
-                "output_file": str(output_file),
-                "status": "running",
-                "started_at": now_iso(),
-                "ended_at": None,
-                "exit_code": None,
-                "classification": None,
-                "finding_count": None,
-                "findings": None,
-                "findings_archive": None,
-                "runner_pid": os.getpid(),
-                "runner_key": _process_key(os.getpid()),
-                "error": None,
-                "definition_version": item.get("definition_version", 1),
-                "harness": item["harness"],
-                "harness_source": item["harness_source"],
-                "model": item.get("model"),
-                "model_source": item["model_source"],
-                "reasoning": item.get("reasoning"),
-                "reasoning_source": item["reasoning_source"],
-            }
-            item["runs"].append(run)
-            item["last_error"] = None
-            self.data["history"].append(
-                {"event": "run_reserved", "slice": name, "run_id": run_id, "pass": pass_number, "at": now_iso()}
-            )
-            reservations.append(
-                Reservation(
-                    run_id=run_id,
-                    slice_name=name,
-                    pass_number=pass_number,
-                    output_file=output_file,
-                    slice_data={
-                        **json.loads(json.dumps(item)),
-                        "session_target": json.loads(
-                            json.dumps(self.data["session"]["target"])
-                        ),
-                    },
+            if pass_number > self._allowed_passes(item, max_passes):
+                continue
+            wave = self._wave_runs(item, pass_number)
+            if wave:
+                wave_size = max(int(run.get("shot", 1)) for run in wave)
+                shots = [
+                    shot
+                    for shot, run in _latest_shot_runs(wave).items()
+                    if run.get("status") in {"failed", "timeout"}
+                ]
+            else:
+                wave_size = self._wave_size(item, pass_number)
+                shots = list(range(1, wave_size + 1))
+            prior_findings = self._prior_findings(name, item, pass_number)
+            for shot in shots:
+                output_file = self._next_output_file(
+                    pass_number,
+                    name,
+                    item["runs"],
+                    shot=shot,
+                    multi_shot=int(item.get("shots", 1)) > 1,
                 )
-            )
+                run_id = uuid.uuid4().hex
+                run = {
+                    "id": run_id,
+                    "pass": pass_number,
+                    "shot": shot,
+                    "output_file": str(output_file),
+                    "status": "running",
+                    "started_at": now_iso(),
+                    "ended_at": None,
+                    "exit_code": None,
+                    "classification": None,
+                    "finding_count": None,
+                    "findings": None,
+                    "findings_archive": None,
+                    "runner_pid": os.getpid(),
+                    "runner_key": _process_key(os.getpid()),
+                    "error": None,
+                    "definition_version": item.get("definition_version", 1),
+                    "harness": item["harness"],
+                    "harness_source": item["harness_source"],
+                    "model": item.get("model"),
+                    "model_source": item["model_source"],
+                    "reasoning": item.get("reasoning"),
+                    "reasoning_source": item["reasoning_source"],
+                }
+                item["runs"].append(run)
+                item["last_error"] = None
+                self.data["history"].append(
+                    {
+                        "event": "run_reserved",
+                        "slice": name,
+                        "run_id": run_id,
+                        "pass": pass_number,
+                        "shot": shot,
+                        "at": now_iso(),
+                    }
+                )
+                reservations.append(
+                    Reservation(
+                        run_id=run_id,
+                        slice_name=name,
+                        pass_number=pass_number,
+                        output_file=output_file,
+                        slice_data={
+                            **json.loads(json.dumps(item)),
+                            "session_target": json.loads(
+                                json.dumps(self.data["session"]["target"])
+                            ),
+                            "pass": pass_number,
+                            "shot": shot,
+                            "prior_findings": prior_findings,
+                        },
+                    )
+                )
         self._refresh_completed()
         return reservations
+
+    def slices_awaiting_judge(self, *, max_passes: int = DEFAULT_MAX_PASSES) -> list[str]:
+        """Slices that exhausted their pass window and need a verdict before any new wave."""
+
+        return [
+            name
+            for name in sorted(self.data["slices"])
+            if self._slice_wants_wave(self.data["slices"][name])
+            and self.data["slices"][name]["next_pass"]
+            > self._allowed_passes(self.data["slices"][name], max_passes)
+        ]
+
+    def reserve_judges(self, *, max_passes: int = DEFAULT_MAX_PASSES) -> dict[str, dict[str, Any]]:
+        """Claim each awaiting judge so a concurrent runner does not start a second one."""
+
+        inputs: dict[str, dict[str, Any]] = {}
+        for name in self.slices_awaiting_judge(max_passes=max_passes):
+            item = self.data["slices"][name]
+            judged_pass = item["next_pass"] - 1
+            version = item.get("definition_version", 1)
+            pending = item.get("judge_pending")
+            if (
+                pending is not None
+                and pending["pass"] == judged_pass
+                and pending["definition_version"] == version
+                and _running_reservation_is_active(pending)
+            ):
+                continue
+            item["judge_pending"] = {
+                "pass": judged_pass,
+                "definition_version": version,
+                "runner_pid": os.getpid(),
+                "runner_key": _process_key(os.getpid()),
+                "started_at": now_iso(),
+            }
+            inputs[name] = self.judge_input(name)
+        return inputs
+
+    def release_judge(self, slice_name: str, *, judged_pass: int, definition_version: int) -> None:
+        item = self.data["slices"].get(slice_name)
+        pending = (item or {}).get("judge_pending")
+        if (
+            pending is not None
+            and pending["pass"] == judged_pass
+            and pending["definition_version"] == definition_version
+            and pending["runner_pid"] == os.getpid()
+        ):
+            item["judge_pending"] = None
+
+    def judge_input(self, slice_name: str) -> dict[str, Any]:
+        item = self.data["slices"][slice_name]
+        return {
+            **json.loads(json.dumps(item)),
+            "session_target": json.loads(json.dumps(self.data["session"]["target"])),
+            "pass": item["next_pass"] - 1,
+            "window_start": self._window_start(item),
+            "definition_version": item.get("definition_version", 1),
+            "prior_findings": self._prior_findings(slice_name, item, item["next_pass"]),
+        }
+
+    def record_judgement(
+        self,
+        slice_name: str,
+        *,
+        verdict: str,
+        reason: str,
+        profile: ResolvedProfile,
+        judged_pass: int,
+        definition_version: int,
+    ) -> dict[str, Any] | None:
+        """Record a verdict, or return None when the judged wave is no longer current.
+
+        Concurrent runners can judge the same wave; only the first verdict may move the budget.
+        """
+
+        if verdict not in JUDGE_VERDICTS:
+            raise ReviewStateError("judge verdict must be continue or stop")
+        reason = _require_non_empty_text(reason, "judge reason")
+        item = self.data["slices"].get(slice_name)
+        if not self._judgement_is_current(item, judged_pass, definition_version):
+            self.data["history"].append(
+                {
+                    "event": "stale_judgement_ignored",
+                    "slice": slice_name,
+                    "pass": judged_pass,
+                    "definition_version": definition_version,
+                    "verdict": verdict,
+                    "at": now_iso(),
+                }
+            )
+            return None
+        required = self._required_verdict(slice_name, item, judged_pass)
+        if verdict != required:
+            raise JudgeRuleViolation(
+                f"judge verdict {verdict} contradicts the rule, which requires {required}"
+            )
+        judgement = {
+            "pass": judged_pass,
+            "definition_version": definition_version,
+            "verdict": verdict,
+            "reason": reason,
+            "at": now_iso(),
+            "harness": profile.harness,
+            "model": profile.model,
+            "reasoning": profile.reasoning,
+        }
+        item.setdefault("judgements", []).append(judgement)
+        if verdict == "stop":
+            item["complete"] = True
+            item["last_error"] = None
+        self.data["history"].append(
+            {
+                "event": "judge_verdict",
+                "slice": slice_name,
+                "pass": judgement["pass"],
+                "verdict": verdict,
+                "reason": reason,
+                "at": judgement["at"],
+            }
+        )
+        self._refresh_completed()
+        return judgement
+
+    @staticmethod
+    def _judgement_is_current(
+        item: dict[str, Any] | None, judged_pass: int, definition_version: int
+    ) -> bool:
+        if item is None or item.get("removed") or item["complete"]:
+            return False
+        if item.get("definition_version", 1) != definition_version:
+            return False
+        if item["next_pass"] - 1 != judged_pass:
+            return False
+        return not any(
+            judgement["pass"] == judged_pass
+            and judgement.get("definition_version", 1) == definition_version
+            for judgement in item.get("judgements", [])
+        )
+
+    def _required_verdict(self, slice_name: str, item: dict[str, Any], judged_pass: int) -> str:
+        """The user-agreed cap rule; the judge supplies the reason, the runner owns the verdict."""
+
+        if self._kept_severity_paths(slice_name, item, judged_pass, {"P0", "P1"}):
+            return "continue"
+        window = range(self._window_start(item) + 1, judged_pass + 1)
+        p1_paths = {
+            pass_number: self._kept_severity_paths(slice_name, item, pass_number, {"P1"})
+            for pass_number in window
+        }
+        if any(p1_paths[pass_number] & p1_paths[pass_number - 1] for pass_number in window[1:]):
+            return "continue"
+        return "stop"
+
+    def _kept_severity_paths(
+        self, slice_name: str, item: dict[str, Any], pass_number: int, severities: set[str]
+    ) -> set[str]:
+        paths: set[str] = set()
+        for run in self._wave_runs(item, pass_number):
+            findings = run.get("findings")
+            if findings is None and run.get("findings_archive"):
+                findings = self._load_findings_archive(slice_name, run)
+            paths.update(
+                finding["location"]["path"]
+                for finding in findings or []
+                if finding["severity"] in severities and finding.get("status") != "ignored"
+            )
+        return paths
+
+    def final_runs(self, slice_name: str) -> list[dict[str, Any]]:
+        """Runs whose open findings the judge handed to the parent with a stop verdict."""
+
+        item = self.data["slices"][slice_name]
+        if not self._stopped_by_judge(item):
+            return []
+        return [
+            run
+            for run in item["runs"]
+            if any(finding.get("status") == "open" for finding in run.get("findings") or [])
+        ]
+
+    @staticmethod
+    def _slice_wants_wave(item: dict[str, Any]) -> bool:
+        if item.get("removed") or item["complete"]:
+            return False
+        return not any(run.get("status") == "running" for run in item["runs"])
+
+    @staticmethod
+    def _current_judgements(item: dict[str, Any]) -> list[dict[str, Any]]:
+        version = item.get("definition_version", 1)
+        return [
+            judgement
+            for judgement in item.get("judgements", [])
+            if judgement.get("definition_version", 1) == version
+        ]
+
+    @classmethod
+    def _window_start(cls, item: dict[str, Any]) -> int:
+        continues = [
+            judgement["pass"]
+            for judgement in cls._current_judgements(item)
+            if judgement["verdict"] == "continue"
+        ]
+        return max(continues, default=item.get("pass_base", 0))
+
+    @classmethod
+    def _allowed_passes(cls, item: dict[str, Any], max_passes: int) -> int:
+        # The budget is fixed when a window opens: a config change mid-window must not move the
+        # judge point of a wave that already started.
+        start = cls._window_start(item)
+        window = item.get("pass_window")
+        if window is None or window["start"] != start:
+            window = {"start": start, "max_passes": max_passes}
+            item["pass_window"] = window
+        return start + window["max_passes"]
+
+    @classmethod
+    def _stopped_by_judge(cls, item: dict[str, Any]) -> bool:
+        judgements = cls._current_judgements(item)
+        return bool(judgements) and judgements[-1]["verdict"] == "stop"
+
+    @staticmethod
+    def _wave_runs(item: dict[str, Any], pass_number: int) -> list[dict[str, Any]]:
+        return [
+            run
+            for run in item["runs"]
+            if run.get("pass") == pass_number
+            and run.get("definition_version", 1) == item.get("definition_version", 1)
+        ]
+
+    def _wave_size(self, item: dict[str, Any], pass_number: int) -> int:
+        clean_shots = sum(
+            1
+            for run in item["runs"]
+            if run.get("pass", 0) < pass_number
+            and run.get("definition_version", 1) == item.get("definition_version", 1)
+            and _run_is_clean(run)
+        )
+        return max(1, int(item.get("shots", 1)) - clean_shots)
+
+    def _latest_wave_settled_clean(self, item: dict[str, Any]) -> bool:
+        passes = [
+            int(run["pass"])
+            for run in item["runs"]
+            if run.get("definition_version", 1) == item.get("definition_version", 1)
+        ]
+        if not passes:
+            return False
+        latest = _latest_shot_runs(self._wave_runs(item, max(passes)))
+        return all(_run_is_clean(run) for run in latest.values())
+
+    def _prior_findings(
+        self, slice_name: str, item: dict[str, Any], pass_number: int
+    ) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        version = item.get("definition_version", 1)
+        for run in item["runs"]:
+            if int(run.get("pass", 0)) >= pass_number:
+                continue
+            if run.get("definition_version", 1) != version:
+                continue
+            findings = run.get("findings")
+            if findings is None and run.get("findings_archive"):
+                findings = self._load_findings_archive(slice_name, run)
+            for finding in findings or []:
+                location = finding["location"]
+                entries.append(
+                    {
+                        "pass": int(run["pass"]),
+                        "shot": int(run.get("shot", 1)),
+                        "id": finding["id"],
+                        "severity": finding["severity"],
+                        "title": finding["title"],
+                        "path": location["path"],
+                        "start_line": location["start_line"],
+                        "end_line": location["end_line"],
+                        "outcome": _finding_outcome(finding),
+                    }
+                )
+        entries.sort(key=lambda entry: (entry["pass"], entry["shot"], entry["id"]))
+        return entries
 
     def complete_run(
         self,
@@ -1217,30 +1706,40 @@ class ReviewState:
             self._refresh_completed()
             return True
         item_snapshot = copy.deepcopy(item)
+        demoted_siblings: list[dict[str, Any]] = []
         if status == "findings":
             findings = assign_finding_ids(findings or [], used_ids=self._finding_ids())
             if not findings:
                 raise ReviewStateError("finding run must contain at least one finding")
+            demoted_siblings = self._mark_auto_duplicates(slice_name, item, run, findings)
         elif status == "no_findings":
             findings = []
         elif status not in {"failed", "timeout"}:
             raise ReviewStateError(f"invalid run status: {status}")
 
+        run["status"] = status
+        run["ended_at"] = now_iso()
+        run["exit_code"] = exit_code
+        run["classification"] = classification
+        run["findings"] = findings
+        run["finding_count"] = len(findings) if findings is not None else None
+        run["error"] = error
+
         if status in {"findings", "no_findings"}:
-            output_path = Path(run["output_file"])
             try:
-                self._write_artifact(
-                    output_path,
-                    render_review_markdown(
-                        findings or [],
-                        harness=run["harness"],
-                        harness_source=run["harness_source"],
-                        model=run.get("model"),
-                        model_source=run["model_source"],
-                        reasoning=run.get("reasoning"),
-                        reasoning_source=run["reasoning_source"],
-                    ),
-                )
+                if status == "findings" and self._all_findings_terminal(run):
+                    run["status"] = "ignored"
+                    run["classification"] = "auto_duplicates"
+                    self._archive_and_render_run(slice_name, run)
+                else:
+                    self._render_run_findings(run)
+                for sibling in demoted_siblings:
+                    if self._all_findings_terminal(sibling):
+                        sibling["status"] = "ignored"
+                        sibling["classification"] = "auto_duplicates"
+                        self._archive_and_render_run(slice_name, sibling)
+                    else:
+                        self._render_run_findings(sibling)
                 self._supersede_prior_findings(slice_name, item, run)
             except (OSError, UnicodeError) as exc:
                 item.clear()
@@ -1261,41 +1760,107 @@ class ReviewState:
                 except (OSError, UnicodeError):
                     pass
                 status = "failed"
-                classification = None
-                findings = None
+                run["status"] = status
+                run["ended_at"] = now_iso()
+                run["exit_code"] = exit_code
+                run["classification"] = None
+                run["findings"] = None
+                run["finding_count"] = None
+                run["error"] = error
 
-        run["status"] = status
-        run["ended_at"] = now_iso()
-        run["exit_code"] = exit_code
-        run["classification"] = classification
-        run["findings"] = findings
-        run["finding_count"] = len(findings) if findings is not None else None
-        run["error"] = error
-
-        if status == "findings":
-            item["next_pass"] = max(item["next_pass"], int(run["pass"]) + 1)
-            item["complete"] = False
-            item["last_error"] = None
-        elif status == "no_findings":
-            item["complete"] = True
-            item["last_error"] = None
-        elif status in {"failed", "timeout"}:
-            item["complete"] = False
+        if status in {"failed", "timeout"}:
             item["last_error"] = error or ("review process timed out" if status == "timeout" else "review process failed")
             self.data["last_error"] = {"slice": slice_name, "run_id": run_id, "error": item["last_error"], "at": now_iso()}
+        self._settle_wave(item, int(run["pass"]))
 
         self.data["history"].append(
             {
                 "event": "run_completed",
                 "slice": slice_name,
                 "run_id": run_id,
-                "status": status,
-                "classification": classification,
+                "pass": run["pass"],
+                "shot": run.get("shot", 1),
+                "status": run["status"],
+                "classification": run["classification"],
                 "at": now_iso(),
             }
         )
         self._refresh_completed()
         return True
+
+    def _settle_wave(self, item: dict[str, Any], pass_number: int) -> None:
+        """Decide the slice's next step once every shot of the wave has reported."""
+
+        latest = _latest_shot_runs(self._wave_runs(item, pass_number))
+        statuses = {run.get("status") for run in latest.values()}
+        if statuses & {"running", "failed", "timeout"}:
+            item["complete"] = False
+            return
+        item["last_error"] = None
+        if all(_run_is_clean(run) for run in latest.values()):
+            item["complete"] = True
+            return
+        item["next_pass"] = max(item["next_pass"], pass_number + 1)
+        item["complete"] = False
+
+    def _mark_auto_duplicates(
+        self,
+        slice_name: str,
+        item: dict[str, Any],
+        run: dict[str, Any],
+        findings: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Mark same-wave duplicates; return sibling runs whose findings were demoted."""
+
+        sibling_open = [
+            (sibling, finding)
+            for sibling in item["runs"]
+            if sibling is not run and sibling.get("pass") == run.get("pass")
+            for finding in (sibling.get("findings") or [])
+            if finding.get("status") == "open"
+        ]
+        if not sibling_open:
+            return []
+        marked_at = now_iso()
+        demoted_siblings: list[dict[str, Any]] = []
+        for finding in findings:
+            match = next(
+                (
+                    (sibling, candidate)
+                    for sibling, candidate in sibling_open
+                    if candidate.get("status") == "open" and _findings_overlap(finding, candidate)
+                ),
+                None,
+            )
+            if match is None:
+                continue
+            sibling, candidate = match
+            # The kept copy must carry the highest severity: the judge rule reads kept severities,
+            # so shot completion order must not decide whether a P0/P1 survives.
+            if finding["severity"] < candidate["severity"]:
+                duplicate_run, duplicate, canonical = sibling, candidate, finding
+                if sibling not in demoted_siblings:
+                    demoted_siblings.append(sibling)
+            else:
+                duplicate_run, duplicate, canonical = run, finding, candidate
+            duplicate["status"] = "ignored"
+            duplicate["resolution"] = {
+                "kind": "duplicate",
+                "finding_id": canonical["id"],
+                "at": marked_at,
+                "auto": True,
+            }
+            self.data["history"].append(
+                {
+                    "event": "auto_duplicate",
+                    "slice": slice_name,
+                    "run_id": duplicate_run["id"],
+                    "finding_id": duplicate["id"],
+                    "canonical_id": canonical["id"],
+                    "at": marked_at,
+                }
+            )
+        return demoted_siblings
 
     def _finding_ids(self) -> set[str]:
         return {finding["id"] for finding in self._session_findings()}
@@ -1394,6 +1959,8 @@ class ReviewState:
         for prior_run in item["runs"]:
             if prior_run is successor_run or not prior_run.get("findings"):
                 continue
+            if prior_run.get("pass") == successor_run.get("pass"):
+                continue
             for finding in prior_run["findings"]:
                 if finding.get("status") != "open":
                     continue
@@ -1421,12 +1988,12 @@ class ReviewState:
             if self._all_findings_terminal(run):
                 run["status"] = "ignored"
                 run["classification"] = "ignored_findings"
-                item["complete"] = True
-                item["last_error"] = None
                 self._archive_and_render_run(name, run)
             else:
                 self._render_run_findings(run)
-                item["complete"] = False
+            item["complete"] = self._latest_wave_settled_clean(item) or self._stopped_by_judge(item)
+            if item["complete"]:
+                item["last_error"] = None
         except (OSError, UnicodeError):
             item.clear()
             item.update(item_snapshot)
@@ -1463,12 +2030,12 @@ class ReviewState:
             if self._all_findings_terminal(run):
                 run["status"] = "ignored"
                 run["classification"] = "ignored_findings"
-                item["complete"] = True
-                item["last_error"] = None
                 self._archive_and_render_run(name, run)
             else:
                 self._render_run_findings(run)
-                item["complete"] = False
+            item["complete"] = self._latest_wave_settled_clean(item) or self._stopped_by_judge(item)
+            if item["complete"]:
+                item["last_error"] = None
         except (OSError, UnicodeError):
             item.clear()
             item.update(item_snapshot)
@@ -1649,13 +2216,33 @@ class ReviewState:
         if self.data["completed"] and all(item.get("last_error") is None for item in self.data["slices"].values()):
             self.data["last_error"] = None
 
-    def _next_output_file(self, pass_number: int, name: str, runs: Iterable[dict[str, Any]]) -> Path:
+    def _next_output_file(
+        self,
+        pass_number: int,
+        name: str,
+        runs: Iterable[dict[str, Any]],
+        *,
+        shot: int = 1,
+        multi_shot: bool = False,
+    ) -> Path:
+        runs = list(runs)
         used = {str(run.get("output_file")) for run in runs}
-        attempt = sum(1 for run in runs if run.get("pass") == pass_number) + 1
+        attempt = (
+            sum(
+                1
+                for run in runs
+                if run.get("pass") == pass_number and run.get("shot", 1) == shot
+            )
+            + 1
+        )
         timestamp = filename_timestamp()
+        shot_suffix = f"-shot{shot}" if multi_shot else ""
         while True:
             retry_suffix = "" if attempt == 1 else f"-retry{attempt}"
-            candidate = self.review_dir / f"{timestamp}-{pass_number}-{name}{retry_suffix}.md"
+            candidate = (
+                self.review_dir
+                / f"{timestamp}-{pass_number}-{name}{shot_suffix}{retry_suffix}.md"
+            )
             if str(candidate) not in used and not candidate.exists():
                 return candidate
             attempt += 1
@@ -1701,8 +2288,21 @@ def build_review_command(slice_data: dict[str, Any], output_file: Path) -> tuple
         if slice_data["mode"] == "prompt"
         else f"{task_prompt}{target_prompt}"
     )
+    prior_findings = slice_data.get("prior_findings") or []
+    memory_prompt = ""
+    if prior_findings:
+        memory_prompt = (
+            "Earlier passes on this slice reported the findings below. Do not re-report a "
+            "rejected finding unless you have new evidence that the rejection reason is wrong. "
+            "Verify that superseded findings were fixed and stay fixed. Report new findings "
+            "and regressions introduced by the fixes.\n"
+            f"{_finding_history_block(prior_findings)}\n\n"
+        )
     prompt = (
         f"{review_prompt}\n\n"
+        "Report every high-value finding you can support in this run. Do not hold "
+        "findings for a later pass; there may be no later pass.\n\n"
+        f"{memory_prompt}"
         f"Return only one JSON object matching {RESULT_SCHEMA_PATH}.\n"
         "Do not wrap the JSON in Markdown fences or add prose outside it.\n"
     )
@@ -1723,6 +2323,63 @@ def build_review_command(slice_data: dict[str, Any], output_file: Path) -> tuple
         ),
     )
     invocation = get_harness(profile.harness).review_invocation(
+        prompt=prompt,
+        output_file=output_file,
+        profile=profile,
+    )
+    return invocation.command, invocation.input_text
+
+
+def _slice_scope_prompt(slice_data: dict[str, Any]) -> str:
+    if slice_data["mode"] == "prompt":
+        return f"Slice prompt:\n{slice_data['prompt']}\n"
+    session_target = slice_data.get("session_target")
+    if session_target is None:
+        return ""
+    session_target = _validate_session_target(session_target)
+    if session_target["kind"] == "uncommitted":
+        return "Slice target: the current staged, unstaged, and untracked changes.\n"
+    if session_target["kind"] == "base":
+        return f"Slice target: the current branch against base {session_target['value']}.\n"
+    return f"Slice target: the changes introduced by commit {session_target['value']}.\n"
+
+
+def build_judge_command(
+    slice_data: dict[str, Any],
+    *,
+    review_dir: Path,
+    output_file: Path,
+    profile: ResolvedProfile,
+    max_passes: int,
+) -> tuple[list[str], str | None]:
+    task_prompt = build_task_context_prompt(review_dir)
+    history = _finding_history_block(slice_data.get("prior_findings") or [])
+    window = f"passes {int(slice_data['window_start']) + 1} to {slice_data['pass']}"
+    prompt = (
+        f"{task_prompt}"
+        f"You judge whether review slice `{slice_data['name']}` earns another window of "
+        f"{max_passes} review passes. It has completed {slice_data['pass']} passes and "
+        "still reported findings in its last pass.\n"
+        f"{_slice_scope_prompt(slice_data)}\n"
+        "Finding history for this slice, oldest first:\n"
+        f"{history or '- (none)'}\n\n"
+        f"Decision rule. The current window is {window}. A kept finding is any finding "
+        "that the author did not reject or mark as a duplicate; a superseded finding is kept. "
+        "The runner checks your verdict against this rule and rejects a contradicting verdict.\n"
+        "- Return `continue` when the last pass kept any P0 or P1 finding.\n"
+        "- Also return `continue` when the same file had a kept P1 finding in any two "
+        "consecutive passes of the current window, even when those passes are earlier than "
+        "the last pass and the fixes appear to hold.\n"
+        "- For `continue`, state in the reason that this pattern signals a design seam or "
+        "fix-quality problem the author must inspect.\n"
+        "- Return `stop` in all other cases. The author fixes or rejects the last-pass "
+        "findings without another review pass.\n"
+        "Do not modify files. Do not re-review the code. Judge only from the history above "
+        "and from reading the referenced files when the history is ambiguous.\n\n"
+        f"Return only one JSON object matching {JUDGE_SCHEMA_PATH}.\n"
+        "Do not wrap the JSON in Markdown fences or add prose outside it.\n"
+    )
+    invocation = get_harness(profile.harness).judge_invocation(
         prompt=prompt,
         output_file=output_file,
         profile=profile,
@@ -1800,10 +2457,13 @@ def default_runner(
     stdout_log.parent.mkdir(parents=True, exist_ok=True)
     stderr_log.parent.mkdir(parents=True, exist_ok=True)
     with stdout_log.open("w", encoding="utf-8") as out_fh, stderr_log.open("w", encoding="utf-8") as err_fh:
+        # Codex reads stdin to EOF even when the prompt is an argument; an inherited open pipe hangs it.
+        stdin = subprocess.DEVNULL if input_text is None else None
         return subprocess.run(
             cmd,
             cwd=cwd,
             input=input_text,
+            stdin=stdin,
             text=True,
             stdout=out_fh,
             stderr=err_fh,
@@ -1886,6 +2546,86 @@ def run_reserved_review(
         _write_completed_process_logs(proc, stdout_log, stderr_log)
         return ReviewExecution(reservation=enriched, proc=proc, stdout_log=stdout_log, stderr_log=stderr_log, launch_error=exc)
     return ReviewExecution(reservation=enriched, proc=proc, stdout_log=stdout_log, stderr_log=stderr_log)
+
+
+def run_judge(
+    review_dir: Path,
+    slice_data: dict[str, Any],
+    *,
+    profile: ResolvedProfile,
+    max_passes: int,
+    command_runner: Runner,
+    child_timeout_seconds: float | None = None,
+) -> JudgeExecution:
+    slice_name = str(slice_data["name"])
+    pass_number = int(slice_data["pass"])
+    definition_version = int(slice_data.get("definition_version", 1))
+    safe_slice = re.sub(r"[^a-zA-Z0-9._-]+", "-", slice_name)
+    timestamp = filename_timestamp()
+    stem = f"{timestamp}-{pass_number}-{safe_slice}-{secrets.token_hex(3)}"
+    log_dir = review_dir / "_logs"
+    stdout_log = log_dir / f"judge-{stem}.stdout.log"
+    stderr_log = log_dir / f"judge-{stem}.stderr.log"
+    output_file = review_dir / "judge" / f"{stem}.json"
+    slice_data = json.loads(json.dumps(slice_data))
+    slice_data["_stdout_log"] = str(stdout_log)
+    slice_data["_stderr_log"] = str(stderr_log)
+    slice_data["_child_timeout_seconds"] = child_timeout_seconds
+    slice_data["_judge"] = True
+    cmd, input_text = build_judge_command(
+        slice_data,
+        review_dir=review_dir,
+        output_file=output_file,
+        profile=profile,
+        max_passes=max_passes,
+    )
+
+    def failure(returncode: int | None, error: str) -> JudgeExecution:
+        _append_runner_error(stderr_log, error)
+        return JudgeExecution(
+            slice_name=slice_name,
+            pass_number=pass_number,
+            output_file=output_file,
+            stdout_log=stdout_log,
+            stderr_log=stderr_log,
+            returncode=returncode,
+            definition_version=definition_version,
+            error=error,
+        )
+
+    try:
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        proc = command_runner(cmd, Path(slice_data["cwd"]), input_text, output_file, slice_data)
+        _write_completed_process_logs(proc, stdout_log, stderr_log)
+    except subprocess.TimeoutExpired as exc:
+        proc = subprocess.CompletedProcess(cmd, 124, exc.stdout or "", exc.stderr or "")
+        _write_completed_process_logs(proc, stdout_log, stderr_log)
+        return failure(124, f"judge command timed out after {exc.timeout} seconds")
+    except OSError as exc:
+        _write_completed_process_logs(
+            subprocess.CompletedProcess(cmd, 1, "", str(exc)), stdout_log, stderr_log
+        )
+        return failure(1, f"judge command failed to launch: {exc}")
+    if proc.returncode != 0:
+        return failure(proc.returncode, f"judge command exited with code {proc.returncode}")
+    try:
+        get_harness(profile.harness).materialize_review_result(
+            stdout_log=stdout_log, output_file=output_file
+        )
+        verdict = parse_judge_verdict(output_file.read_text(encoding="utf-8"))
+    except (HarnessError, ReviewResultError, OSError, UnicodeError) as exc:
+        return failure(proc.returncode, f"judge verdict is unusable: {exc}")
+    return JudgeExecution(
+        slice_name=slice_name,
+        pass_number=pass_number,
+        output_file=output_file,
+        stdout_log=stdout_log,
+        stderr_log=stderr_log,
+        returncode=proc.returncode,
+        definition_version=definition_version,
+        verdict=verdict["verdict"],
+        reason=verdict["reason"],
+    )
 
 
 def _append_runner_error(stderr_log: Path, error: str) -> None:
@@ -2025,6 +2765,7 @@ def _summary(
     remaining: int,
     out_records: list[dict[str, Any]],
     err_records: list[dict[str, Any]] | None,
+    judge_records: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     ordered_errors = (
         sorted(err_records, key=lambda rec: (rec.get("p", 0), rec.get("s", ""), rec.get("f", "")))
@@ -2034,6 +2775,7 @@ def _summary(
     return {
         "dir": _relative_path(review_dir),
         "err": ordered_errors,
+        "judge": sorted(judge_records or [], key=lambda rec: (rec["s"], rec["p"])),
         "ok": ok,
         "out": sorted(out_records, key=lambda rec: (rec["p"], rec["s"], rec["f"])),
         "ran": ran,
@@ -2072,6 +2814,65 @@ def _error_record_for_run(
         "st": "timeout" if status == "timeout" else "failed",
         "stderr": _relative_path(stderr_log),
         "stdout": _relative_path(stdout_log),
+    }
+
+
+def _open_finding_ids(run: dict[str, Any]) -> list[str]:
+    # A final handoff lists only the work left; ignored findings already carry their outcome.
+    return [
+        finding["id"]
+        for finding in (run.get("findings") or [])
+        if finding.get("status") == "open"
+    ]
+
+
+def _out_record(
+    state: ReviewState, slice_name: str, run: dict[str, Any], *, final: bool = False
+) -> dict[str, Any]:
+    return {
+        "f": _relative_path(Path(run["output_file"])),
+        "final": final,
+        "ids": _open_finding_ids(run) if final else state._finding_ids_for_run(slice_name, run),
+        "p": int(run["pass"]),
+        "s": slice_name,
+        "sh": int(run.get("shot", 1)),
+        "st": run.get("classification") or "done",
+    }
+
+
+def _wave_out_records(
+    state: ReviewState, completed_runs: list[tuple[str, str]]
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for slice_name, run_id in completed_runs:
+        run = next(
+            run for run in state.data["slices"][slice_name]["runs"] if run.get("id") == run_id
+        )
+        if run.get("status") == "ignored" and run.get("classification") == "auto_duplicates":
+            records.append(_out_record(state, slice_name, run))
+        elif run.get("status") != "ignored":
+            records.append({
+                "f": _relative_path(Path(run["output_file"])),
+                "final": False,
+                "ids": [finding["id"] for finding in (run.get("findings") or [])],
+                "p": int(run["pass"]),
+                "s": slice_name,
+                "sh": int(run.get("shot", 1)),
+                "st": run.get("classification") or "done",
+            })
+    return records
+
+
+def _judge_error_record(execution: JudgeExecution) -> dict[str, Any]:
+    return {
+        "code": execution.returncode,
+        "f": _relative_path(execution.output_file),
+        "msg": execution.error or "judge failed",
+        "p": execution.pass_number,
+        "s": execution.slice_name,
+        "st": "judge_failed",
+        "stderr": _relative_path(execution.stderr_log),
+        "stdout": _relative_path(execution.stdout_log),
     }
 
 
@@ -2122,15 +2923,7 @@ def _await_run_ids(
                         )
                     )
                 elif status in {"no_findings", "findings", "ignored"}:
-                    out.append(
-                        {
-                            "f": _relative_path(Path(run["output_file"])),
-                            "ids": state._finding_ids_for_run(slice_name, run),
-                            "p": int(run["pass"]),
-                            "s": slice_name,
-                            "st": run.get("classification") or "done",
-                        }
-                    )
+                    out.append(_out_record(state, slice_name, run))
             return remaining, out, errors
 
     with ReviewState.locked(review_dir) as state:
@@ -2235,8 +3028,97 @@ def run_reviews(
     remaining = 0
     any_running = False
     active_run_ids: set[str] = set()
+    judge_inputs: dict[str, dict[str, Any]] = {}
     with ReviewState.locked(review_dir) as state:
-        reservations = state.reserve_eligible()
+        from review_config import load_review_config
+
+        config = load_review_config(Path(state.data["session"]["root"]))
+        state._recover_stale_running_runs()
+        if not state._has_running_runs():
+            judge_inputs = state.reserve_judges(max_passes=config.max_passes)
+        state.save()
+
+    out_records: list[dict[str, Any]] = []
+    err_records: list[dict[str, Any]] = []
+    completed_runs: list[tuple[str, str]] = []
+    judge_records: list[dict[str, Any]] = []
+    progress_stream = sys.stderr if progress_stream is None else progress_stream
+    if judge_inputs:
+        judge_profile = resolve_profile(config.judge_profile, override_source="slice-override")
+        with ThreadPoolExecutor(max_workers=len(judge_inputs)) as executor:
+            futures = [
+                executor.submit(
+                    run_judge,
+                    review_dir,
+                    slice_data,
+                    profile=judge_profile,
+                    max_passes=config.max_passes,
+                    command_runner=command_runner,
+                    child_timeout_seconds=child_timeout_seconds,
+                )
+                for slice_data in judge_inputs.values()
+            ]
+            for future in as_completed(futures):
+                execution = future.result()
+                judgement = None
+                with ReviewState.locked(review_dir) as state:
+                    if execution.verdict is not None:
+                        try:
+                            judgement = state.record_judgement(
+                                execution.slice_name,
+                                verdict=execution.verdict,
+                                reason=str(execution.reason),
+                                profile=judge_profile,
+                                judged_pass=execution.pass_number,
+                                definition_version=execution.definition_version,
+                            )
+                        except JudgeRuleViolation as exc:
+                            execution = replace(execution, verdict=None, error=str(exc))
+                        else:
+                            if judgement is not None and execution.verdict == "stop":
+                                out_records.extend(
+                                    _out_record(state, execution.slice_name, run, final=True)
+                                    for run in state.final_runs(execution.slice_name)
+                                )
+                    state.release_judge(
+                        execution.slice_name,
+                        judged_pass=execution.pass_number,
+                        definition_version=execution.definition_version,
+                    )
+                    state.save()
+                if execution.verdict is not None:
+                    if judgement is not None:
+                        judge_records.append(
+                            {
+                                "p": execution.pass_number,
+                                "reason": execution.reason,
+                                "s": execution.slice_name,
+                                "verdict": execution.verdict,
+                            }
+                        )
+                    display = (
+                        f"judge {execution.verdict}"
+                        if judgement is not None
+                        else "judge verdict ignored: another runner already judged this pass"
+                    )
+                if execution.verdict is None:
+                    append_error(
+                        review_dir,
+                        f"judge failed for {execution.slice_name}",
+                        f"Slice: {execution.slice_name}\nOutput: {execution.output_file}\n"
+                        f"Error: {execution.error}",
+                    )
+                    err_records.append(_judge_error_record(execution))
+                    display = f"judge failed ({execution.error})"
+                if stream_progress:
+                    print(
+                        f"{execution.slice_name}: pass {execution.pass_number} {display}",
+                        file=progress_stream,
+                        flush=True,
+                    )
+
+    with ReviewState.locked(review_dir) as state:
+        reservations = state.reserve_eligible(max_passes=config.max_passes)
         state.save()
         remaining = _remaining_count(state)
         any_running = state._has_running_runs()
@@ -2254,16 +3136,26 @@ def run_reviews(
         else:
             waited_errors = []
             waited_out = []
-        ok = not waited_errors
-        status = "failed" if waited_errors else ("partial" if remaining else "no_work")
+        out_records.extend(waited_out)
+        err_records.extend(waited_errors)
+        ok = not err_records
+        if err_records:
+            status = "partial" if out_records else "failed"
+        elif remaining:
+            status = "partial"
+        elif judge_records or any_running:
+            status = "done"
+        else:
+            status = "no_work"
         summary = _summary(
             review_dir,
             status=status,
             ok=ok,
             ran=0,
             remaining=remaining,
-            out_records=waited_out,
-            err_records=waited_errors,
+            out_records=out_records,
+            err_records=err_records,
+            judge_records=judge_records,
         )
         _emit_summary(
             summary,
@@ -2276,9 +3168,6 @@ def run_reviews(
         )
         return (0 if ok else 2), summary
 
-    out_records: list[dict[str, Any]] = []
-    err_records: list[dict[str, Any]] = []
-    progress_stream = sys.stderr if progress_stream is None else progress_stream
     with ThreadPoolExecutor(max_workers=len(reservations)) as executor:
         futures = [
             executor.submit(run_reserved_review, reservation, command_runner, child_timeout_seconds)
@@ -2330,8 +3219,10 @@ def run_reviews(
                 remaining = _remaining_count(state)
             display_status = persisted_status if completion_applied else "skipped-late-completion"
             if stream_progress:
+                shot = int(reservation.slice_data.get("shot", 1))
+                shot_label = f" shot {shot}" if "-shot" in reservation.output_file.name else ""
                 print(
-                    f"{reservation.slice_name}: pass {reservation.pass_number} {display_status} -> {reservation.output_file}",
+                    f"{reservation.slice_name}: pass {reservation.pass_number}{shot_label} {display_status} -> {reservation.output_file}",
                     file=progress_stream,
                     flush=True,
                 )
@@ -2347,22 +3238,15 @@ def run_reviews(
                     "stdout": _relative_path(execution.stdout_log),
                 }
                 err_records.append(err_record)
-            elif persisted_status != "ignored":
-                out_records.append(
-                    {
-                        "f": _relative_path(reservation.output_file),
-                        "ids": [
-                            finding["id"] for finding in (persisted_run.get("findings") or [])
-                        ],
-                        "p": reservation.pass_number,
-                        "s": reservation.slice_name,
-                        "st": persisted_run.get("classification") or "done",
-                    }
-                )
+            else:
+                completed_runs.append((reservation.slice_name, reservation.run_id))
 
     ok = not err_records
     with ReviewState.locked(review_dir) as state:
         remaining = _remaining_count(state)
+        # A later shot can demote an earlier sibling to an automatic duplicate, so records come
+        # from the state after the whole wave, not from each run at its own completion.
+        out_records.extend(_wave_out_records(state, completed_runs))
     if err_records:
         top_status = "partial" if out_records else "failed"
     elif remaining:
@@ -2378,6 +3262,7 @@ def run_reviews(
         remaining=remaining,
         out_records=out_records,
         err_records=err_records,
+        judge_records=judge_records,
     )
     _emit_summary(
         summary,
@@ -2399,6 +3284,14 @@ def parse_add_slice_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--base")
     parser.add_argument("--commit")
     parser.add_argument("--prompt-file", type=Path)
+    parser.add_argument(
+        "--shots",
+        type=int,
+        help=(
+            "Run this many parallel reviewer shots per pass; each clean shot "
+            "reduces later waves by one. Defaults to the configured shots."
+        ),
+    )
     parser.add_argument(
         "--harness",
         help="Use a specific harness for this slice instead of the configured default.",
@@ -2491,5 +3384,6 @@ def add_slice_from_args(args: argparse.Namespace, *, stdin: Any = sys.stdin) -> 
             reasoning_source=profile.reasoning_source,
             source="user" if user_directive is not None else "classifier",
             user_directive=user_directive,
+            shots=config.shots if args.shots is None else args.shots,
         )
         state.save()

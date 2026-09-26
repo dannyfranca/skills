@@ -50,9 +50,9 @@ policy with its wording and scope preserved. Without review policy, use broad re
 content only as needed for context. Reviewers may read supporting context but report only on their
 assigned changes.
 
-Reclassify on **coverage drift**: the target, task, or guidance makes slices incomplete, mis-scoped,
-obsolete, or incoherent. Also reclassify after partial failure or explicit request. Otherwise rerun
-incomplete slices.
+Classification runs once per session. `classify_slices.py` fails while the session has active
+slices. After a user directive removes every slice, the classifier can run again. Change the slice set only through
+[Explicit user slice changes](#explicit-user-slice-changes). Otherwise rerun incomplete slices.
 
 4. Run one review wave, then join it. Complete when you hold the wave's final JSON:
 
@@ -61,11 +61,14 @@ python3 "$SKILL_DIR/scripts/run_reviews.py" --review-dir "$REVIEW_DIR" \
   --child-timeout-seconds 3600
 ```
 
-All eligible slices run in one parallel wave. Reviewers emit the strict
+All eligible slices run in one parallel wave. A slice with `shots > 1` runs that many
+independent reviewer shots of the same prompt in the wave; the runner marks a finding that a
+sibling shot already reported as an automatic duplicate. Reviewers emit the strict
 JSON shape in `references/review-result.schema.json`; the runner validates it, assigns
 session-scoped `f_` IDs, and replaces the raw result with generated Markdown. Invalid results are
 retryable slice failures. Consume only final JSON, finding IDs and Markdown paths in `out`, and
-diagnostics in `err`. Treat each finding as a hypothesis and validate it against the code and task.
+diagnostics in `err`. Each `out` record names its shot in `sh` and carries `final`. Treat each
+finding as a hypothesis and validate it against the code and task.
 
 5. Complete the chosen mode:
 
@@ -75,9 +78,9 @@ Return the validated, consolidated findings with file and line references. Inclu
 as unavailable review coverage. Interpret `ok` as execution success and `rem` as follow-up
 eligibility. Complete Report mode after consuming the wave for any `rem` value.
 
-On a requested follow-up, reclassify first when the target, task, or desired coverage changed,
-then run another wave. Reuse the session to run eligible slices; initialize a new session for an
-independent repeat of every slice.
+On a requested follow-up, run another wave. Reuse the session to run eligible slices; apply
+explicit user slice changes when the desired coverage changed. Initialize a new session for an
+independent repeat of every slice or a changed target.
 
 ### Barrier
 
@@ -101,9 +104,24 @@ python3 "$SKILL_DIR/scripts/dedupe_finding.py" \
   --canonical-id "<open-finding-id>"
 ```
 
-Run another wave after fixes. A slice also completes when all findings in its latest run are
-ignored or deduplicated. Finish when every finding is fixed or recorded terminal, relevant checks
-pass, and JSON returns `"ok":true` and `"rem":0`.
+Run another wave after fixes. A slice also completes when all findings in its latest wave are
+ignored or deduplicated.
+
+Each slice has a pass budget of `max_passes` (default 3). When a slice still has findings after
+its budget, the next `run_reviews.py` call runs a clean judge for that slice before any wave. The
+JSON `judge` array lists each verdict with its reason:
+
+- `continue`: the slice earned another `max_passes` window. The judge prompt asks for a reason
+  that names a design seam or fix-quality problem. The runner does not validate the reason text.
+  Act on the reason before the next wave.
+- `stop`: the slice is complete. Its last-wave findings return in `out` with `"final":true`.
+  Fix or ignore every `final` finding without running another wave for it.
+
+A judge failure returns an `err` record with `"st":"judge_failed"` and leaves the slice untouched;
+rerun `run_reviews.py` to retry it. A verdict that contradicts the judge rule, in either direction,
+is also a judge failure. Finish when every non-final finding is fixed or recorded
+terminal, every `final` finding is fixed or ignored, relevant checks pass, and JSON returns
+`"ok":true` and `"rem":0`.
 
 ## Joining long runs
 
@@ -135,6 +153,10 @@ python3 "$SKILL_DIR/scripts/add_slice.py" \
   --user-directive-file "<verbatim-user-request-file>"
 ```
 
+`--shots <n>` sets the number of parallel reviewer shots per pass. Omit it to use the configured
+default. Every shot that returns no kept findings reduces later waves for that slice by one shot,
+down to one.
+
 Remove a slice with the same authority marker:
 
 ```bash
@@ -145,7 +167,7 @@ python3 "$SKILL_DIR/scripts/remove_slice.py" \
 ```
 
 Removal tombstones the slice; re-adding its name reactivates it. Definitions may change, while
-runs, outputs, and history remain.
+runs, outputs, and history remain. A reactivated slice gets a new `max_passes` window.
 
 Treat scripts as sole owners of state, locking, output names, rendering, retries, and completion.
 Do not edit generated review Markdown. Keep `.review/` uncommitted.

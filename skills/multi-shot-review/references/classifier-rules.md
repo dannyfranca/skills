@@ -16,13 +16,12 @@ Each session performs a broad review of its assigned changes using the selected 
 criteria and specialized slicing directions come from applicable guidance and the user. Without
 that guidance, the prompt needs only the target, assigned content, and task context.
 
-## Reclassification
+## One classification per session
 
-Slice prompts are durable boundaries, not change logs. Preserve them unless **coverage drift**
-makes the set incomplete, mis-scoped, obsolete, or incoherent.
-
-In-scope remediation reruns unchanged. On drift, mutate only affected slices; reuse tombstones,
-consolidate when needed, and preserve partial mutations.
+Slice prompts are durable boundaries, not change logs. You classify once; the tool refuses a
+second classification while active slices exist. Cover the full target now. In-scope remediation
+reruns the same slices unchanged. Later changes come only from explicit user directions through
+`add_slice.py` and `remove_slice.py`.
 
 ## Authority
 
@@ -49,10 +48,14 @@ Every prompt permits reading any supporting context needed to understand the ass
 restricting findings and review opinions to the assigned changes. Supporting context is not an
 additional review assignment. The runner supplies only the output-format contract.
 
-## Harness, model, and reasoning selection
+## Harness, model, reasoning, and shots selection
 
 Each slice may select a harness with `add_slice.py --harness <harness>` when the target, risk, or
 scoped guidance makes it materially more suitable. The same rule applies to `--model <model>` and
 `--reasoning <effort>`. Otherwise omit them; tooling applies the configured slice profile or
 harness defaults. Do not change these performatively. All three choices are durable slice state,
 not reviewer prompt content.
+
+Pass `--shots <n>` only when scoped guidance asks for parallel reviewer shots on a slice. Omit it
+to use the configured default. Shots run the same prompt independently in one wave; the tool marks
+duplicates across shots and reduces the count as shots come back clean.

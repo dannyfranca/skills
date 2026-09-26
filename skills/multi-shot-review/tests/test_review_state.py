@@ -17,7 +17,11 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
-TIMESTAMPED_REVIEW_FILE_RE = r"^\d{8}-\d{4}-\d+-[a-z0-9._-]+(?:-retry\d+)?\.md$"
+TIMESTAMPED_REVIEW_FILE_RE = r"^\d{8}-\d{4}-\d+-[a-z0-9._-]+(?:-shot\d+)?(?:-retry\d+)?\.md$"
+EXHAUSTIVE_PROMPT = (
+    "Report every high-value finding you can support in this run. Do not hold "
+    "findings for a later pass; there may be no later pass.\n\n"
+)
 TIMESTAMPED_REVIEW_DIR_RE = r"^\d{8}-\d{4}-[0-9a-f]{8}$"
 sys.path.insert(0, str(SCRIPTS))
 
@@ -783,16 +787,6 @@ class ClassifierTests(unittest.TestCase):
             user_context.write_text("Keep compatibility coverage.", encoding="utf-8")
             executor_context = Path(tmp) / "executor.txt"
             executor_context.write_text("The parser is high risk.", encoding="utf-8")
-            completed = subprocess.CompletedProcess([], 0)
-            with ReviewState.locked(review_dir) as state:
-                state.add_slice(
-                    name="api",
-                    mode="prompt",
-                    target=None,
-                    prompt="Review the API.",
-                    cwd=root,
-                )
-                state.save()
 
             with mock.patch.object(
                 classify_slices,
@@ -808,7 +802,7 @@ class ClassifierTests(unittest.TestCase):
             ), mock.patch.object(
                 classify_slices.subprocess,
                 "run",
-                return_value=completed,
+                side_effect=_classifier_child_adds_slice(review_dir, root),
             ) as run:
                 with mock.patch.object(
                     sys,
@@ -880,15 +874,6 @@ class ClassifierTests(unittest.TestCase):
                 encoding="utf-8",
             )
             review_dir = init_review_state(root, "Review the current changes.")
-            with ReviewState.locked(review_dir) as state:
-                state.add_slice(
-                    name="api",
-                    mode="native",
-                    target={"uncommitted": True},
-                    prompt=None,
-                    cwd=root,
-                )
-                state.save()
 
             with mock.patch.object(
                 classify_slices,
@@ -897,7 +882,7 @@ class ClassifierTests(unittest.TestCase):
             ) as guidance, mock.patch.object(
                 classify_slices.subprocess,
                 "run",
-                return_value=subprocess.CompletedProcess([], 0),
+                side_effect=_classifier_child_adds_slice(review_dir, root),
             ) as run:
                 with mock.patch.object(
                     sys,
@@ -920,15 +905,6 @@ class ClassifierTests(unittest.TestCase):
             root = Path(tmp) / "repo"
             root.mkdir()
             review_dir = init_review_state(root, "Review the current changes.")
-            with ReviewState.locked(review_dir) as state:
-                state.add_slice(
-                    name="api",
-                    mode="native",
-                    target={"uncommitted": True},
-                    prompt=None,
-                    cwd=root,
-                )
-                state.save()
 
             with mock.patch.object(
                 classify_slices,
@@ -947,7 +923,7 @@ class ClassifierTests(unittest.TestCase):
             ), mock.patch.object(
                 classify_slices.subprocess,
                 "run",
-                return_value=subprocess.CompletedProcess([], 0),
+                side_effect=_classifier_child_adds_slice(review_dir, root),
             ) as run:
                 with mock.patch.object(
                     sys,
@@ -1029,13 +1005,6 @@ class ClassifierTests(unittest.TestCase):
                         None, override_source="slice-override"
                     )
                 )
-                state.add_slice(
-                    name="api",
-                    mode="native",
-                    target={"uncommitted": True},
-                    prompt=None,
-                    cwd=root,
-                )
                 state.save()
 
             with mock.patch.object(
@@ -1045,7 +1014,7 @@ class ClassifierTests(unittest.TestCase):
             ), mock.patch.object(
                 classify_slices.subprocess,
                 "run",
-                return_value=subprocess.CompletedProcess([], 0),
+                side_effect=_classifier_child_adds_slice(review_dir, root),
             ):
                 with mock.patch.object(
                     sys,
@@ -2034,7 +2003,7 @@ class RunnerTests(unittest.TestCase):
         self.add_slice("ui")
         for _ in range(4):
             with ReviewState.locked(self.review_dir) as state:
-                reservations = state.reserve_eligible()
+                reservations = state.reserve_eligible(max_passes=10)
                 for reservation in reservations:
                     state.complete_run(
                         run_id=reservation.run_id,
@@ -2047,7 +2016,7 @@ class RunnerTests(unittest.TestCase):
                 state.save()
 
         with ReviewState.locked(self.review_dir) as state:
-            reservations = state.reserve_eligible()
+            reservations = state.reserve_eligible(max_passes=10)
             self.assertEqual(
                 {reservation.slice_name: reservation.pass_number for reservation in reservations},
                 {"api": 5, "ui": 5},
@@ -2069,7 +2038,7 @@ class RunnerTests(unittest.TestCase):
                 prompt=None,
                 cwd=self.root,
             )
-            followups = state.reserve_eligible()
+            followups = state.reserve_eligible(max_passes=10)
             state.save()
 
         self.assertEqual(followups, [])
@@ -2087,7 +2056,7 @@ class RunnerTests(unittest.TestCase):
                 exit_code=0,
                 classification="no_findings",
             )
-            followups = state.reserve_eligible()
+            followups = state.reserve_eligible(max_passes=10)
             state.save()
 
         self.assertEqual(
@@ -2258,6 +2227,40 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(len(runs), 1)
         self.assertEqual(runs[0]["status"], "findings")
 
+    def test_await_reviews_reports_each_shot_of_a_multi_shot_wave(self) -> None:
+        with ReviewState.locked(self.review_dir) as state:
+            state.add_slice(name="api", mode="native", target={"uncommitted": True},
+                            prompt=None, cwd=self.root, shots=2)
+            state.save()
+        started = threading.Barrier(3, timeout=2)
+        release = threading.Event()
+
+        def findings_runner(cmd, cwd, input_text, output_file, slice_data):
+            started.wait()
+            self.assertTrue(release.wait(timeout=2))
+            title = f"Finding from shot {slice_data['shot']}"
+            _write_review_result(output_file, [_finding(title=title, path=f"src/s{slice_data['shot']}.py")])
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        runner = threading.Thread(
+            target=lambda: run_reviews(self.review_dir, command_runner=findings_runner, stdout=io.StringIO())
+        )
+        runner.start()
+        started.wait()
+        await_result: list[tuple[int, dict]] = []
+        waiter = threading.Thread(
+            target=lambda: await_result.append(await_reviews(self.review_dir, stdout=io.StringIO()))
+        )
+        waiter.start()
+        time.sleep(0.05)
+        release.set()
+        runner.join(timeout=2)
+        waiter.join(timeout=2)
+
+        rc, summary = await_result[0]
+        self.assertEqual(rc, 0)
+        self.assertEqual(sorted((rec["sh"], rec["final"]) for rec in summary["out"]), [(1, False), (2, False)])
+
     def test_await_reviews_with_no_active_wave_starts_no_work(self) -> None:
         self.add_slice("api")
 
@@ -2402,6 +2405,31 @@ class RunnerTests(unittest.TestCase):
         runs = ReviewState.load(self.review_dir).data["slices"]["api"]["runs"]
         self.assertEqual([run["status"] for run in runs], ["findings", "running"])
         self.assertEqual(runs[1]["id"], later.run_id)
+
+    def test_default_runner_closes_child_stdin_without_input(self) -> None:
+        read_fd, write_fd = os.pipe()
+        try:
+            saved = os.dup(0)
+            os.dup2(read_fd, 0)
+            try:
+                proc = review_state_module.default_runner(
+                    [sys.executable, "-c", "import sys; sys.stdin.read()"],
+                    self.root,
+                    None,
+                    self.root / "out.md",
+                    {
+                        "_child_timeout_seconds": 5,
+                        "_stdout_log": str(self.root / "stdout.log"),
+                        "_stderr_log": str(self.root / "stderr.log"),
+                    },
+                )
+            finally:
+                os.dup2(saved, 0)
+                os.close(saved)
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+        self.assertEqual(proc.returncode, 0)
 
     def test_runner_builds_expected_native_command(self) -> None:
         self.add_slice("api")
@@ -2549,6 +2577,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(
             cmd[-1],
             "Review only API code.\n\n"
+            f"{EXHAUSTIVE_PROMPT}"
             f"Return only one JSON object matching {ROOT / 'references' / 'review-result.schema.json'}.\n"
             "Do not wrap the JSON in Markdown fences or add prose outside it.\n",
         )
@@ -2579,6 +2608,7 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(
                 cmd[-1],
                 policy + "\n\n"
+                f"{EXHAUSTIVE_PROMPT}"
                 f"Return only one JSON object matching {ROOT / 'references' / 'review-result.schema.json'}.\n"
                 "Do not wrap the JSON in Markdown fences or add prose outside it.\n",
             )
@@ -3539,10 +3569,82 @@ class CliTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         captured = captured_prompt.read_text(encoding="utf-8")
         self.assertIn(str(review_dir / "task.md"), captured)
-        self.assertTrue(captured.startswith(prompt + "\n\nReturn only one JSON object"))
+        self.assertTrue(captured.startswith(prompt + "\n\n" + EXHAUSTIVE_PROMPT + "Return only one JSON object"))
         state = ReviewState.load(review_dir)
         self.assertEqual(state.data["slices"]["api-prompt"]["mode"], "prompt")
         self.assertTrue(state.data["slices"]["api-prompt"]["complete"])
+
+    def test_config_chain_drives_shots_cap_and_judge_through_the_clis(self) -> None:
+        (Path(self.tmp.name) / ".agents").mkdir()
+        (Path(self.tmp.name) / ".agents" / "multi-shot-review.toml").write_text(
+            'shots = 3\nmax_passes = 1\n\n[judge]\nharness = "codex"\nmodel = "judge-model"\n',
+            encoding="utf-8",
+        )
+        (self.root / ".agents").mkdir()
+        (self.root / ".agents" / "multi-shot-review.toml").write_text("shots = 2\n", encoding="utf-8")
+        review_dir = Path(
+            self.run_cli(
+                str(SCRIPTS / "init_state.py"), "--root", str(self.root), "--task", "Review config."
+            ).stdout.strip()
+        )
+        add = self.run_cli(
+            str(SCRIPTS / "add_slice.py"), "--review-dir", str(review_dir), "--name", "api", "--uncommitted"
+        )
+        self.assertEqual(add.returncode, 0, add.stderr)
+
+        fake_bin = Path(self.tmp.name) / "config-bin"
+        fake_bin.mkdir()
+        calls_log = Path(self.tmp.name) / "config-calls.log"
+        fake_codex = fake_bin / "codex"
+        fake_codex.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, os, sys\n"
+            "out = sys.argv[sys.argv.index('-o') + 1]\n"
+            "judge = sys.argv[sys.argv.index('--output-schema') + 1].endswith('judge-verdict.schema.json')\n"
+            "open(os.environ['CALLS_LOG'], 'a', encoding='utf-8').write(json.dumps(sys.argv[1:-1]) + '\\n')\n"
+            "if judge:\n"
+            "    result = {'schema_version': 1, 'verdict': 'stop', 'reason': 'Only P2 findings remain.'}\n"
+            "else:\n"
+            "    finding = {'severity': 'P2', 'title': f'Naming {os.getpid()}', 'content': 'Rename it.',\n"
+            "               'location': {'path': 'src/api.py', 'start_line': 1, 'end_line': 1}}\n"
+            "    result = {'schema_version': 1, 'findings': [finding]}\n"
+            "open(out, 'w', encoding='utf-8').write(json.dumps(result))\n",
+            encoding="utf-8",
+        )
+        fake_codex.chmod(0o755)
+        env = {
+            **os.environ,
+            "HOME": self.tmp.name,
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+            "CALLS_LOG": str(calls_log),
+        }
+
+        def run_wave() -> dict:
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPTS / "run_reviews.py"), "--review-dir", str(review_dir)],
+                cwd=self.root, env=env, text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            return json.loads(proc.stdout)
+
+        first = run_wave()
+        self.assertEqual(ReviewState.load(review_dir).data["slices"]["api"]["shots"], 2)
+        self.assertEqual(sorted((rec["p"], rec["sh"], rec["final"]) for rec in first["out"]),
+                         [(1, 1, False), (1, 2, False)])
+        self.assertEqual(first["judge"], [])
+
+        second = run_wave()
+        self.assertEqual((second["ran"], second["rem"], second["ok"]), (0, 0, True))
+        self.assertEqual(second["judge"], [
+            {"p": 1, "reason": "Only P2 findings remain.", "s": "api", "verdict": "stop"}
+        ])
+        self.assertEqual(sorted((rec["sh"], rec["final"]) for rec in second["out"]), [(1, True), (2, True)])
+        judge_calls = [
+            call for call in map(json.loads, calls_log.read_text(encoding="utf-8").splitlines())
+            if call[call.index("--output-schema") + 1].endswith("judge-verdict.schema.json")
+        ]
+        self.assertEqual(len(judge_calls), 1)
+        self.assertEqual(judge_calls[0][judge_calls[0].index("-m") + 1], "judge-model")
 
     def test_run_reviews_cli_no_stdout_summary_file_and_stream_progress_flags(self) -> None:
         fake_bin = Path(self.tmp.name) / "barrier-bin"
@@ -3931,6 +4033,899 @@ class CliTests(unittest.TestCase):
         self.assertFalse((ROOT / "references" / "classification.schema.json").exists())
 
 
+class ShotsAndJudgeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "repo"
+        self.root.mkdir()
+        self.review_dir = init_review_state(self.root, "Review the current uncommitted changes.")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def add_slice(self, name: str, *, shots: int = 1) -> None:
+        with ReviewState.locked(self.review_dir) as state:
+            state.add_slice(
+                name=name,
+                mode="native",
+                target={"uncommitted": True},
+                prompt=None,
+                cwd=self.root,
+                shots=shots,
+            )
+            state.save()
+
+    def run_reviews(
+        self, runner, *, max_passes: int = 3, config: ReviewConfig | None = None
+    ) -> tuple[int, dict]:
+        with mock.patch(
+            "review_config.load_review_config",
+            return_value=config or ReviewConfig(max_passes=max_passes),
+        ):
+            return run_reviews(self.review_dir, command_runner=runner, stdout=io.StringIO())
+
+    def runs(self, name: str = "api") -> list[dict]:
+        return ReviewState.load(self.review_dir).data["slices"][name]["runs"]
+
+    def slice(self, name: str = "api") -> dict:
+        return ReviewState.load(self.review_dir).data["slices"][name]
+
+    def test_add_slice_validates_and_stores_shots(self) -> None:
+        for shots in (0, -1, True, "2", 1.5):
+            with self.subTest(shots=shots), self.assertRaisesRegex(
+                ReviewStateError, "shots must be a positive integer"
+            ):
+                self.add_slice("bad", shots=shots)
+        self.add_slice("api", shots=2)
+
+        self.assertEqual(self.slice()["shots"], 2)
+        self.assertEqual(self.slice()["judgements"], [])
+        self.assertEqual(review_state_module.parse_add_slice_args(
+            ["--review-dir", str(self.review_dir), "--name", "x", "--uncommitted", "--shots", "3"]
+        ).shots, 3)
+
+    def test_add_slice_without_shots_uses_configured_shots(self) -> None:
+        with mock.patch(
+            "review_config.load_review_config", return_value=ReviewConfig(shots=2)
+        ):
+            review_state_module.add_slice_from_args(review_state_module.parse_add_slice_args(
+                ["--review-dir", str(self.review_dir), "--name", "api", "--uncommitted"]
+            ))
+            review_state_module.add_slice_from_args(review_state_module.parse_add_slice_args(
+                ["--review-dir", str(self.review_dir), "--name", "web", "--uncommitted", "--shots", "1"]
+            ))
+
+        self.assertEqual(self.slice("api")["shots"], 2)
+        self.assertEqual(self.slice("web")["shots"], 1)
+
+    def test_multi_shot_wave_runs_every_shot_with_shot_suffixed_files(self) -> None:
+        self.add_slice("api", shots=2)
+        rc, summary = self.run_reviews(
+            _per_shot({1: [_finding(title="Race in cache")], 2: [_finding(title="Unbounded log growth")]})
+        )
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(summary["ran"], 2)
+        self.assertEqual([(rec["p"], rec["sh"], rec["st"], rec["final"]) for rec in summary["out"]],
+                         [(1, 1, "findings", False), (1, 2, "findings", False)])
+        self.assertEqual(sorted(path.name[-9:] for path in self.review_dir.glob("*-1-api-shot*.md")),
+                         ["-shot1.md", "-shot2.md"])
+        self.assertEqual(sorted(run["shot"] for run in self.runs()), [1, 2])
+        self.assertEqual(self.slice()["next_pass"], 2)
+        self.assertEqual({finding["status"] for run in self.runs() for finding in run["findings"]}, {"open"})
+
+    def test_same_wave_overlap_is_auto_duplicate_and_siblings_do_not_supersede(self) -> None:
+        self.add_slice("api", shots=2)
+        self.run_reviews(_per_shot({1: [_finding(title="Race in cache init")],
+                                    2: [_finding(title="Race in cache init path")]}))
+
+        runs = self.runs()
+        by_classification = {run["classification"]: run for run in runs}
+        self.assertEqual(set(by_classification), {"findings", "auto_duplicates"})
+        duplicate_run = by_classification["auto_duplicates"]
+        canonical_run = by_classification["findings"]
+        self.assertEqual(duplicate_run["status"], "ignored")
+        self.assertEqual(canonical_run["findings"][0]["status"], "open")
+        archive = json.loads(Path(duplicate_run["findings_archive"]).read_text(encoding="utf-8"))
+        resolution = archive["findings"][0]["resolution"]
+        self.assertEqual(resolution["kind"], "duplicate")
+        self.assertTrue(resolution["auto"])
+        self.assertEqual(resolution["finding_id"], canonical_run["findings"][0]["id"])
+        events = [e for e in ReviewState.load(self.review_dir).data["history"] if e["event"] == "auto_duplicate"]
+        self.assertEqual(len(events), 1)
+
+        rc, summary = self.run_reviews(_writes_review_result([]))
+
+        self.assertEqual(summary["ran"], 1)
+        self.assertEqual(
+            _single_review_file(self.review_dir, "*-2-api*.md").name[-15:], "-2-api-shot1.md"
+        )
+        self.assertTrue(self.slice()["complete"])
+
+    def test_clean_shots_phase_down_and_never_increase(self) -> None:
+        self.add_slice("api", shots=3)
+        _, first = self.run_reviews(_per_shot({1: [_finding()], 2: [], 3: []}))
+        self.assertEqual(first["ran"], 3)
+
+        _, second = self.run_reviews(_per_shot({1: [_finding(title="Regression")]}))
+        self.assertEqual(second["ran"], 1)
+        self.assertEqual(second["out"][0]["p"], 2)
+        self.assertFalse(self.slice()["complete"])
+
+        _, third = self.run_reviews(_writes_review_result([]))
+        self.assertEqual(third["ran"], 1)
+        self.assertTrue(self.slice()["complete"])
+        self.assertEqual(self.slice()["shots"], 3)
+
+    def test_one_clean_shot_reduces_the_next_wave_by_one(self) -> None:
+        self.add_slice("api", shots=3)
+        self.run_reviews(_per_shot({
+            1: [_finding(title="Race in cache")],
+            2: [_finding(title="Unbounded log growth", path="src/log.py")],
+            3: [],
+        }))
+
+        _, second = self.run_reviews(_per_shot({1: [_finding(title="Regression")], 2: []}))
+
+        self.assertEqual(second["ran"], 2)
+        self.assertEqual(sorted(rec["sh"] for rec in second["out"]), [1, 2])
+
+    def test_auto_dedupe_keeps_the_highest_severity_copy(self) -> None:
+        self.add_slice("api", shots=2)
+        self.run_reviews(_per_shot({1: [_finding(title="Race in cache init", severity="P2")],
+                                    2: [_finding(title="Race in cache init path", severity="P1")]}))
+
+        by_shot = {run["shot"]: run for run in self.runs()}
+        self.assertEqual(by_shot[2]["findings"][0]["status"], "open")
+        self.assertEqual(by_shot[2]["findings"][0]["severity"], "P1")
+        self.assertEqual(by_shot[1]["classification"], "auto_duplicates")
+        archive = json.loads(Path(by_shot[1]["findings_archive"]).read_text(encoding="utf-8"))
+        self.assertEqual(archive["findings"][0]["resolution"]["finding_id"], by_shot[2]["findings"][0]["id"])
+        self.assertIn("Duplicate", Path(by_shot[1]["output_file"]).read_text(encoding="utf-8"))
+
+    def test_summary_reports_a_sibling_demoted_by_a_later_shot(self) -> None:
+        self.add_slice("api", shots=2)
+
+        def by_shot(futures):
+            return sorted(futures, key=lambda future: future.result().reservation.slice_data["shot"])
+
+        with mock.patch.object(review_state_module, "as_completed", by_shot):
+            _, summary = self.run_reviews(_per_shot({
+                1: [_finding(title="Race in cache init", severity="P2")],
+                2: [_finding(title="Race in cache init path", severity="P1")],
+            }))
+
+        by_shot_record = {rec["sh"]: rec for rec in summary["out"]}
+        kept_id = next(run for run in self.runs() if run["shot"] == 2)["findings"][0]["id"]
+        self.assertEqual(by_shot_record[1]["st"], "auto_duplicates")
+        self.assertEqual((by_shot_record[2]["st"], by_shot_record[2]["ids"]), ("findings", [kept_id]))
+
+    def test_lowered_cap_retries_an_unfinished_wave_before_any_judge(self) -> None:
+        self.add_slice("api", shots=2)
+        for _ in range(2):
+            self.run_reviews(_per_shot({1: [_finding(severity="P2")], 2: [_finding(title="Other", severity="P2", path="src/o.py")]}))
+        self.run_reviews(_per_shot({1: [_finding(title="Unlocked write", path="src/lock.py")], 2: None}))
+
+        rc, summary = self.run_reviews(_per_shot({2: []}), max_passes=2)
+
+        self.assertEqual((rc, summary["judge"], summary["ran"]), (0, [], 1))
+        self.assertEqual([(rec["p"], rec["sh"]) for rec in summary["out"]], [(3, 2)])
+        self.assertEqual(self.slice()["judgements"], [])
+
+    def test_failed_shot_retries_only_itself_in_the_same_pass(self) -> None:
+        self.add_slice("api", shots=2)
+        rc, summary = self.run_reviews(_per_shot({1: [_finding()], 2: None}))
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(summary["st"], "partial")
+        self.assertEqual([(run["shot"], run["status"]) for run in self.runs()], [(1, "findings"), (2, "failed")])
+        self.assertEqual(self.slice()["next_pass"], 1)
+
+        rc, summary = self.run_reviews(_per_shot({1: [_finding(title="Should not run")], 2: []}))
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(summary["ran"], 1)
+        retry = self.runs()[-1]
+        self.assertEqual((retry["pass"], retry["shot"], retry["status"]), (1, 2, "no_findings"))
+        self.assertRegex(Path(retry["output_file"]).name, r"-1-api-shot2-retry2\.md$")
+        self.assertEqual(self.slice()["next_pass"], 2)
+
+        _, third = self.run_reviews(_per_shot({1: [], 2: [_finding(title="Should not run")]}))
+        self.assertEqual(third["ran"], 1)
+        self.assertTrue(self.slice()["complete"])
+
+    def test_pass_cap_runs_judge_and_stop_hands_final_findings_to_parent(self) -> None:
+        self.add_slice("api")
+        self.run_reviews(
+            _writes_review_result([_finding(title="Minor naming", severity="P2")]), max_passes=1
+        )
+        finding_id = self.runs()[0]["findings"][0]["id"]
+
+        rc, summary = self.run_reviews(
+            _judge_aware(_should_not_run, verdict="stop", reason="Only P2 findings remain."),
+            max_passes=1,
+        )
+
+        self.assertEqual(rc, 0)
+        self.assertEqual((summary["st"], summary["ok"], summary["ran"], summary["rem"]), ("done", True, 0, 0))
+        self.assertEqual(summary["judge"], [{"p": 1, "reason": "Only P2 findings remain.", "s": "api", "verdict": "stop"}])
+        self.assertEqual([(rec["ids"], rec["final"], rec["p"], rec["st"]) for rec in summary["out"]],
+                         [([finding_id], True, 1, "findings")])
+        item = self.slice()
+        self.assertTrue(item["complete"])
+        self.assertEqual(item["judgements"][0]["verdict"], "stop")
+        self.assertEqual(item["judgements"][0]["pass"], 1)
+        self.assertEqual(item["judgements"][0]["harness"], "codex")
+        self.assertEqual(len(list((self.review_dir / "judge").glob("*-1-api-*.json"))), 1)
+        self.assertIn("judge_verdict", {e["event"] for e in ReviewState.load(self.review_dir).data["history"]})
+        self.assertEqual(self.runs()[0]["findings"][0]["status"], "open")
+
+        with ReviewState.locked(self.review_dir) as state:
+            state.ignore_finding(finding_id, "Naming is fine here.")
+            state.save()
+        self.assertTrue(self.slice()["complete"])
+        rc, summary = self.run_reviews(_should_not_run, max_passes=1)
+        self.assertEqual((summary["st"], summary["rem"]), ("no_work", 0))
+
+    def test_judge_continue_grants_another_pass_window_then_judges_again(self) -> None:
+        self.add_slice("api")
+        self.run_reviews(_writes_review_result([_finding()]), max_passes=1)
+
+        verdicts: list[str] = []
+        rc, summary = self.run_reviews(
+            _judge_aware(_writes_review_result([_finding(title="Still broken", severity="P2")]),
+                         verdict="continue", reason="P1 kept in the last pass: inspect the design seam.",
+                         seen=verdicts),
+            max_passes=1,
+        )
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(summary["judge"][0]["verdict"], "continue")
+        self.assertEqual(summary["ran"], 1)
+        self.assertEqual(summary["out"][0]["p"], 2)
+        self.assertFalse(summary["out"][0]["final"])
+        self.assertEqual(len(verdicts), 1)
+        self.assertFalse(self.slice()["complete"])
+        self.assertEqual(self.slice()["next_pass"], 3)
+
+        with ReviewState.locked(self.review_dir) as state:
+            self.assertEqual(state.slices_awaiting_judge(max_passes=1), ["api"])
+        rc, summary = self.run_reviews(
+            _judge_aware(_should_not_run, verdict="stop", reason="Only P2 left."), max_passes=1
+        )
+        self.assertEqual([j["verdict"] for j in self.slice()["judgements"]], ["continue", "stop"])
+        self.assertTrue(self.slice()["complete"])
+
+    def test_judge_failure_leaves_slice_untouched_and_is_retried(self) -> None:
+        self.add_slice("api")
+        self.run_reviews(_writes_review_result([_finding()]), max_passes=1)
+
+        rc, summary = self.run_reviews(
+            _judge_aware(_should_not_run, verdict="continue", judge_rc=1), max_passes=1
+        )
+
+        self.assertEqual(rc, 2)
+        self.assertEqual((summary["st"], summary["ok"], summary["judge"]), ("failed", False, []))
+        self.assertEqual((summary["err"][0]["st"], summary["err"][0]["s"], summary["err"][0]["p"]),
+                         ("judge_failed", "api", 1))
+        self.assertEqual(self.slice()["judgements"], [])
+        self.assertFalse(self.slice()["complete"])
+        self.assertEqual(len(self.runs()), 1)
+
+        rc, summary = self.run_reviews(
+            _judge_aware(_writes_review_result([]), verdict="continue", reason="P1 kept."),
+            max_passes=1,
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.slice()["judgements"][0]["verdict"], "continue")
+        self.assertTrue(self.slice()["complete"])
+
+    def test_invalid_judge_verdict_is_a_judge_failure(self) -> None:
+        self.add_slice("api")
+        self.run_reviews(_writes_review_result([_finding()]), max_passes=1)
+
+        def bad_judge(cmd, cwd, input_text, output_file, slice_data):
+            output_file.write_text('{"schema_version": 1, "verdict": "maybe", "reason": "?"}', encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        rc, summary = self.run_reviews(bad_judge, max_passes=1)
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(summary["err"][0]["st"], "judge_failed")
+        self.assertIn("continue or stop", summary["err"][0]["msg"])
+
+    def test_judge_prompt_carries_slice_history_and_rule(self) -> None:
+        self.add_slice("api")
+        self.run_reviews(_writes_review_result([_finding(title="Race in cache")]), max_passes=1)
+        captured: list[list[str]] = []
+
+        def capture(cmd, cwd, input_text, output_file, slice_data):
+            captured.append(list(cmd))
+            output_file.write_text(json.dumps({"schema_version": 1, "verdict": "stop", "reason": "ok"}), encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        self.run_reviews(capture, max_passes=1)
+
+        prompt = captured[0][-1]
+        self.assertIn("earns another window of 1 review passes", prompt)
+        self.assertIn("It has completed 1 passes", prompt)
+        self.assertIn("- pass 1 shot 1 [P1] Race in cache (src/cache.py:42-45): reported in the previous pass", prompt)
+        self.assertIn("The current window is passes 1 to 1.", prompt)
+        self.assertIn("Return `continue` when the last pass kept any P0 or P1 finding", prompt)
+        self.assertIn("kept P1 finding in any two consecutive passes of the current window", prompt)
+        self.assertIn("Return `stop` in all other cases", prompt)
+        self.assertEqual(captured[0][captured[0].index("--output-schema") + 1],
+                         str(review_state_module.JUDGE_SCHEMA_PATH))
+
+    def test_auto_dedupe_requires_same_path_overlapping_lines_and_title_overlap(self) -> None:
+        base = "alpha beta gamma delta epsilon"
+        cases = {
+            "other path": (_finding(title=base, path="src/other.py"), False),
+            "disjoint lines": (_finding(title=base, lines=(46, 50)), False),
+            "title overlap below threshold": (_finding(title="alpha beta zeta theta iota"), False),
+            "title overlap at threshold": (_finding(title="alpha beta gamma zeta theta"), True),
+        }
+        names = {label: f"api-{index}" for index, label in enumerate(cases)}
+        for name in names.values():
+            self.add_slice(name, shots=2)
+
+        def runner(cmd, cwd, input_text, output_file, slice_data):
+            label = next(label for label, name in names.items() if name == slice_data["name"])
+            first = [_finding(title=base)]
+            _write_review_result(output_file, first if slice_data["shot"] == 1 else [cases[label][0]])
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        _, summary = self.run_reviews(runner)
+
+        for label, (_second, deduped) in cases.items():
+            with self.subTest(label):
+                name = names[label]
+                classifications = sorted(run["classification"] for run in self.runs(name))
+                expected = ["auto_duplicates", "findings"] if deduped else ["findings", "findings"]
+                self.assertEqual(classifications, expected)
+                records = [rec for rec in summary["out"] if rec["s"] == name]
+                self.assertEqual(sorted(len(rec["ids"]) for rec in records), [1, 1])
+
+    def test_auto_duplicate_run_is_reported_in_the_wave_summary(self) -> None:
+        self.add_slice("api", shots=2)
+        _, summary = self.run_reviews(_per_shot({1: [_finding(title="Race in cache init")],
+                                                 2: [_finding(title="Race in cache init path")]}))
+
+        self.assertEqual(sorted(rec["st"] for rec in summary["out"]), ["auto_duplicates", "findings"])
+        duplicate = next(rec for rec in summary["out"] if rec["st"] == "auto_duplicates")
+        duplicate_run = next(run for run in self.runs() if run["classification"] == "auto_duplicates")
+        archive = json.loads(Path(duplicate_run["findings_archive"]).read_text(encoding="utf-8"))
+        self.assertEqual(duplicate["ids"], [archive["findings"][0]["id"]])
+
+    def test_judge_stop_with_kept_p1_is_a_judge_failure(self) -> None:
+        self.add_slice("api")
+        self.run_reviews(_writes_review_result([_finding(severity="P0")]), max_passes=1)
+
+        rc, summary = self.run_reviews(_judge_aware(_should_not_run, verdict="stop"), max_passes=1)
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(summary["judge"], [])
+        self.assertEqual(summary["err"][0]["st"], "judge_failed")
+        self.assertIn("stop contradicts the rule, which requires continue", summary["err"][0]["msg"])
+        self.assertEqual(self.slice()["judgements"], [])
+        self.assertFalse(self.slice()["complete"])
+
+        finding_id = self.runs()[0]["findings"][0]["id"]
+        with ReviewState.locked(self.review_dir) as state:
+            state.ignore_finding(finding_id, "Not reachable.")
+            state.save()
+        self.assertTrue(self.slice()["complete"])
+
+    def test_judge_stop_is_allowed_when_the_p1_was_rejected(self) -> None:
+        self.add_slice("api")
+        self.run_reviews(
+            _writes_review_result([_finding(title="Race"), _finding(title="Naming", severity="P3")]),
+            max_passes=1,
+        )
+        with ReviewState.locked(self.review_dir) as state:
+            state.ignore_finding(self.runs()[0]["findings"][0]["id"], "Guarded by the caller.")
+            state.save()
+
+        rc, summary = self.run_reviews(_judge_aware(_should_not_run, verdict="stop"), max_passes=1)
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(summary["judge"][0]["verdict"], "stop")
+        self.assertTrue(self.slice()["complete"])
+
+    def test_second_verdict_for_the_same_judged_pass_is_ignored(self) -> None:
+        self.add_slice("api")
+        self.run_reviews(_writes_review_result([_finding()]), max_passes=1)
+        profile = review_state_module.ResolvedProfile(
+            harness="codex", harness_source="slice-override", model=None,
+            model_source="harness-default", reasoning=None, reasoning_source="harness-default",
+        )
+
+        with ReviewState.locked(self.review_dir) as state:
+            first = state.record_judgement(
+                "api", verdict="continue", reason="P1 kept.", profile=profile,
+                judged_pass=1, definition_version=1,
+            )
+            second = state.record_judgement(
+                "api", verdict="continue", reason="P1 kept.", profile=profile,
+                judged_pass=1, definition_version=1,
+            )
+            stale_version = state.record_judgement(
+                "api", verdict="continue", reason="P1 kept.", profile=profile,
+                judged_pass=1, definition_version=2,
+            )
+            state.save()
+
+        self.assertIsNotNone(first)
+        self.assertIsNone(second)
+        self.assertIsNone(stale_version)
+        self.assertEqual(len(self.slice()["judgements"]), 1)
+        with ReviewState.locked(self.review_dir) as state:
+            self.assertEqual(state._allowed_passes(state.data["slices"]["api"], 1), 2)
+        events = [e["event"] for e in ReviewState.load(self.review_dir).data["history"]]
+        self.assertEqual(events.count("stale_judgement_ignored"), 2)
+
+    def test_reactivated_slice_gets_a_fresh_pass_window(self) -> None:
+        self.add_slice("api")
+        self.run_reviews(_writes_review_result([_finding(severity="P2")]), max_passes=1)
+        self.run_reviews(_judge_aware(_should_not_run, verdict="stop"), max_passes=1)
+        self.assertTrue(self.slice()["complete"])
+        with ReviewState.locked(self.review_dir) as state:
+            state.remove_slice("api")
+            state.save()
+        self.add_slice("api")
+
+        rc, summary = self.run_reviews(_writes_review_result([_finding(severity="P2")]), max_passes=1)
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(summary["judge"], [])
+        self.assertEqual([(rec["p"], rec["final"]) for rec in summary["out"]], [(2, False)])
+        self.assertFalse(self.slice()["complete"])
+        with ReviewState.locked(self.review_dir) as state:
+            self.assertEqual(state.slices_awaiting_judge(max_passes=1), ["api"])
+
+        self.run_reviews(_judge_aware(_should_not_run, verdict="stop"), max_passes=1)
+        judgements = self.slice()["judgements"]
+        self.assertEqual([(j["pass"], j["definition_version"]) for j in judgements], [(1, 1), (2, 2)])
+        self.assertTrue(self.slice()["complete"])
+
+    def test_judge_continue_with_only_p2_is_a_judge_failure(self) -> None:
+        self.add_slice("api")
+        self.run_reviews(_writes_review_result([_finding(severity="P2")]), max_passes=1)
+
+        rc, summary = self.run_reviews(
+            _judge_aware(_should_not_run, verdict="continue"), max_passes=1
+        )
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(summary["err"][0]["st"], "judge_failed")
+        self.assertIn("continue contradicts the rule, which requires stop", summary["err"][0]["msg"])
+        self.assertEqual(self.slice()["judgements"], [])
+        self.assertIsNone(self.slice()["judge_pending"])
+
+    def test_same_file_p1_in_two_consecutive_passes_requires_continue(self) -> None:
+        self.add_slice("api")
+        self.run_reviews(_writes_review_result([_finding(title="Race")]), max_passes=3)
+        self.run_reviews(_writes_review_result([_finding(title="Lock order")]), max_passes=3)
+        self.run_reviews(_writes_review_result([_finding(title="Naming", severity="P2")]), max_passes=3)
+
+        rc, summary = self.run_reviews(_judge_aware(_should_not_run, verdict="stop"), max_passes=3)
+        self.assertEqual(rc, 2)
+        self.assertIn("stop contradicts the rule, which requires continue", summary["err"][0]["msg"])
+
+        rc, summary = self.run_reviews(
+            _judge_aware(_writes_review_result([]), verdict="continue"), max_passes=3
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(summary["judge"][0]["verdict"], "continue")
+
+    def test_p1_on_different_files_in_consecutive_passes_requires_stop(self) -> None:
+        self.add_slice("api")
+        self.run_reviews(_writes_review_result([_finding(title="Race")]), max_passes=3)
+        self.run_reviews(
+            _writes_review_result([_finding(title="Lock order", path="src/lock.py")]), max_passes=3
+        )
+        self.run_reviews(_writes_review_result([_finding(title="Naming", severity="P2")]), max_passes=3)
+
+        rc, summary = self.run_reviews(_judge_aware(_should_not_run, verdict="stop"), max_passes=3)
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(summary["judge"][0]["verdict"], "stop")
+
+    def test_concurrent_runner_skips_a_judge_that_another_runner_holds(self) -> None:
+        self.add_slice("api")
+        self.run_reviews(_writes_review_result([_finding(severity="P2")]), max_passes=1)
+        with ReviewState.locked(self.review_dir) as state:
+            state.data["slices"]["api"]["judge_pending"] = {
+                "pass": 1,
+                "definition_version": 1,
+                "runner_pid": os.getpid(),
+                "runner_key": review_state_module._process_key(os.getpid()),
+                "started_at": review_state_module.now_iso(),
+            }
+            state.save()
+
+        rc, summary = self.run_reviews(_should_not_run, max_passes=1)
+
+        self.assertEqual((rc, summary["judge"], summary["err"]), (0, [], None))
+        self.assertEqual(self.slice()["judgements"], [])
+        self.assertIsNotNone(self.slice()["judge_pending"])
+
+        with ReviewState.locked(self.review_dir) as state:
+            state.data["slices"]["api"]["judge_pending"]["runner_key"] = "gone:0"
+            state.save()
+        rc, summary = self.run_reviews(_judge_aware(_should_not_run, verdict="stop"), max_passes=1)
+
+        self.assertEqual(summary["judge"][0]["verdict"], "stop")
+        self.assertIsNone(self.slice()["judge_pending"])
+
+    def test_max_passes_change_applies_from_the_next_window(self) -> None:
+        self.add_slice("api")
+        self.run_reviews(_writes_review_result([_finding()]), max_passes=2)
+        self.run_reviews(_writes_review_result([_finding()]), max_passes=2)
+        self.run_reviews(
+            _judge_aware(_writes_review_result([_finding()]), verdict="continue"), max_passes=2
+        )
+        self.assertEqual(self.slice()["next_pass"], 4)
+
+        rc, summary = self.run_reviews(_writes_review_result([_finding()]), max_passes=1)
+
+        self.assertEqual((rc, summary["judge"]), (0, []))
+        self.assertEqual([rec["p"] for rec in summary["out"]], [4])
+
+        rc, summary = self.run_reviews(
+            _judge_aware(_writes_review_result([]), verdict="continue"), max_passes=1
+        )
+
+        self.assertEqual([(j["p"], j["verdict"]) for j in summary["judge"]], [(4, "continue")])
+        self.assertEqual([rec["p"] for rec in summary["out"]], [5])
+        self.assertEqual(self.slice()["pass_window"], {"start": 4, "max_passes": 1})
+        self.assertTrue(self.slice()["complete"])
+
+    def test_judge_timeout_is_a_retryable_judge_failure(self) -> None:
+        self.add_slice("api")
+        self.run_reviews(_writes_review_result([_finding(severity="P2")]), max_passes=1)
+
+        def timing_out(cmd, cwd, input_text, output_file, slice_data):
+            if slice_data.get("_judge"):
+                raise subprocess.TimeoutExpired(cmd, timeout=1, output="partial", stderr="slow")
+            return _should_not_run(cmd, cwd, input_text, output_file, slice_data)
+
+        rc, summary = self.run_reviews(timing_out, max_passes=1)
+
+        self.assertEqual(rc, 2)
+        self.assertEqual((summary["err"][0]["st"], summary["err"][0]["code"]), ("judge_failed", 124))
+        self.assertIn("timed out", summary["err"][0]["msg"])
+        self.assertEqual((self.slice()["judgements"], len(self.runs())), ([], 1))
+        self.assertIsNone(self.slice()["judge_pending"])
+
+        rc, summary = self.run_reviews(_judge_aware(_should_not_run, verdict="stop"), max_passes=1)
+        self.assertEqual((rc, summary["judge"][0]["p"]), (0, 1))
+
+    def test_claude_judge_on_the_classifier_profile_completes_the_slice(self) -> None:
+        self.add_slice("api")
+        self.run_reviews(_writes_review_result([_finding(severity="P2")]), max_passes=1)
+        config = ReviewConfig(
+            max_passes=1,
+            classifier=HarnessProfile(harness="claude-code", model="classifier-model"),
+        )
+        judge_commands: list[list[str]] = []
+
+        def claude_judge(cmd, cwd, input_text, output_file, slice_data):
+            self.assertTrue(slice_data.get("_judge"))
+            judge_commands.append(cmd)
+            envelope = {
+                "type": "result",
+                "structured_output": {"schema_version": 1, "verdict": "stop", "reason": "Only P2."},
+            }
+            return subprocess.CompletedProcess(cmd, 0, json.dumps(envelope), "")
+
+        rc, summary = self.run_reviews(claude_judge, config=config)
+
+        self.assertEqual(rc, 0, summary)
+        self.assertEqual(judge_commands[0][0], "claude")
+        self.assertEqual(judge_commands[0][judge_commands[0].index("--model") + 1], "classifier-model")
+        self.assertEqual(summary["judge"], [{"p": 1, "reason": "Only P2.", "s": "api", "verdict": "stop"}])
+        self.assertEqual([rec["final"] for rec in summary["out"]], [True])
+        item = self.slice()
+        self.assertTrue(item["complete"])
+        self.assertEqual((item["judgements"][0]["harness"], item["judgements"][0]["model"]),
+                         ("claude-code", "classifier-model"))
+
+    def test_invalid_claude_judge_envelope_is_a_retryable_judge_failure(self) -> None:
+        self.add_slice("api")
+        self.run_reviews(_writes_review_result([_finding(severity="P2")]), max_passes=1)
+        config = ReviewConfig(max_passes=1, classifier=HarnessProfile(harness="claude-code"))
+        envelopes = [
+            {"type": "result", "result": "no structured output"},
+            {
+                "type": "result",
+                "structured_output": {"schema_version": 1, "verdict": "stop", "reason": "Only P2."},
+            },
+        ]
+
+        def claude_judge(cmd, cwd, input_text, output_file, slice_data):
+            return subprocess.CompletedProcess(cmd, 0, json.dumps(envelopes.pop(0)), "")
+
+        rc, summary = self.run_reviews(claude_judge, config=config)
+
+        self.assertEqual(rc, 2)
+        self.assertEqual([record["st"] for record in summary["err"]], ["judge_failed"])
+        item = self.slice()
+        self.assertEqual((item["judgements"], item["judge_pending"], item["complete"]), ([], None, False))
+
+        rc, summary = self.run_reviews(claude_judge, config=config)
+
+        self.assertEqual(rc, 0, summary)
+        self.assertEqual([j["verdict"] for j in summary["judge"]], ["stop"])
+        self.assertTrue(self.slice()["complete"])
+
+    def test_final_handoff_lists_only_open_findings(self) -> None:
+        self.add_slice("api")
+        self.run_reviews(_writes_review_result([
+            _finding(title="Naming drift", severity="P2"),
+            _finding(title="Unlocked write", severity="P1", path="src/lock.py"),
+        ]), max_passes=1)
+        open_id, rejected_id = [finding["id"] for finding in self.runs()[0]["findings"]]
+        with ReviewState.locked(self.review_dir) as state:
+            state.ignore_finding(rejected_id, "The caller holds the lock.")
+            state.save()
+
+        rc, summary = self.run_reviews(_judge_aware(_should_not_run, verdict="stop"), max_passes=1)
+
+        self.assertEqual(rc, 0, summary)
+        self.assertEqual([(rec["final"], rec["ids"]) for rec in summary["out"]], [(True, [open_id])])
+
+    def test_prior_findings_exclude_earlier_slice_definitions(self) -> None:
+        self.add_slice("api")
+        self.run_reviews(_writes_review_result([_finding(title="Old scope finding")]))
+        with ReviewState.locked(self.review_dir) as state:
+            state.remove_slice("api")
+            state.save()
+        self.add_slice("api")
+        self.run_reviews(_writes_review_result([_finding(title="New scope finding")]))
+        captured: list[str] = []
+
+        def capture(cmd, cwd, input_text, output_file, slice_data):
+            captured.append(cmd[-1])
+            _write_review_result(output_file, [])
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        self.run_reviews(capture)
+
+        self.assertIn("New scope finding", captured[0])
+        self.assertNotIn("Old scope finding", captured[0])
+
+    def test_load_rejects_corrupt_shots_pass_window_and_judge_state(self) -> None:
+        self.add_slice("api")
+        state_path = self.review_dir / "_state.json"
+        pristine = json.loads(state_path.read_text(encoding="utf-8"))
+        judgement = {
+            "pass": 1, "definition_version": 1, "verdict": "stop", "reason": "P2 only.",
+            "at": "2026-01-01T00:00:00Z", "harness": "codex", "model": None, "reasoning": None,
+        }
+        pending = {
+            "pass": 1, "definition_version": 1, "runner_pid": 1, "runner_key": None,
+            "started_at": "2026-01-01T00:00:00Z",
+        }
+        corruptions = {
+            "shots bool": {"shots": True},
+            "shots zero": {"shots": 0},
+            "pass_base negative": {"pass_base": -1},
+            "pass_base text": {"pass_base": "1"},
+            "judgements object": {"judgements": {}},
+            "judgement pass": {"judgements": [{**judgement, "pass": 0}]},
+            "judgement verdict": {"judgements": [{**judgement, "verdict": "maybe"}]},
+            "judgement version": {"judgements": [{**judgement, "definition_version": 0}]},
+            "judgement reason": {"judgements": [{**judgement, "reason": " "}]},
+            "judgement harness": {"judgements": [{**judgement, "harness": None}]},
+            "judgement model": {"judgements": [{**judgement, "model": ""}]},
+            "pending object": {"judge_pending": []},
+            "pending pass": {"judge_pending": {**pending, "pass": 0}},
+            "pending pid": {"judge_pending": {**pending, "runner_pid": "1"}},
+            "pending key": {"judge_pending": {**pending, "runner_key": 1}},
+        }
+        corruptions.update({
+            "window object": {"pass_window": []},
+            "window start": {"pass_window": {"start": -1, "max_passes": 3}},
+            "window budget": {"pass_window": {"start": 0, "max_passes": 0}},
+        })
+        for label, fields in corruptions.items():
+            with self.subTest(label):
+                data = json.loads(json.dumps(pristine))
+                data["slices"]["api"].update(fields)
+                state_path.write_text(json.dumps(data), encoding="utf-8")
+                with self.assertRaises(ReviewStateError):
+                    ReviewState.load(self.review_dir)
+        state_path.write_text(json.dumps(pristine), encoding="utf-8")
+
+        with ReviewState.locked(self.review_dir) as state:
+            state.reserve_eligible()
+            state.save()
+        reserved = json.loads(state_path.read_text(encoding="utf-8"))
+        for shot in (0, True, "1"):
+            with self.subTest(run_shot=shot):
+                data = json.loads(json.dumps(reserved))
+                data["slices"]["api"]["runs"][0]["shot"] = shot
+                state_path.write_text(json.dumps(data), encoding="utf-8")
+                with self.assertRaises(ReviewStateError):
+                    ReviewState.load(self.review_dir)
+        state_path.write_text(json.dumps(reserved), encoding="utf-8")
+
+    def test_judge_artifacts_are_unique_per_attempt(self) -> None:
+        self.add_slice("api")
+        self.run_reviews(_writes_review_result([_finding()]), max_passes=1)
+        self.run_reviews(_judge_aware(_should_not_run, judge_rc=1), max_passes=1)
+        with mock.patch.object(review_state_module, "filename_timestamp", return_value="20260101-0000"):
+            self.run_reviews(_judge_aware(_should_not_run, judge_rc=1), max_passes=1)
+            self.run_reviews(_judge_aware(_should_not_run, judge_rc=1), max_passes=1)
+
+        stderr_logs = list((self.review_dir / "_logs").glob("judge-20260101-0000-1-api-*.stderr.log"))
+        self.assertEqual(len(stderr_logs), 2)
+
+    def test_later_pass_prompt_lists_archived_superseded_and_duplicate_findings(self) -> None:
+        self.add_slice("api", shots=2)
+        self.run_reviews(_per_shot({1: [_finding(title="Race in cache init")],
+                                    2: [_finding(title="Race in cache init path", severity="P2")]}))
+        self.run_reviews(_per_shot({1: [_finding(title="Stale lock", path="src/lock.py")], 2: []}))
+        self.assertTrue(all(run["findings"] is None for run in self.runs() if run["pass"] == 1))
+        captured: list[str] = []
+
+        def capture(cmd, cwd, input_text, output_file, slice_data):
+            captured.append(cmd[-1])
+            _write_review_result(output_file, [])
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        self.run_reviews(capture)
+
+        prompt = captured[0]
+        self.assertIn(
+            "- pass 1 shot 1 [P1] Race in cache init (src/cache.py:42-45): superseded by a later "
+            "pass: verify it was fixed and report it again if it still applies",
+            prompt,
+        )
+        self.assertRegex(
+            prompt,
+            r"- pass 1 shot 2 \[P2\] Race in cache init path \(src/cache.py:42-45\): duplicate of f_",
+        )
+        self.assertIn("- pass 2 shot 1 [P1] Stale lock (src/lock.py:42-45): reported in the previous pass", prompt)
+
+    def test_second_pass_prompt_lists_prior_findings_with_outcomes(self) -> None:
+        self.add_slice("api")
+        self.run_reviews(_writes_review_result([_finding(title="Race in cache"), _finding(title="Stale lock")]))
+        with ReviewState.locked(self.review_dir) as state:
+            rejected_id = self.runs()[0]["findings"][1]["id"]
+            state.ignore_finding(rejected_id, "Lock is held by the caller.")
+            state.save()
+        captured: list[str] = []
+
+        def capture(cmd, cwd, input_text, output_file, slice_data):
+            captured.append(cmd[-1])
+            _write_review_result(output_file, [])
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        self.run_reviews(capture)
+
+        prompt = captured[0]
+        self.assertIn("Earlier passes on this slice reported the findings below.", prompt)
+        self.assertIn(
+            "- pass 1 shot 1 [P1] Race in cache (src/cache.py:42-45): reported in the previous "
+            "pass and not rejected: verify it was addressed",
+            prompt,
+        )
+        self.assertIn(
+            "- pass 1 shot 1 [P1] Stale lock (src/cache.py:42-45): rejected by the author: "
+            "Lock is held by the caller.",
+            prompt,
+        )
+        self.assertIn(EXHAUSTIVE_PROMPT, prompt)
+        self.assertLess(prompt.index(EXHAUSTIVE_PROMPT), prompt.index("Earlier passes"))
+
+    def test_classifier_refuses_session_with_active_slices(self) -> None:
+        self.add_slice("api")
+        stderr = io.StringIO()
+
+        with mock.patch.object(classify_slices.subprocess, "run") as run, mock.patch.object(
+            sys, "argv", ["classify_slices.py", "--review-dir", str(self.review_dir)]
+        ), mock.patch("sys.stderr", stderr):
+            self.assertEqual(classify_slices.main(), 2)
+
+        run.assert_not_called()
+        self.assertIn("already has active review slices", stderr.getvalue())
+        self.assertEqual(ReviewState.load(self.review_dir).data["classifications"], [])
+
+    def test_classifier_accepts_session_whose_slices_were_all_removed(self) -> None:
+        self.add_slice("api")
+        with ReviewState.locked(self.review_dir) as state:
+            state.remove_slice("api", source="user", user_directive="Drop it.")
+            state.save()
+
+        with mock.patch.object(classify_slices, "load_review_config", return_value=ReviewConfig()), \
+            mock.patch.object(classify_slices, "load_classifier_guidance", return_value="(none)"), \
+            mock.patch.object(classify_slices.subprocess, "run",
+                              side_effect=_classifier_child_adds_slice(
+                                  self.review_dir, self.root, name="web"
+                              )) as run, \
+            mock.patch.object(sys, "argv", ["classify_slices.py", "--review-dir", str(self.review_dir)]), \
+            mock.patch("sys.stderr", io.StringIO()):
+            self.assertEqual(classify_slices.main(), 0)
+
+        run.assert_called_once()
+        self.assertIs(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
+        state = ReviewState.load(self.review_dir)
+        self.assertEqual(state.data["classifications"][-1]["status"], "succeeded")
+        self.assertFalse(state.data["slices"]["web"]["removed"])
+
+    def test_classifier_refuses_a_slice_added_while_it_prepares(self) -> None:
+        def add_slice_during_setup(root):
+            self.add_slice("api")
+            return ReviewConfig()
+
+        stderr = io.StringIO()
+        with mock.patch.object(classify_slices, "load_review_config", side_effect=add_slice_during_setup), \
+            mock.patch.object(classify_slices, "load_classifier_guidance", return_value="(none)"), \
+            mock.patch.object(classify_slices.subprocess, "run") as run, \
+            mock.patch.object(sys, "argv", ["classify_slices.py", "--review-dir", str(self.review_dir)]), \
+            mock.patch("sys.stderr", stderr):
+            self.assertEqual(classify_slices.main(), 2)
+
+        run.assert_not_called()
+        self.assertIn("already has active review slices", stderr.getvalue())
+        self.assertEqual(ReviewState.load(self.review_dir).data["classifications"], [])
+
+
+def _classifier_child_adds_slice(review_dir: Path, root: Path, *, name: str = "api"):
+    """Stand in for the classifier child process: it adds one slice and exits cleanly."""
+
+    def run(*args, **kwargs):
+        with ReviewState.locked(review_dir) as state:
+            state.add_slice(
+                name=name,
+                mode="prompt",
+                target=None,
+                prompt="Review the API.",
+                cwd=root,
+            )
+            state.save()
+        return subprocess.CompletedProcess([], 0)
+
+    return run
+
+
+def _per_shot(results: dict[int, list[dict[str, object]] | None]):
+    """Answer each shot from `results`; a None entry makes that shot fail."""
+
+    def runner(cmd, cwd, input_text, output_file, slice_data):
+        if slice_data.get("_judge"):
+            raise AssertionError("judge should not be invoked")
+        shot = int(slice_data.get("shot", 1))
+        if shot not in results:
+            raise AssertionError(f"unexpected shot {shot}")
+        if results[shot] is None:
+            return subprocess.CompletedProcess(cmd, 1, "", "reviewer crashed")
+        _write_review_result(output_file, results[shot])
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    return runner
+
+
+def _judge_aware(review_runner, *, verdict="stop", reason="Only P2 findings remain.",
+                 judge_rc=0, seen=None):
+    def runner(cmd, cwd, input_text, output_file, slice_data):
+        if not slice_data.get("_judge"):
+            return review_runner(cmd, cwd, input_text, output_file, slice_data)
+        if seen is not None:
+            seen.append(verdict)
+        if judge_rc != 0:
+            return subprocess.CompletedProcess(cmd, judge_rc, "", "judge crashed")
+        output_file.write_text(
+            json.dumps({"schema_version": 1, "verdict": verdict, "reason": reason}),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    return runner
+
+
 def _writes(text: str):
     def runner(cmd, cwd, input_text, output_file, slice_data):
         output_file.write_text(text, encoding="utf-8")
@@ -3939,15 +4934,21 @@ def _writes(text: str):
     return runner
 
 
-def _finding(*, title: str = "Finding") -> dict[str, object]:
+def _finding(
+    *,
+    title: str = "Finding",
+    severity: str = "P1",
+    path: str = "src/cache.py",
+    lines: tuple[int, int] = (42, 45),
+) -> dict[str, object]:
     return {
-        "severity": "P1",
+        "severity": severity,
         "title": title,
         "content": "The cache can be initialized by two workers at once.",
         "location": {
-            "path": "src/cache.py",
-            "start_line": 42,
-            "end_line": 45,
+            "path": path,
+            "start_line": lines[0],
+            "end_line": lines[1],
         },
     }
 

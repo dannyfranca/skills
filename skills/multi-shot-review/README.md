@@ -12,29 +12,44 @@ Configuration files are named:
 ```
 
 The resolver starts at `$HOME` and loads each configuration down the directory chain to the
-repository root. The nearest value wins. Execution profiles are atomic: a nearer `classifier` or
-`slice_default` table replaces the whole parent profile.
+repository root. The nearest value wins. Execution profiles are atomic: a nearer `classifier`,
+`slice_default`, or `judge` table replaces the whole parent profile.
 
-All settings are optional:
+All settings are optional. Suggested defaults (replace each `<model>` with a model ID that the
+harness supports, or delete the `model` line to use the harness default):
 
 ```toml
 review_file = "REVIEW"
+max_passes = 3
+shots = 1
 
 [classifier]
 harness = "codex"
-model = "model-name"
+model = "<model>"
 reasoning = "high"
 
 [slice_default]
 harness = "claude-code"
 model = "sonnet"
 reasoning = "high"
+
+# With no [judge] table in any config of the chain, the judge uses the classifier profile.
+[judge]
+harness = "codex"
+model = "<model>"
+reasoning = "medium"
 ```
 
 - `review_file`: review-instruction basename. Defaults to `REVIEW`. It must not contain a path or
   the `.md` suffix.
+- `max_passes`: review passes a slice may run before the judge decides. Defaults to `3`. Must be a
+  positive integer.
+- `shots`: reviewer shots per pass for a slice that `add_slice.py` creates without `--shots`.
+  Defaults to `1`. Must be a positive integer.
 - `classifier`: harness profile used by the slice classifier.
 - `slice_default`: harness profile used when a slice does not override it.
+- `judge`: harness profile used by the pass-budget judge. When no config in the chain has a
+  `[judge]` table, the judge uses the `classifier` profile.
 - `harness`: required profile field. Supported IDs are `codex` and `claude-code`.
 - `model` and `reasoning`: optional, non-empty, harness-specific strings.
 
@@ -49,6 +64,94 @@ fails; it never falls back silently.
 
 `REVIEW.md` guidance may tell the classifier to select a harness for applicable slices. For adding
 another built-in, see [Extending review harnesses](docs/extending-harnesses.md).
+
+## Passes, shots, and the judge
+
+### Classification
+
+Classification runs one time for each session. `classify_slices.py` fails when a slice is active.
+For a later slice change, use `add_slice.py` or `remove_slice.py` with a user directive. When a user
+directive removes all slices, you can run the classifier again in the same session.
+
+### Passes
+
+Each slice runs one pass in each wave. The slice continues until a wave gives no kept findings. A
+kept finding is a finding that the parent did not ignore or deduplicate.
+
+Each pass gets the finding history of the current slice definition. Each history item shows its
+outcome:
+
+- Superseded by a later pass. The reviewer makes sure that the finding is fixed.
+- Rejected. The history shows the reason word for word.
+- Duplicate.
+
+The prompt tells the reviewer to report all high-value findings in the current run.
+
+### Shots
+
+`add_slice.py --shots <n>` sets the number of shots. A shot is an independent reviewer run of the
+same prompt in the same wave. Without `--shots`, the slice uses the configured `shots` value. The
+default is `1`.
+
+The runner marks some findings as automatic duplicates. The conditions are:
+
+- A sibling shot of the same wave reported a finding at the same path.
+- The line ranges overlap.
+- The title token overlap is 0.6 or more.
+
+The resolution of an automatic duplicate has `"auto": true`. The runner keeps the copy with the
+highest severity.
+
+The number of shots decreases. Each shot that gives no kept findings removes one shot from later
+waves. The minimum is one shot. The number never increases. When all shots of a wave are clean, the
+slice is complete. When a shot fails or times out, the runner runs only that shot again.
+
+### Judge
+
+When a slice has findings after `max_passes` passes, the judge runs before the next wave. The judge
+is a clean, read-only session. It gets the full finding history of the slice and this rule:
+
+- `continue`: the last pass has a kept P0 or P1 finding. The slice gets a new window of
+  `max_passes` passes.
+- `continue`: the same file has a kept P1 finding in two consecutive passes of the current window.
+  This applies also when these passes are earlier than the last pass.
+- `stop`: all other conditions.
+
+A superseded finding is a kept finding.
+
+The runner applies the same rule to the pass history. When the verdict does not agree with the
+rule, the runner records a judge failure. This applies in the two directions.
+
+The slice stores each verdict. The history also records it. The run summary returns it in the
+`judge` array.
+
+A `stop` verdict completes the slice. The open findings of the last wave return in `out` with
+`"final": true`. The parent fixes or ignores these findings. The parent does not run another wave
+for them.
+
+The judge does not filter findings. When the judge fails, the slice does not change. The runner
+reports `"st": "judge_failed"` in `err`. The next run tries the judge again.
+
+### Judge guards
+
+Each judged pass accepts one verdict. When two runners judge the same pass, the first verdict
+applies. The runner ignores the second verdict and records `stale_judgement_ignored` in history.
+
+Before a judge starts, the runner reserves the judged pass on the slice. Another runner does not
+start a second judge for a reserved pass. When the process that holds a reservation stops, the
+next runner takes the reservation again. Judge files get a random suffix. Thus, parallel judges
+never write to the same file.
+
+### Windows
+
+Each window starts at the last `continue` pass. The runner stores `max_passes` when a window opens.
+A config change applies from the next window. A reactivated slice definition gets a new window.
+Verdicts for an earlier definition do not change it.
+
+### Output files
+
+Judge outputs are in `<review-dir>/judge/`. The review Markdown of a slice with more than one shot
+has a `-shot<n>` suffix.
 
 ## Review-instruction resolution
 
@@ -137,8 +240,9 @@ the durable record.
 
 Record rejected findings individually with `scripts/ignore_finding.py --id ... --reason ...` (or
 `--reason-file`). Record overlap with `scripts/dedupe_finding.py --id ... --canonical-id ...`; the
-canonical finding must still be open. A valid follow-up supersedes any remaining open findings
-from the prior run. Failed follow-ups leave them active.
+canonical finding must still be open. Automatic same-wave duplicates use the same resolution kind
+with `"auto": true`. A valid follow-up pass supersedes any remaining open findings from earlier
+passes; shots of the same wave never supersede each other. Failed follow-ups leave them active.
 
 When a run becomes terminal, its finding records move to `history/<run-id>.json`; `_state.json`
 keeps one archive reference. Generated Markdown remains beside the run and includes ignored or

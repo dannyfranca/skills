@@ -70,6 +70,16 @@ class ReviewHarness(ABC):
     ) -> Invocation:
         """Build one reviewer invocation."""
 
+    @abstractmethod
+    def judge_invocation(
+        self,
+        *,
+        prompt: str,
+        output_file: Path,
+        profile: ResolvedProfile,
+    ) -> Invocation:
+        """Build one read-only pass-budget judge invocation."""
+
     def materialize_review_result(
         self,
         *,

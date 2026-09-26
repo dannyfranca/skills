@@ -8,11 +8,12 @@ not a dynamically loaded plugin.
 
 Add one `ReviewHarness` implementation in its own `scripts/harnesses/<harness>.py` file and
 register a stable, lowercase configuration ID in `scripts/harnesses/__init__.py`. Shared interface
-types live in `scripts/harnesses/base.py`. An adapter has three responsibilities:
+types live in `scripts/harnesses/base.py`. An adapter has four responsibilities:
 
 1. Build a non-interactive classifier invocation.
 2. Build a read-only reviewer invocation that requests the shared result schema.
-3. Normalize the harness result envelope into that shared JSON result document.
+3. Build a read-only judge invocation that requests `references/judge-verdict.schema.json`.
+4. Normalize the harness result envelope into the requested JSON document.
 
 The adapter receives a resolved `ResolvedProfile` and prompt. It returns only an `Invocation`.
 Core orchestration remains responsible for subprocess execution, timeouts, concurrency, logs,
@@ -34,9 +35,11 @@ Do not depend on user hooks, memory, MCP servers, or ambient extensions for corr
 
 ## Result contract
 
-All reviewers ultimately produce `references/review-result.schema.json`. If a CLI wraps structured
-output, `materialize_review_result` extracts it into the output file. Missing, malformed, or
-non-schema results must fail visibly and remain retryable; never synthesize a no-findings result.
+All reviewers ultimately produce `references/review-result.schema.json`, and judges produce
+`references/judge-verdict.schema.json`. If a CLI wraps structured output,
+`materialize_review_result` extracts it into the output file for both. Missing, malformed, or
+non-schema results must fail visibly and remain retryable; never synthesize a no-findings result
+or a verdict.
 
 ## Contribution checklist
 

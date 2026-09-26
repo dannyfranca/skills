@@ -6,7 +6,7 @@ import json
 import shlex
 from pathlib import Path
 
-from review_result import RESULT_SCHEMA_PATH
+from review_result import JUDGE_SCHEMA_PATH, RESULT_SCHEMA_PATH
 
 from .base import HarnessError, Invocation, ResolvedProfile, ReviewHarness
 
@@ -40,22 +40,17 @@ class ClaudeCodeHarness(ReviewHarness):
         profile: ResolvedProfile,
     ) -> Invocation:
         del output_file
-        schema = json.dumps(
-            json.loads(RESULT_SCHEMA_PATH.read_text(encoding="utf-8")),
-            separators=(",", ":"),
-        )
-        cmd = _base_command(profile, tools="Bash,Glob,Grep,Read", read_only=True)
-        cmd.extend(
-            [
-                "--output-format",
-                "json",
-                "--json-schema",
-                schema,
-                "-p",
-                prompt,
-            ]
-        )
-        return Invocation(cmd)
+        return _structured_invocation(prompt, profile, RESULT_SCHEMA_PATH)
+
+    def judge_invocation(
+        self,
+        *,
+        prompt: str,
+        output_file: Path,
+        profile: ResolvedProfile,
+    ) -> Invocation:
+        del output_file
+        return _structured_invocation(prompt, profile, JUDGE_SCHEMA_PATH)
 
     def materialize_review_result(
         self,
@@ -77,6 +72,18 @@ class ClaudeCodeHarness(ReviewHarness):
             json.dumps(envelope["structured_output"], indent=2) + "\n",
             encoding="utf-8",
         )
+
+
+def _structured_invocation(
+    prompt: str, profile: ResolvedProfile, schema_path: Path
+) -> Invocation:
+    document = json.loads(schema_path.read_text(encoding="utf-8"))
+    # Claude Code rejects a schema that names the 2020-12 meta-schema; the other keywords work unchanged.
+    document.pop("$schema", None)
+    schema = json.dumps(document, separators=(",", ":"))
+    cmd = _base_command(profile, tools="Bash,Glob,Grep,Read", read_only=True)
+    cmd.extend(["--output-format", "json", "--json-schema", schema, "-p", prompt])
+    return Invocation(cmd)
 
 
 def _base_command(
