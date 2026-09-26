@@ -78,6 +78,7 @@ class ReviewConfigTests(unittest.TestCase):
             self.root,
             'max_passes = 2\n'
             'shots = 3\n'
+            'shot_passes = 2\n'
             '[classifier]\n'
             'harness = "codex"\n'
             'model = "classifier-model"\n'
@@ -91,6 +92,7 @@ class ReviewConfigTests(unittest.TestCase):
 
         self.assertEqual(config.max_passes, 2)
         self.assertEqual(config.shots, 3)
+        self.assertEqual(config.shot_passes, 2)
         self.assertEqual(
             config.judge_profile,
             HarnessProfile(harness="claude-code", model="judge-model", reasoning="low"),
@@ -109,6 +111,7 @@ class ReviewConfigTests(unittest.TestCase):
 
         self.assertEqual(config.max_passes, 3)
         self.assertEqual(config.shots, 1)
+        self.assertEqual(config.shot_passes, 1)
         self.assertIsNone(config.judge)
         self.assertEqual(config.judge_profile, config.classifier)
 
@@ -117,6 +120,7 @@ class ReviewConfigTests(unittest.TestCase):
             self.home,
             'max_passes = 5\n'
             'shots = 2\n'
+            'shot_passes = "always"\n'
             '[judge]\n'
             'harness = "codex"\n'
             'model = "global-judge"\n'
@@ -131,7 +135,7 @@ class ReviewConfigTests(unittest.TestCase):
 
         config = load_review_config(self.root, home=self.home)
 
-        self.assertEqual((config.max_passes, config.shots), (2, 2))
+        self.assertEqual((config.max_passes, config.shots, config.shot_passes), (2, 2, "always"))
         self.assertEqual(config.judge_profile, HarnessProfile(harness="claude-code"))
 
     def test_rejects_unknown_non_string_empty_and_path_settings(self) -> None:
@@ -143,6 +147,10 @@ class ReviewConfigTests(unittest.TestCase):
             "shots = 0\n",
             "shots = false\n",
             "shots = 1.5\n",
+            "shot_passes = 0\n",
+            "shot_passes = true\n",
+            'shot_passes = "never"\n',
+            'shot_passes = "1"\n',
             '[judge]\nharness = ""\n',
             '[judge]\nharness = "codex"\nunknown = true\n',
             "classifier_model = 5\n",

@@ -60,6 +60,8 @@ ORIGINAL_REQUEST_END = "<!-- multi-shot-review:original-request:end -->"
 SLICE_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 DEFAULT_MAX_PASSES = 3
 JUDGE_VERDICTS = frozenset({"continue", "stop"})
+DEFAULT_SHOT_PASSES = 1
+SHOT_PASSES_ALWAYS = "always"
 # Runs whose findings were all rejected or auto-deduplicated count as clean shots
 # for the shot phase-down rule, because the author kept nothing from them.
 CLEAN_IGNORED_CLASSIFICATIONS = frozenset({"ignored_findings", "auto_duplicates"})
@@ -261,6 +263,12 @@ def _require_non_empty_text(value: str, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ReviewStateError(f"{label} must be non-empty")
     return value.strip()
+
+
+def _valid_shot_passes(value: Any) -> bool:
+    if value == SHOT_PASSES_ALWAYS:
+        return True
+    return not isinstance(value, bool) and type(value) is int and value >= 1
 
 
 def _run_is_clean(run: dict[str, Any]) -> bool:
@@ -765,6 +773,10 @@ class ReviewState:
             shots = item.get("shots", 1)
             if type(shots) is not int or shots < 1:
                 raise ReviewStateError(f"slice {name!r} must have a positive shots count")
+            if not _valid_shot_passes(item.get("shot_passes", DEFAULT_SHOT_PASSES)):
+                raise ReviewStateError(
+                    f'slice {name!r} shot_passes must be a positive integer or "{SHOT_PASSES_ALWAYS}"'
+                )
             pass_base = item.get("pass_base", 0)
             if type(pass_base) is not int or pass_base < 0:
                 raise ReviewStateError(f"slice {name!r} has invalid pass base")
@@ -1096,12 +1108,17 @@ class ReviewState:
         source: str = "classifier",
         user_directive: str | None = None,
         shots: int = 1,
+        shot_passes: int | str = DEFAULT_SHOT_PASSES,
     ) -> None:
         self._validate_slice_name(name)
         if source not in {"classifier", "user"}:
             raise ReviewStateError("slice source must be classifier or user")
         if isinstance(shots, bool) or type(shots) is not int or shots < 1:
             raise ReviewStateError("slice shots must be a positive integer")
+        if not _valid_shot_passes(shot_passes):
+            raise ReviewStateError(
+                f'slice shot_passes must be a positive integer or "{SHOT_PASSES_ALWAYS}"'
+            )
         if source == "user":
             user_directive = _require_non_empty_text(user_directive or "", "user directive")
         if mode not in {"native", "prompt"}:
@@ -1160,6 +1177,7 @@ class ReviewState:
             "removed": False,
             "definition_version": 1,
             "shots": shots,
+            "shot_passes": shot_passes,
             "judgements": [],
         }
         existing = self.data["slices"].get(name)
@@ -1591,6 +1609,11 @@ class ReviewState:
         ]
 
     def _wave_size(self, item: dict[str, Any], pass_number: int) -> int:
+        # Extra shots pay off on the first passes of a scope, where the reviewer has not seen the
+        # content yet; a redefinition is a new scope, a judge window is not.
+        shot_passes = item.get("shot_passes", DEFAULT_SHOT_PASSES)
+        if shot_passes != SHOT_PASSES_ALWAYS and pass_number - item.get("pass_base", 0) > shot_passes:
+            return 1
         clean_shots = sum(
             1
             for run in item["runs"]
@@ -3277,6 +3300,8 @@ def run_reviews(
 
 
 def parse_add_slice_args(argv: list[str] | None = None) -> argparse.Namespace:
+    from review_config import parse_shot_passes
+
     parser = argparse.ArgumentParser(description="Register one review slice in an initialized review state.")
     parser.add_argument("--review-dir", required=True, type=Path)
     parser.add_argument("--name", required=True)
@@ -3290,6 +3315,15 @@ def parse_add_slice_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Run this many parallel reviewer shots per pass; each clean shot "
             "reduces later waves by one. Defaults to the configured shots."
+        ),
+    )
+    parser.add_argument(
+        "--shot-passes",
+        type=parse_shot_passes,
+        metavar="N|always",
+        help=(
+            "Run more than one shot only on the first N passes of the slice scope; "
+            '"always" keeps the shot count on every pass. Defaults to the configured shot_passes.'
         ),
     )
     parser.add_argument(
@@ -3385,5 +3419,6 @@ def add_slice_from_args(args: argparse.Namespace, *, stdin: Any = sys.stdin) -> 
             source="user" if user_directive is not None else "classifier",
             user_directive=user_directive,
             shots=config.shots if args.shots is None else args.shots,
+            shot_passes=config.shot_passes if args.shot_passes is None else args.shot_passes,
         )
         state.save()

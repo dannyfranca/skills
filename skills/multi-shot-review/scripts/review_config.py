@@ -17,10 +17,13 @@ CONFIG_FILENAME = "multi-shot-review.toml"
 DEFAULT_REVIEW_FILE = "REVIEW"
 DEFAULT_MAX_PASSES = 3
 DEFAULT_SHOTS = 1
+DEFAULT_SHOT_PASSES = 1
+SHOT_PASSES_ALWAYS = "always"
 _SUPPORTED_KEYS = {
     "review_file",
     "max_passes",
     "shots",
+    "shot_passes",
     "classifier",
     "slice_default",
     "judge",
@@ -34,6 +37,7 @@ class ReviewConfig:
     review_file: str = DEFAULT_REVIEW_FILE
     max_passes: int = DEFAULT_MAX_PASSES
     shots: int = DEFAULT_SHOTS
+    shot_passes: int | str = DEFAULT_SHOT_PASSES
     classifier: HarnessProfile | None = None
     slice_default: HarnessProfile | None = None
     judge: HarnessProfile | None = None
@@ -93,6 +97,8 @@ def _load_config_file(path: Path) -> dict[str, Any]:
             validated[key] = _validate_review_file(path, value)
         elif key in {"max_passes", "shots"}:
             validated[key] = _validate_positive_int(path, key, value)
+        elif key == "shot_passes":
+            validated[key] = _validate_shot_passes(path, value)
         else:
             validated[key] = _validate_profile(path, key, value)
     return validated
@@ -120,6 +126,27 @@ def _validate_positive_int(path: Path, key: str, value: Any) -> int:
             f"review config {key} must be a positive integer: {path}"
         )
     return value
+
+
+def _validate_shot_passes(path: Path, value: Any) -> int | str:
+    if value == SHOT_PASSES_ALWAYS:
+        return SHOT_PASSES_ALWAYS
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ReviewStateError(
+            f'review config shot_passes must be a positive integer or "{SHOT_PASSES_ALWAYS}": {path}'
+        )
+    return value
+
+
+def parse_shot_passes(value: str) -> int | str:
+    """Parse a CLI `--shot-passes` value with the same rules as the config key."""
+
+    text = value.strip()
+    if text == SHOT_PASSES_ALWAYS:
+        return SHOT_PASSES_ALWAYS
+    if text.isdigit() and int(text) >= 1:
+        return int(text)
+    raise ValueError(f'expected a positive integer or "{SHOT_PASSES_ALWAYS}", got {value!r}')
 
 
 def _validate_profile(path: Path, key: str, value: Any) -> HarnessProfile:
