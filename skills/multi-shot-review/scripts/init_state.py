@@ -30,6 +30,13 @@ def main() -> int:
         type=Path,
         help="Path to a Markdown/text file containing the original user request, or '-' for stdin.",
     )
+    parser.add_argument(
+        "--variant",
+        help=(
+            "Force this config variant tag instead of the weighted draw. "
+            "Use only on explicit user request."
+        ),
+    )
     args = parser.parse_args()
     if (args.task is not None) == (args.task_file is not None):
         parser.error("choose exactly one task source: --task or --task-file")
@@ -44,7 +51,12 @@ def main() -> int:
             if args.commit is not None
             else {"kind": "uncommitted"}
         )
-        review_dir = init_review_state(args.root, task or "", target=review_target)
+        review_dir = init_review_state(
+            args.root,
+            task or "",
+            target=review_target,
+            variant=args.variant,
+        )
     except (OSError, ReviewStateError) as exc:
         parser.error(str(exc))
     print(review_dir)

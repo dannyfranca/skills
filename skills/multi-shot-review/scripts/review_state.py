@@ -21,9 +21,12 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 from harnesses import HarnessError, ResolvedProfile, get_harness, resolve_profile
+
+if TYPE_CHECKING:
+    from review_config import ReviewConfig
 from review_result import (
     JUDGE_SCHEMA_PATH,
     RESULT_SCHEMA_VERSION,
@@ -38,7 +41,7 @@ from review_result import (
 )
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 HARNESS_SOURCES = frozenset(
     {
         "slice-override",
@@ -149,15 +152,27 @@ def create_review_dir(root: Path) -> Path:
     raise ReviewStateError("could not create a unique review directory after 10 attempts")
 
 
-def init_review_state(root: Path, task: str, *, target: dict[str, str] | None = None) -> Path:
+def init_review_state(
+    root: Path,
+    task: str,
+    *,
+    target: dict[str, str] | None = None,
+    variant: str | None = None,
+) -> Path:
+    from review_config import load_review_config
+
     task = _require_non_empty_text(task, "task")
     root = repo_root(root)
+    # The session pins its variant and settings at creation, so config edits and later draws
+    # never change a running session.
+    config = load_review_config(root, variant=variant)
     review_dir = create_review_dir(root)
     write_task_entrypoint(review_dir, task)
     state = ReviewState.new(
         review_dir=review_dir,
         root=root,
         target=target or {"kind": "uncommitted"},
+        config=config,
     )
     state.save()
     return review_dir
@@ -591,15 +606,21 @@ class ReviewState:
         review_dir: Path,
         root: Path,
         target: dict[str, str] | None = None,
+        config: "ReviewConfig | None" = None,
     ) -> "ReviewState":
+        from review_config import ReviewConfig
+
         target = _validate_session_target(target or {"kind": "uncommitted"})
+        config = ReviewConfig() if config is None else config
         data: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "session": {
+                "config": config.to_snapshot(),
                 "created_at": now_iso(),
                 "review_dir": str(review_dir.resolve()),
                 "root": str(root.resolve()),
                 "target": target,
+                "variant": config.variant,
             },
             "classifications": [],
             "slices": {},
@@ -608,6 +629,15 @@ class ReviewState:
             "last_error": None,
         }
         return cls(review_dir, data)
+
+    @property
+    def config(self) -> "ReviewConfig":
+        """Settings pinned at session creation, with the variant they came from."""
+
+        from review_config import ReviewConfig
+
+        session = self.data["session"]
+        return ReviewConfig.from_snapshot(session.get("config"), variant=session.get("variant"))
 
     @classmethod
     def load(cls, review_dir: Path) -> "ReviewState":
@@ -704,6 +734,10 @@ class ReviewState:
             _validate_session_target(session.get("target"))
         except ReviewStateError as exc:
             raise ReviewStateError(f"state session has invalid target: {exc}") from exc
+        try:
+            self.config
+        except ReviewStateError as exc:
+            raise ReviewStateError(f"state session has invalid config: {exc}") from exc
         if not isinstance(data.get("slices"), dict):
             raise ReviewStateError("state slices must be an object")
         if not isinstance(data.get("classifications"), list):
@@ -1371,6 +1405,7 @@ class ReviewState:
                             "session_target": json.loads(
                                 json.dumps(self.data["session"]["target"])
                             ),
+                            "session_variant": self.data["session"]["variant"],
                             "pass": pass_number,
                             "shot": shot,
                             "prior_findings": prior_findings,
@@ -2093,6 +2128,7 @@ class ReviewState:
             Path(run["output_file"]),
             render_review_markdown(
                 run.get("findings") or [],
+                variant=self.data["session"]["variant"],
                 harness=run["harness"],
                 harness_source=run["harness_source"],
                 model=run.get("model"),
@@ -2133,6 +2169,7 @@ class ReviewState:
         previous_archive = run.get("findings_archive")
         rendered = render_review_markdown(
             run.get("findings") or [],
+            variant=self.data["session"]["variant"],
             harness=run["harness"],
             harness_source=run["harness_source"],
             model=run.get("model"),
@@ -2748,6 +2785,7 @@ def _write_failure_review_artifact(
             reservation.output_file,
             render_review_failure_markdown(
                 error,
+                variant=reservation.slice_data["session_variant"],
                 harness=reservation.slice_data.get("harness", "codex"),
                 harness_source=reservation.slice_data.get(
                     "harness_source", "built-in-default"
@@ -2788,6 +2826,7 @@ def _summary(
     remaining: int,
     out_records: list[dict[str, Any]],
     err_records: list[dict[str, Any]] | None,
+    variant: str,
     judge_records: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     ordered_errors = (
@@ -2806,6 +2845,7 @@ def _summary(
         "st": status,
         "state": _relative_path(review_dir / "_state.json"),
         "v": 1,
+        "variant": variant,
     }
 
 
@@ -2998,6 +3038,7 @@ def await_reviews(
     """Wait for the currently running review wave without reserving work."""
     review_dir = review_dir.resolve()
     with ReviewState.locked(review_dir) as state:
+        variant = state.data["session"]["variant"]
         run_ids = _running_run_ids(state)
         state._recover_stale_running_runs()
         state._refresh_completed()
@@ -3019,6 +3060,7 @@ def await_reviews(
         remaining=remaining,
         out_records=out_records,
         err_records=err_records,
+        variant=variant,
     )
     if stdout_json:
         stdout.write(compact_summary_json(summary, pretty=pretty_json) + "\n")
@@ -3053,9 +3095,7 @@ def run_reviews(
     active_run_ids: set[str] = set()
     judge_inputs: dict[str, dict[str, Any]] = {}
     with ReviewState.locked(review_dir) as state:
-        from review_config import load_review_config
-
-        config = load_review_config(Path(state.data["session"]["root"]))
+        config = state.config
         state._recover_stale_running_runs()
         if not state._has_running_runs():
             judge_inputs = state.reserve_judges(max_passes=config.max_passes)
@@ -3178,6 +3218,7 @@ def run_reviews(
             remaining=remaining,
             out_records=out_records,
             err_records=err_records,
+            variant=config.variant,
             judge_records=judge_records,
         )
         _emit_summary(
@@ -3285,6 +3326,7 @@ def run_reviews(
         remaining=remaining,
         out_records=out_records,
         err_records=err_records,
+        variant=config.variant,
         judge_records=judge_records,
     )
     _emit_summary(
@@ -3380,10 +3422,8 @@ def add_slice_from_args(args: argparse.Namespace, *, stdin: Any = sys.stdin) -> 
             prompt = stdin.read()
 
     with ReviewState.locked(args.review_dir) as state:
-        from review_config import load_review_config
-
         session_root = Path(state.data["session"]["root"]).resolve()
-        config = load_review_config(session_root)
+        config = state.config
         cwd = args.cwd.resolve() if args.cwd is not None else session_root
         if not cwd.is_dir():
             raise ReviewStateError(f"slice cwd is not a directory: {cwd}")

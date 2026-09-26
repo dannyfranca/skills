@@ -15,6 +15,10 @@ The resolver starts at `$HOME` and loads each configuration down the directory c
 repository root. The nearest value wins. Execution profiles are atomic: a nearer `classifier`,
 `slice_default`, or `judge` table replaces the whole parent profile.
 
+`init_state.py` resolves the config one time, when it creates the session. The session state keeps
+a snapshot of the effective config. All scripts of that session use the snapshot. A config change
+applies from the next session.
+
 All settings are optional. Suggested defaults (replace each `<model>` with a model ID that the
 harness supports, or delete the `model` line to use the harness default):
 
@@ -68,6 +72,46 @@ fails; it never falls back silently.
 
 `REVIEW.md` guidance may tell the classifier to select a harness for applicable slices. For adding
 another built-in, see [Extending review harnesses](docs/extending-harnesses.md).
+
+### Variants
+
+Variants rotate config setups between sessions, so you can compare their outputs later. There is no
+automatic rollout.
+
+```toml
+shots = 1
+
+[variants]
+default = 1
+a = 2
+
+[variant.a]
+shots = 2
+
+[variant.a.classifier]
+harness = "claude-code"
+```
+
+- `[variant.<tag>]`: a variant body. It accepts the same settings as the main config. Its settings
+  replace the effective main settings. Profile tables stay atomic.
+- `default`: the reserved tag for the main config without a body. `[variant.default]` is rejected.
+- Tags must match `[a-z0-9][a-z0-9_-]*`.
+- `[variants]`: optional integer weights. A weight is relative to the sum of all weights. A body
+  without a weight gets `1`. `default` gets `1` unless you set it. Thus, bodies without weights give
+  an equal split with `default`.
+- A weight of `0` removes that tag from the draw.
+
+These experiments are rejected: a weight without a body, a negative, float, or boolean weight, a sum
+of `0`, an unknown or nested setting in a body, and an invalid tag.
+
+Main settings merge down the chain as usual. The nearest config that has `[variants]` or
+`[variant.*]` owns the full experiment. Experiments from parent configs are ignored.
+
+`init_state.py` draws one tag per session. `--variant <tag>` forces a tag, also a tag with weight
+`0`. Use it only on explicit user request. An unknown tag fails.
+
+The session stores the tag as `session.variant`. The tag is `default` when there are no variants.
+Review Markdown frontmatter and the run summary JSON also include `variant`.
 
 ## Passes, shots, and the judge
 
@@ -157,7 +201,7 @@ never write to the same file.
 ### Windows
 
 Each window starts at the last `continue` pass. The runner stores `max_passes` when a window opens.
-A config change applies from the next window. A reactivated slice definition gets a new window.
+A config change applies from the next session. A reactivated slice definition gets a new window.
 Verdicts for an earlier definition do not change it.
 
 ### Output files
@@ -214,7 +258,8 @@ Execution selections are durable:
 - Slice definitions store `harness`, `model`, `reasoning`, and their source fields.
 - Every run snapshots all six fields, so later configuration or slice-definition changes do not
   alter prior run identity.
-- Successful review Markdown artifacts include matching YAML frontmatter.
+- Successful review Markdown artifacts include matching YAML frontmatter, with the session
+  `variant` first.
 - Classifier attempts store only harness/model/reasoning, timestamps, status, and exit code.
 
 Harness sources are `slice-override`, `configured-default`, or `built-in-default`. Model and
@@ -258,5 +303,5 @@ passes; shots of the same wave never supersede each other. Failed follow-ups lea
 
 When a run becomes terminal, its finding records move to `history/<run-id>.json`; `_state.json`
 keeps one archive reference. Generated Markdown remains beside the run and includes ignored or
-superseded resolutions for human audit. Sessions use state schema version 3; older in-progress
+superseded resolutions for human audit. Sessions use state schema version 4; older in-progress
 sessions are intentionally unsupported.
