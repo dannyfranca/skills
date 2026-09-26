@@ -69,7 +69,7 @@ class AutoDuplicateTests(unittest.TestCase):
     def render(self, finding: dict) -> str:
         return render_review_markdown(
             [validate_stored_finding(finding)],
-            harness="codex", harness_source="built-in-default", model=None,
+            variant="default", harness="codex", harness_source="built-in-default", model=None,
             model_source="harness-default", reasoning=None, reasoning_source="harness-default",
         )
 

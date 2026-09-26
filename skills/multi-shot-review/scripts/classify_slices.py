@@ -9,7 +9,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-from review_config import load_review_config
 from harnesses import HarnessError, get_harness, resolve_profile
 from review_instructions import load_classifier_guidance
 from review_state import ReviewState, ReviewStateError
@@ -46,8 +45,8 @@ def _run_classifier(args: argparse.Namespace, review_dir: Path) -> int:
         state.require_no_active_slices()
         root = Path(state.data["session"]["root"])
         target = dict(state.data["session"]["target"])
+        config = state.config
 
-    config = load_review_config(root)
     review_instructions = load_classifier_guidance(
         root,
         target,

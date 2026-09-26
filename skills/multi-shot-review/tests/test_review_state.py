@@ -41,6 +41,31 @@ from review_state import (  # noqa: E402
 )
 
 
+_module_home: tempfile.TemporaryDirectory | None = None
+_module_home_patch = None
+
+
+def setUpModule() -> None:
+    # Session creation reads the config chain from $HOME, so a developer's own config must not
+    # leak into the expected values of any test.
+    global _module_home, _module_home_patch
+    _module_home = tempfile.TemporaryDirectory()
+    _module_home_patch = mock.patch.dict(os.environ, {"HOME": _module_home.name})
+    _module_home_patch.start()
+
+
+def tearDownModule() -> None:
+    _module_home_patch.stop()
+    _module_home.cleanup()
+
+
+def _pin_session_config(review_dir: Path, config: ReviewConfig) -> None:
+    with ReviewState.locked(review_dir) as state:
+        state.data["session"]["config"] = config.to_snapshot()
+        state.data["session"]["variant"] = config.variant
+        state.save()
+
+
 class ReviewStateTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -56,7 +81,7 @@ class ReviewStateTests(unittest.TestCase):
         self.assertTrue(state_path.exists())
         self.assertRegex(self.review_dir.name, TIMESTAMPED_REVIEW_DIR_RE)
         state = ReviewState.load(self.review_dir)
-        self.assertEqual(state.data["schema_version"], 3)
+        self.assertEqual(state.data["schema_version"], 4)
         self.assertEqual(state.data["classifications"], [])
         self.assertEqual(state.data["slices"], {})
         self.assertFalse(state.data["completed"])
@@ -791,10 +816,6 @@ class ClassifierTests(unittest.TestCase):
 
             with mock.patch.object(
                 classify_slices,
-                "load_review_config",
-                return_value=ReviewConfig(),
-            ), mock.patch.object(
-                classify_slices,
                 "load_classifier_guidance",
                 return_value=(
                     "### Guidance for changed descendants of .\n\n"
@@ -906,18 +927,18 @@ class ClassifierTests(unittest.TestCase):
             root = Path(tmp) / "repo"
             root.mkdir()
             review_dir = init_review_state(root, "Review the current changes.")
-
-            with mock.patch.object(
-                classify_slices,
-                "load_review_config",
-                return_value=ReviewConfig(
+            _pin_session_config(
+                review_dir,
+                ReviewConfig(
                     classifier=HarnessProfile(
                         "claude-code",
                         model="sonnet",
                         reasoning="high",
                     )
                 ),
-            ), mock.patch.object(
+            )
+
+            with mock.patch.object(
                 classify_slices,
                 "load_classifier_guidance",
                 return_value="(no additional scoped guidance)",
@@ -2473,7 +2494,7 @@ class RunnerTests(unittest.TestCase):
         self.assertIsNone(run["reasoning"])
         self.assertEqual(run["reasoning_source"], "harness-default")
         artifact = Path(run["output_file"]).read_text(encoding="utf-8")
-        self.assertTrue(artifact.startswith('---\nharness: "codex"\n'))
+        self.assertTrue(artifact.startswith('---\nvariant: "default"\nharness: "codex"\n'))
         self.assertIn(
             'model_source: "harness-default"\n'
             "reasoning: null\n"
@@ -4060,11 +4081,8 @@ class ShotsAndJudgeTests(unittest.TestCase):
     def run_reviews(
         self, runner, *, max_passes: int = 3, config: ReviewConfig | None = None
     ) -> tuple[int, dict]:
-        with mock.patch(
-            "review_config.load_review_config",
-            return_value=config or ReviewConfig(max_passes=max_passes),
-        ):
-            return run_reviews(self.review_dir, command_runner=runner, stdout=io.StringIO())
+        _pin_session_config(self.review_dir, config or ReviewConfig(max_passes=max_passes))
+        return run_reviews(self.review_dir, command_runner=runner, stdout=io.StringIO())
 
     def runs(self, name: str = "api") -> list[dict]:
         return ReviewState.load(self.review_dir).data["slices"][name]["runs"]
@@ -4107,16 +4125,14 @@ class ShotsAndJudgeTests(unittest.TestCase):
                 parse(base + ["--shot-passes", bad])
 
     def test_add_slice_without_shot_passes_uses_configured_shot_passes(self) -> None:
-        with mock.patch(
-            "review_config.load_review_config", return_value=ReviewConfig(shots=2, shot_passes=2)
-        ):
-            review_state_module.add_slice_from_args(review_state_module.parse_add_slice_args(
-                ["--review-dir", str(self.review_dir), "--name", "api", "--uncommitted"]
-            ))
-            review_state_module.add_slice_from_args(review_state_module.parse_add_slice_args(
-                ["--review-dir", str(self.review_dir), "--name", "web", "--uncommitted",
-                 "--shot-passes", "always"]
-            ))
+        _pin_session_config(self.review_dir, ReviewConfig(shots=2, shot_passes=2))
+        review_state_module.add_slice_from_args(review_state_module.parse_add_slice_args(
+            ["--review-dir", str(self.review_dir), "--name", "api", "--uncommitted"]
+        ))
+        review_state_module.add_slice_from_args(review_state_module.parse_add_slice_args(
+            ["--review-dir", str(self.review_dir), "--name", "web", "--uncommitted",
+             "--shot-passes", "always"]
+        ))
 
         self.assertEqual(self.slice("api")["shot_passes"], 2)
         self.assertEqual(self.slice("web")["shot_passes"], "always")
@@ -4185,15 +4201,13 @@ class ShotsAndJudgeTests(unittest.TestCase):
         self.assertEqual(second["out"][0]["p"], 2)
 
     def test_add_slice_without_shots_uses_configured_shots(self) -> None:
-        with mock.patch(
-            "review_config.load_review_config", return_value=ReviewConfig(shots=2)
-        ):
-            review_state_module.add_slice_from_args(review_state_module.parse_add_slice_args(
-                ["--review-dir", str(self.review_dir), "--name", "api", "--uncommitted"]
-            ))
-            review_state_module.add_slice_from_args(review_state_module.parse_add_slice_args(
-                ["--review-dir", str(self.review_dir), "--name", "web", "--uncommitted", "--shots", "1"]
-            ))
+        _pin_session_config(self.review_dir, ReviewConfig(shots=2))
+        review_state_module.add_slice_from_args(review_state_module.parse_add_slice_args(
+            ["--review-dir", str(self.review_dir), "--name", "api", "--uncommitted"]
+        ))
+        review_state_module.add_slice_from_args(review_state_module.parse_add_slice_args(
+            ["--review-dir", str(self.review_dir), "--name", "web", "--uncommitted", "--shots", "1"]
+        ))
 
         self.assertEqual(self.slice("api")["shots"], 2)
         self.assertEqual(self.slice("web")["shots"], 1)
@@ -4942,8 +4956,7 @@ class ShotsAndJudgeTests(unittest.TestCase):
             state.remove_slice("api", source="user", user_directive="Drop it.")
             state.save()
 
-        with mock.patch.object(classify_slices, "load_review_config", return_value=ReviewConfig()), \
-            mock.patch.object(classify_slices, "load_classifier_guidance", return_value="(none)"), \
+        with mock.patch.object(classify_slices, "load_classifier_guidance", return_value="(none)"), \
             mock.patch.object(classify_slices.subprocess, "run",
                               side_effect=_classifier_child_adds_slice(
                                   self.review_dir, self.root, name="web"
@@ -4959,13 +4972,12 @@ class ShotsAndJudgeTests(unittest.TestCase):
         self.assertFalse(state.data["slices"]["web"]["removed"])
 
     def test_classifier_refuses_a_slice_added_while_it_prepares(self) -> None:
-        def add_slice_during_setup(root):
+        def add_slice_during_setup(*args, **kwargs):
             self.add_slice("api")
-            return ReviewConfig()
+            return "(none)"
 
         stderr = io.StringIO()
-        with mock.patch.object(classify_slices, "load_review_config", side_effect=add_slice_during_setup), \
-            mock.patch.object(classify_slices, "load_classifier_guidance", return_value="(none)"), \
+        with mock.patch.object(classify_slices, "load_classifier_guidance", side_effect=add_slice_during_setup), \
             mock.patch.object(classify_slices.subprocess, "run") as run, \
             mock.patch.object(sys, "argv", ["classify_slices.py", "--review-dir", str(self.review_dir)]), \
             mock.patch("sys.stderr", stderr):
@@ -5035,6 +5047,67 @@ def _writes(text: str):
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     return runner
+
+
+class VariantSessionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "repo"
+        (self.root / ".agents").mkdir(parents=True)
+        self.config_file = self.root / ".agents" / "multi-shot-review.toml"
+        self.config_file.write_text(
+            "shots = 1\n[variants]\ndefault = 0\nb = 0\n[variant.a]\nshots = 2\n"
+            "[variant.b]\nshots = 3\n",
+            encoding="utf-8",
+        )
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def add_slice_from_cli(self, review_dir: Path, name: str) -> dict:
+        review_state_module.add_slice_from_args(review_state_module.parse_add_slice_args(
+            ["--review-dir", str(review_dir), "--name", name, "--uncommitted"]
+        ))
+        return ReviewState.load(review_dir).data["slices"][name]
+
+    def test_session_pins_the_drawn_variant_and_ignores_later_config_edits(self) -> None:
+        review_dir = init_review_state(self.root, "Review it.")
+        session = ReviewState.load(review_dir).data["session"]
+        self.assertEqual((session["variant"], session["config"]["shots"]), ("a", 2))
+
+        self.config_file.write_text("shots = 5\n", encoding="utf-8")
+
+        self.assertEqual(self.add_slice_from_cli(review_dir, "api")["shots"], 2)
+
+    def test_forced_variant_is_recorded_in_state_artifacts_and_summary(self) -> None:
+        review_dir = init_review_state(self.root, "Review it.", variant="b")
+        self.assertEqual(self.add_slice_from_cli(review_dir, "api")["shots"], 3)
+
+        rc, summary = run_reviews(
+            review_dir,
+            command_runner=_writes_review_result([_finding()]),
+            stdout=io.StringIO(),
+        )
+
+        self.assertEqual((rc, summary["variant"]), (0, "b"))
+        artifact = (review_dir / summary["out"][0]["f"].split(f"{review_dir.name}/", 1)[1])
+        self.assertTrue(artifact.read_text(encoding="utf-8").startswith('---\nvariant: "b"\n'))
+
+    def test_unknown_forced_variant_fails_before_creating_a_session(self) -> None:
+        with self.assertRaisesRegex(ReviewStateError, "unknown review config variant"):
+            init_review_state(self.root, "Review it.", variant="z")
+
+        self.assertFalse((self.root / ".review").exists())
+
+    def test_state_with_an_invalid_session_variant_is_rejected(self) -> None:
+        review_dir = init_review_state(self.root, "Review it.")
+        state_path = review_dir / "_state.json"
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+        data["session"]["variant"] = "Not A Tag"
+        state_path.write_text(json.dumps(data), encoding="utf-8")
+
+        with self.assertRaisesRegex(ReviewStateError, "invalid session variant"):
+            ReviewState.load(review_dir)
 
 
 def _finding(

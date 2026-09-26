@@ -25,7 +25,8 @@ EOF
 
 Use `--base <branch>` or `--commit <sha>` when appropriate. The state stores only that target
 descriptor; classifiers and reviewers inspect Git directly. Finish when `$REVIEW_DIR/task.md`
-contains exact task context.
+contains exact task context. Add `--variant <tag>` only when the user explicitly asks for a config
+variant.
 
 3. Run the clean classifier:
 
