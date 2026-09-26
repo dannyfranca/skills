@@ -37,7 +37,10 @@ To revise an active classifier slice, remove it and add the same name with its n
 Pass `--harness <harness>` only when a specific harness materially suits a slice. Apply the same
 rule to `--model <model>` and `--reasoning <effort>`. Omitting them uses the configured slice
 profile or harness defaults. Pass `--shots <n>` only when scoped guidance asks for parallel
-reviewer shots on that slice. All selections are persisted with the slice and snapshotted per run.
+reviewer shots on that slice. Apply the same rule to `--shot-passes <n|always>`, which sets how many
+passes of a slice run more than one shot. A guidance rule can use the change size and the slice
+verbosity as factors. All selections are persisted with the slice. Each run keeps a snapshot of
+the harness, model, and reasoning. `shots` and `shot_passes` stay on the slice definition only.
 
 Classifier calls normally omit `--user-directive-file`. A parent acting on an explicit user request
 supplies that file, making the mutation user-controlled. A classifier may pass a forwarded

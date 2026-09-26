@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import os
@@ -4043,7 +4044,7 @@ class ShotsAndJudgeTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def add_slice(self, name: str, *, shots: int = 1) -> None:
+    def add_slice(self, name: str, *, shots: int = 1, shot_passes: int | str = "always") -> None:
         with ReviewState.locked(self.review_dir) as state:
             state.add_slice(
                 name=name,
@@ -4052,6 +4053,7 @@ class ShotsAndJudgeTests(unittest.TestCase):
                 prompt=None,
                 cwd=self.root,
                 shots=shots,
+                shot_passes=shot_passes,
             )
             state.save()
 
@@ -4083,6 +4085,104 @@ class ShotsAndJudgeTests(unittest.TestCase):
         self.assertEqual(review_state_module.parse_add_slice_args(
             ["--review-dir", str(self.review_dir), "--name", "x", "--uncommitted", "--shots", "3"]
         ).shots, 3)
+
+    def test_add_slice_validates_and_stores_shot_passes(self) -> None:
+        for shot_passes in (0, -1, True, "2", 1.5, "never"):
+            with self.subTest(shot_passes=shot_passes), self.assertRaisesRegex(
+                ReviewStateError, 'shot_passes must be a positive integer or "always"'
+            ):
+                self.add_slice("bad", shot_passes=shot_passes)
+        self.add_slice("api", shot_passes=2)
+        self.add_slice("web", shot_passes="always")
+
+        self.assertEqual(self.slice("api")["shot_passes"], 2)
+        self.assertEqual(self.slice("web")["shot_passes"], "always")
+        parse = review_state_module.parse_add_slice_args
+        base = ["--review-dir", str(self.review_dir), "--name", "x", "--uncommitted"]
+        self.assertEqual(parse(base + ["--shot-passes", "3"]).shot_passes, 3)
+        self.assertEqual(parse(base + ["--shot-passes", "always"]).shot_passes, "always")
+        for bad in ("0", "never", "1.5"):
+            with self.subTest(bad=bad), self.assertRaises(SystemExit), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                parse(base + ["--shot-passes", bad])
+
+    def test_add_slice_without_shot_passes_uses_configured_shot_passes(self) -> None:
+        with mock.patch(
+            "review_config.load_review_config", return_value=ReviewConfig(shots=2, shot_passes=2)
+        ):
+            review_state_module.add_slice_from_args(review_state_module.parse_add_slice_args(
+                ["--review-dir", str(self.review_dir), "--name", "api", "--uncommitted"]
+            ))
+            review_state_module.add_slice_from_args(review_state_module.parse_add_slice_args(
+                ["--review-dir", str(self.review_dir), "--name", "web", "--uncommitted",
+                 "--shot-passes", "always"]
+            ))
+
+        self.assertEqual(self.slice("api")["shot_passes"], 2)
+        self.assertEqual(self.slice("web")["shot_passes"], "always")
+
+    def test_shot_passes_limits_extra_shots_to_the_first_passes(self) -> None:
+        self.add_slice("api", shots=2, shot_passes=1)
+        _, first = self.run_reviews(_per_shot({1: [_finding()], 2: [_finding(title="Other", path="a.py")]}))
+        self.assertEqual(first["ran"], 2)
+
+        _, second = self.run_reviews(_per_shot({1: [_finding(title="Regression")]}))
+        self.assertEqual(second["ran"], 1)
+        self.assertEqual(second["out"][0]["p"], 2)
+        self.assertEqual(self.slice()["shots"], 2)
+
+    def test_shot_passes_window_composes_with_clean_shot_phase_down(self) -> None:
+        self.add_slice("api", shots=3, shot_passes=2)
+        _, first = self.run_reviews(_per_shot({1: [_finding()], 2: [], 3: [_finding(title="B", path="b.py")]}))
+        self.assertEqual(first["ran"], 3)
+
+        _, second = self.run_reviews(_per_shot({1: [_finding(title="C")], 2: [_finding(title="D", path="d.py")]}))
+        self.assertEqual(second["ran"], 2)
+
+        _, third = self.run_reviews(_per_shot({1: [_finding(title="E")]}))
+        self.assertEqual(third["ran"], 1)
+        self.assertEqual(third["out"][0]["p"], 3)
+
+    def test_slice_without_shot_passes_key_runs_extra_shots_on_the_first_pass_only(self) -> None:
+        self.add_slice("api", shots=2)
+        state_path = self.review_dir / "_state.json"
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+        del data["slices"]["api"]["shot_passes"]
+        state_path.write_text(json.dumps(data), encoding="utf-8")
+
+        _, first = self.run_reviews(_per_shot({1: [_finding()], 2: [_finding(title="B", path="b.py")]}))
+        _, second = self.run_reviews(_per_shot({1: [_finding(title="C")]}))
+
+        self.assertEqual((first["ran"], second["ran"]), (2, 1))
+
+    def test_redefined_slice_re_arms_the_shot_passes_window(self) -> None:
+        self.add_slice("api", shots=2, shot_passes=1)
+        self.run_reviews(_per_shot({1: [_finding()], 2: [_finding(title="B", path="b.py")]}))
+        _, second = self.run_reviews(_per_shot({1: [_finding(title="C")]}))
+        self.assertEqual(second["ran"], 1)
+
+        with ReviewState.locked(self.review_dir) as state:
+            state.remove_slice("api", source="classifier")
+            state.save()
+        self.add_slice("api", shots=2, shot_passes=1)
+        _, third = self.run_reviews(_per_shot({1: [_finding(title="D")], 2: [_finding(title="E", path="e.py")]}))
+
+        self.assertEqual(third["ran"], 2)
+        self.assertEqual(third["out"][0]["p"], 3)
+
+    def test_judge_continue_does_not_re_arm_the_shot_passes_window(self) -> None:
+        self.add_slice("api", shots=2, shot_passes=1)
+        self.run_reviews(_per_shot({1: [_finding()], 2: [_finding(title="B", path="b.py")]}), max_passes=1)
+
+        _, second = self.run_reviews(
+            _judge_aware(_per_shot({1: [_finding(title="C", severity="P2")]}),
+                         verdict="continue", reason="P1 kept in the last pass."),
+            max_passes=1,
+        )
+
+        self.assertEqual(second["judge"][0]["verdict"], "continue")
+        self.assertEqual(second["ran"], 1)
+        self.assertEqual(second["out"][0]["p"], 2)
 
     def test_add_slice_without_shots_uses_configured_shots(self) -> None:
         with mock.patch(
@@ -4710,6 +4810,9 @@ class ShotsAndJudgeTests(unittest.TestCase):
         corruptions = {
             "shots bool": {"shots": True},
             "shots zero": {"shots": 0},
+            "shot_passes zero": {"shot_passes": 0},
+            "shot_passes bool": {"shot_passes": True},
+            "shot_passes text": {"shot_passes": "never"},
             "pass_base negative": {"pass_base": -1},
             "pass_base text": {"pass_base": "1"},
             "judgements object": {"judgements": {}},

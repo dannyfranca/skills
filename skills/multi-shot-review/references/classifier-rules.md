@@ -59,3 +59,8 @@ not reviewer prompt content.
 Pass `--shots <n>` only when scoped guidance asks for parallel reviewer shots on a slice. Omit it
 to use the configured default. Shots run the same prompt independently in one wave; the tool marks
 duplicates across shots and reduces the count as shots come back clean.
+
+Pass `--shot-passes <n|always>` only when scoped guidance asks for it on a slice. It sets how many
+passes, counted from the slice definition, run more than one shot. Later passes run one shot. Omit
+it to use the configured default. A guidance rule can use the change size and the slice verbosity
+as factors.

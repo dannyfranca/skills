@@ -22,6 +22,7 @@ harness supports, or delete the `model` line to use the harness default):
 review_file = "REVIEW"
 max_passes = 3
 shots = 1
+shot_passes = 1
 
 [classifier]
 harness = "codex"
@@ -46,6 +47,9 @@ reasoning = "medium"
   positive integer.
 - `shots`: reviewer shots per pass for a slice that `add_slice.py` creates without `--shots`.
   Defaults to `1`. Must be a positive integer.
+- `shot_passes`: number of passes at the start of a slice definition that run more than one shot.
+  Applies to a slice that `add_slice.py` creates without `--shot-passes`. Defaults to `1`. Must be a
+  positive integer or `"always"`.
 - `classifier`: harness profile used by the slice classifier.
 - `slice_default`: harness profile used when a slice does not override it.
 - `judge`: harness profile used by the pass-budget judge. When no config in the chain has a
@@ -102,9 +106,17 @@ The runner marks some findings as automatic duplicates. The conditions are:
 The resolution of an automatic duplicate has `"auto": true`. The runner keeps the copy with the
 highest severity.
 
-The number of shots decreases. Each shot that gives no kept findings removes one shot from later
-waves. The minimum is one shot. The number never increases. When all shots of a wave are clean, the
-slice is complete. When a shot fails or times out, the runner runs only that shot again.
+`add_slice.py --shot-passes <n|always>` sets the number of passes that run more than one shot.
+Without `--shot-passes`, the slice uses the configured `shot_passes` value. The default is `1`.
+Passes count from the start of the slice definition. After the window, each pass runs one shot.
+With `always`, each pass runs the shots that the phase-down rule below gives. A judge `continue`
+verdict does not open a new window. A slice removal and a new `add_slice.py` of the same name
+opens a new window.
+
+Inside the window, the number of shots decreases. Each shot that gives no kept findings removes one
+shot from later waves. The minimum is one shot. The number never increases. When all shots of a
+wave are clean, the slice is complete. When a shot fails or times out, the runner runs only that
+shot again.
 
 ### Judge
 

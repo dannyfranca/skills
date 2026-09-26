@@ -155,7 +155,8 @@ python3 "$SKILL_DIR/scripts/add_slice.py" \
 
 `--shots <n>` sets the number of parallel reviewer shots per pass. Omit it to use the configured
 default. Every shot that returns no kept findings reduces later waves for that slice by one shot,
-down to one.
+down to one. `--shot-passes <n|always>` sets how many passes, counted from the slice definition,
+run more than one shot; later passes run one shot. Omit it to use the configured default of `1`.
 
 Remove a slice with the same authority marker:
 
