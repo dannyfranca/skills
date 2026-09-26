@@ -30,13 +30,14 @@ launcher's responsibility.
 ## State mutations
 
 Use `add_slice.py --prompt-file` for new slices. Adding a removed name reactivates it while
-preserving its runs and history. Use `remove_slice.py` to tombstone an obsolete slice. Successful
+preserving its runs and history. The reactivated definition gets a new pass window. Use `remove_slice.py` to tombstone an obsolete slice. Successful
 mutations remain if classification stops early; the next clean classifier reasons from that state.
 To revise an active classifier slice, remove it and add the same name with its new definition.
 
 Pass `--harness <harness>` only when a specific harness materially suits a slice. Apply the same
 rule to `--model <model>` and `--reasoning <effort>`. Omitting them uses the configured slice
-profile or harness defaults. All selections are persisted with the slice and snapshotted per run.
+profile or harness defaults. Pass `--shots <n>` only when scoped guidance asks for parallel
+reviewer shots on that slice. All selections are persisted with the slice and snapshotted per run.
 
 Classifier calls normally omit `--user-directive-file`. A parent acting on an explicit user request
 supplies that file, making the mutation user-controlled. A classifier may pass a forwarded
@@ -54,5 +55,4 @@ python3 "$SKILL_DIR/scripts/add_related_task.py" \
   --text "<what will be addressed later>"
 ```
 
-Use `--file <path>` or `--dir <path>` for larger related tasks. Reclassify when deferred-work
-context materially changes selection.
+Use `--file <path>` or `--dir <path>` for larger related tasks.

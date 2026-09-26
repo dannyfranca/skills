@@ -15,10 +15,15 @@ from review_state import ReviewStateError
 
 CONFIG_FILENAME = "multi-shot-review.toml"
 DEFAULT_REVIEW_FILE = "REVIEW"
+DEFAULT_MAX_PASSES = 3
+DEFAULT_SHOTS = 1
 _SUPPORTED_KEYS = {
     "review_file",
+    "max_passes",
+    "shots",
     "classifier",
     "slice_default",
+    "judge",
 }
 _PROFILE_KEYS = {"harness", "model", "reasoning"}
 _REVIEW_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -27,8 +32,17 @@ _REVIEW_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 @dataclass(frozen=True)
 class ReviewConfig:
     review_file: str = DEFAULT_REVIEW_FILE
+    max_passes: int = DEFAULT_MAX_PASSES
+    shots: int = DEFAULT_SHOTS
     classifier: HarnessProfile | None = None
     slice_default: HarnessProfile | None = None
+    judge: HarnessProfile | None = None
+
+    @property
+    def judge_profile(self) -> HarnessProfile | None:
+        """The judge shares the classifier profile unless configured on its own."""
+
+        return self.classifier if self.judge is None else self.judge
 
 
 def load_review_config(root: Path, *, home: Path | None = None) -> ReviewConfig:
@@ -77,6 +91,8 @@ def _load_config_file(path: Path) -> dict[str, Any]:
     for key, value in data.items():
         if key == "review_file":
             validated[key] = _validate_review_file(path, value)
+        elif key in {"max_passes", "shots"}:
+            validated[key] = _validate_positive_int(path, key, value)
         else:
             validated[key] = _validate_profile(path, key, value)
     return validated
@@ -94,6 +110,14 @@ def _validate_review_file(path: Path, value: Any) -> str:
     ):
         raise ReviewStateError(
             f"review config review_file must be a basename without .md: {path}"
+        )
+    return value
+
+
+def _validate_positive_int(path: Path, key: str, value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ReviewStateError(
+            f"review config {key} must be a positive integer: {path}"
         )
     return value
 

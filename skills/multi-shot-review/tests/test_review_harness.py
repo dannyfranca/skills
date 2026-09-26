@@ -20,6 +20,7 @@ from harnesses import (  # noqa: E402
     resolve_profile,
 )
 from review_state import ReviewState, init_review_state, run_reviews  # noqa: E402
+from review_result import JUDGE_SCHEMA_PATH, RESULT_SCHEMA_PATH  # noqa: E402
 
 
 class ProfileResolutionTests(unittest.TestCase):
@@ -114,7 +115,9 @@ class ClaudeCodeHarnessTests(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("--model") + 1], "sonnet")
         self.assertEqual(cmd[cmd.index("--effort") + 1], "high")
         self.assertEqual(cmd[cmd.index("--output-format") + 1], "json")
-        self.assertEqual(json.loads(cmd[cmd.index("--json-schema") + 1])["type"], "object")
+        schema = json.loads(cmd[cmd.index("--json-schema") + 1])
+        self.assertEqual(schema["type"], "object")
+        self.assertNotIn("$schema", schema)
         self.assertEqual(cmd[-2:], ["-p", "Review this change."])
 
     def test_classifier_limits_mutating_bash_to_slice_scripts(self) -> None:
@@ -166,6 +169,48 @@ class ClaudeCodeHarnessTests(unittest.TestCase):
                     stdout_log=stdout_log,
                     output_file=Path(tmp) / "result.json",
                 )
+
+
+class JudgeInvocationTests(unittest.TestCase):
+    def test_codex_judge_requests_verdict_schema_read_only(self) -> None:
+        profile = resolve_profile(
+            HarnessProfile("codex", model="judge-model", reasoning="low"),
+            override_source="slice-override",
+        )
+        review = get_harness("codex").review_invocation(
+            prompt="Review.", output_file=Path("out.json"), profile=profile
+        )
+        judge = get_harness("codex").judge_invocation(
+            prompt="Judge.", output_file=Path("verdict.json"), profile=profile
+        )
+
+        self.assertEqual(
+            review.command[review.command.index("--output-schema") + 1],
+            str(RESULT_SCHEMA_PATH),
+        )
+        self.assertEqual(
+            judge.command[judge.command.index("--output-schema") + 1],
+            str(JUDGE_SCHEMA_PATH),
+        )
+        self.assertEqual(judge.command[judge.command.index("--sandbox") + 1], "read-only")
+        self.assertEqual(judge.command[judge.command.index("-m") + 1], "judge-model")
+        self.assertEqual(judge.command[-3:], ["-o", "verdict.json", "Judge."])
+
+    def test_claude_code_judge_requests_verdict_schema_read_only(self) -> None:
+        profile = resolve_profile(
+            HarnessProfile("claude-code", model="sonnet"),
+            override_source="slice-override",
+        )
+        cmd = get_harness("claude-code").judge_invocation(
+            prompt="Judge.", output_file=Path("unused.json"), profile=profile
+        ).command
+
+        schema = json.loads(cmd[cmd.index("--json-schema") + 1])
+        settings = json.loads(cmd[cmd.index("--settings") + 1])
+        self.assertEqual(schema["properties"]["verdict"]["enum"], ["continue", "stop"])
+        self.assertNotIn("$schema", schema)
+        self.assertEqual(settings["sandbox"]["filesystem"], {"denyWrite": ["."]})
+        self.assertEqual(cmd[-2:], ["-p", "Judge."])
 
 
 class ClaudeCodeRunnerIntegrationTests(unittest.TestCase):

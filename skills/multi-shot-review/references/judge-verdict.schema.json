@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openai.com/schemas/multi-shot-review/judge-verdict-v1.json",
+  "title": "Multi-shot review judge verdict",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "verdict", "reason"],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["continue", "stop"]
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    }
+  }
+}

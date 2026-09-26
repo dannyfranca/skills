@@ -43,6 +43,7 @@ def _run_classifier(args: argparse.Namespace, review_dir: Path) -> int:
     """Resolve and run one classifier while the session lock is held."""
 
     with ReviewState.locked(review_dir) as state:
+        state.require_no_active_slices()
         root = Path(state.data["session"]["root"])
         target = dict(state.data["session"]["target"])
 
@@ -88,6 +89,7 @@ def _run_classifier(args: argparse.Namespace, review_dir: Path) -> int:
             invocation.command,
             cwd=review_dir,
             input=invocation.input_text,
+            stdin=subprocess.DEVNULL if invocation.input_text is None else None,
             text=True,
             check=False,
         )
@@ -165,6 +167,9 @@ specific choice materially suits that slice. Otherwise omit the option; the tool
 configured slice default or leaves the choice to the review harness. Scoped REVIEW guidance may
 require one or more of these choices. Treat harness, model, and reasoning choices as part of the
 durable slice definition, not as prompt text.
+
+Pass `--shots <n>` only when scoped guidance asks for parallel reviewer shots on that slice. The
+default is one shot per pass. Each shot runs the same prompt independently in the same wave.
 
 Normally omit `--user-directive-file`. If the supplemental user directions explicitly authorize
 changing a user-controlled slice, pass this exact source file to the mutation:

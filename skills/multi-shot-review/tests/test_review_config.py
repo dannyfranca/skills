@@ -73,9 +73,78 @@ class ReviewConfigTests(unittest.TestCase):
             HarnessProfile(harness="codex", model="work-slice", reasoning="high"),
         )
 
+    def test_max_passes_and_judge_profile_are_loaded(self) -> None:
+        self.write_config(
+            self.root,
+            'max_passes = 2\n'
+            'shots = 3\n'
+            '[classifier]\n'
+            'harness = "codex"\n'
+            'model = "classifier-model"\n'
+            '[judge]\n'
+            'harness = "claude-code"\n'
+            'model = "judge-model"\n'
+            'reasoning = "low"\n',
+        )
+
+        config = load_review_config(self.root, home=self.home)
+
+        self.assertEqual(config.max_passes, 2)
+        self.assertEqual(config.shots, 3)
+        self.assertEqual(
+            config.judge_profile,
+            HarnessProfile(harness="claude-code", model="judge-model", reasoning="low"),
+        )
+
+    def test_judge_profile_falls_back_to_classifier_profile(self) -> None:
+        self.write_config(
+            self.root,
+            '[classifier]\n'
+            'harness = "codex"\n'
+            'model = "classifier-model"\n'
+            'reasoning = "medium"\n',
+        )
+
+        config = load_review_config(self.root, home=self.home)
+
+        self.assertEqual(config.max_passes, 3)
+        self.assertEqual(config.shots, 1)
+        self.assertIsNone(config.judge)
+        self.assertEqual(config.judge_profile, config.classifier)
+
+    def test_nearer_pass_budget_and_judge_profile_replace_parent_values(self) -> None:
+        self.write_config(
+            self.home,
+            'max_passes = 5\n'
+            'shots = 2\n'
+            '[judge]\n'
+            'harness = "codex"\n'
+            'model = "global-judge"\n'
+            'reasoning = "high"\n',
+        )
+        self.write_config(
+            self.root,
+            'max_passes = 2\n'
+            '[judge]\n'
+            'harness = "claude-code"\n',
+        )
+
+        config = load_review_config(self.root, home=self.home)
+
+        self.assertEqual((config.max_passes, config.shots), (2, 2))
+        self.assertEqual(config.judge_profile, HarnessProfile(harness="claude-code"))
+
     def test_rejects_unknown_non_string_empty_and_path_settings(self) -> None:
         invalid_configs = (
             "unknown = true\n",
+            "max_passes = 0\n",
+            "max_passes = true\n",
+            'max_passes = "3"\n',
+            "shots = 0\n",
+            "shots = false\n",
+            "shots = 1.5\n",
+            '[judge]\nharness = ""\n',
+            '[judge]\nharness = "codex"\nunknown = true\n',
             "classifier_model = 5\n",
             'classifier = "codex"\n',
             '[slice_default]\nharness = ""\n',

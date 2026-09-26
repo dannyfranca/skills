@@ -14,6 +14,8 @@ FINDING_ID_LENGTH = 8
 SEVERITIES = frozenset({"P0", "P1", "P2", "P3"})
 FINDING_STATUSES = frozenset({"open", "ignored", "superseded"})
 RESULT_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "references" / "review-result.schema.json"
+JUDGE_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "references" / "judge-verdict.schema.json"
+JUDGE_VERDICTS = frozenset({"continue", "stop"})
 
 
 class ReviewResultError(ValueError):
@@ -40,6 +42,32 @@ def parse_review_result(text: str) -> list[dict[str, Any]]:
     if not isinstance(result["findings"], list):
         raise ReviewResultError("review result findings must be an array")
     return [_validate_finding(value, index) for index, value in enumerate(result["findings"])]
+
+
+def parse_judge_verdict(text: str) -> dict[str, str]:
+    """Return the normalized verdict from a strict judge-verdict document."""
+    try:
+        result = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ReviewResultError(f"judge output is not valid JSON: {exc}") from exc
+    if not isinstance(result, dict):
+        raise ReviewResultError("judge verdict must be an object")
+    _require_exact_keys(result, {"schema_version", "verdict", "reason"}, "judge verdict")
+    if (
+        isinstance(result["schema_version"], bool)
+        or not isinstance(result["schema_version"], int)
+        or result["schema_version"] != RESULT_SCHEMA_VERSION
+    ):
+        raise ReviewResultError(
+            f"judge verdict schema_version must be {RESULT_SCHEMA_VERSION}"
+        )
+    verdict = result["verdict"]
+    if not isinstance(verdict, str) or verdict not in JUDGE_VERDICTS:
+        raise ReviewResultError("judge verdict must be continue or stop")
+    return {
+        "verdict": verdict,
+        "reason": _non_empty_string(result["reason"], "judge verdict reason"),
+    }
 
 
 def assign_finding_ids(
@@ -139,7 +167,12 @@ def render_review_markdown(
         )
         resolution = finding.get("resolution")
         if finding.get("status") == "ignored" and isinstance(resolution, dict):
-            if resolution.get("kind") == "duplicate":
+            if resolution.get("kind") == "duplicate" and resolution.get("auto") is True:
+                detail = (
+                    f"Duplicate of `{resolution['finding_id']}` "
+                    "(detected automatically across same-wave shots)."
+                )
+            elif resolution.get("kind") == "duplicate":
                 detail = f"Duplicate of `{resolution['finding_id']}`."
             else:
                 detail = str(resolution["text"])
@@ -247,19 +280,25 @@ def _validate_resolution(value: Any, *, status: str, owner: str) -> dict[str, An
             "at": _non_empty_string(value["at"], f"{owner} resolution at"),
         }
     if status == "ignored" and kind == "duplicate":
-        _require_exact_keys(
-            value, {"kind", "finding_id", "at"}, f"{owner} resolution"
-        )
+        expected = {"kind", "finding_id", "at"}
+        if "auto" in value:
+            expected.add("auto")
+        _require_exact_keys(value, expected, f"{owner} resolution")
         canonical_id = value["finding_id"]
         if not isinstance(canonical_id, str) or not canonical_id:
             raise ReviewResultError(
                 f"{owner} duplicate resolution requires finding_id"
             )
-        return {
+        resolution = {
             "kind": kind,
             "finding_id": canonical_id,
             "at": _non_empty_string(value["at"], f"{owner} resolution at"),
         }
+        if "auto" in value:
+            if value["auto"] is not True:
+                raise ReviewResultError(f"{owner} auto duplicate marker must be true")
+            resolution["auto"] = True
+        return resolution
     if status == "superseded" and kind == "superseded":
         if "successor_run_id" in value:
             _require_exact_keys(
