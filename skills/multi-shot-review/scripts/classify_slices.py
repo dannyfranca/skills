@@ -168,8 +168,11 @@ configured slice default or leaves the choice to the review harness. Scoped REVI
 require one or more of these choices. Treat harness, model, and reasoning choices as part of the
 durable slice definition, not as prompt text.
 
-Pass `--shots <n>` only when scoped guidance asks for parallel reviewer shots on that slice. The
-default is one shot per pass. Each shot runs the same prompt independently in the same wave.
+Pass `--shots <n>` only when scoped guidance asks for parallel reviewer shots on that slice. Omit
+it to use the configured default. Each shot runs the same prompt independently in the same wave.
+Pass `--shot-passes <n|always>` only when scoped guidance asks for it on that slice. It sets how many
+passes, counted from the slice definition, run more than one shot. Omit it to use the configured
+default. Scoped guidance can base it on the change size and the slice verbosity.
 
 Normally omit `--user-directive-file`. If the supplemental user directions explicitly authorize
 changing a user-controlled slice, pass this exact source file to the mutation:
