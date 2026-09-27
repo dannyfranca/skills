@@ -120,6 +120,37 @@ class ReviewStateTests(unittest.TestCase):
         self.assertEqual(review_dir.parent, repository / ".review")
         self.assertEqual(Path(state.data["session"]["root"]), repository)
 
+    def test_init_places_sessions_under_review_root_by_repository_name(self) -> None:
+        repository = Path(self.tmp.name) / "repository"
+        repository.mkdir()
+        for command in (
+            ["git", "init", "-b", "main"],
+            ["git", "remote", "add", "origin", "git@github.com:owner/project.git"],
+        ):
+            subprocess.run(command, cwd=repository, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        reviews = Path(self.tmp.name) / "reviews"
+        (repository / ".agents").mkdir()
+        (repository / ".agents" / "multi-shot-review.toml").write_text(
+            f'review_root = "{reviews}"\n', encoding="utf-8"
+        )
+
+        review_dir = init_review_state(repository, "Review with a shared review root.")
+        state = ReviewState.load(review_dir)
+
+        self.assertEqual(review_dir.parent, reviews / "owner" / "project")
+        self.assertEqual(
+            state.data["session"]["repository"],
+            {"name": "owner/project", "remote": "git@github.com:owner/project.git", "branch": "main"},
+        )
+        self.assertEqual(Path(state.data["session"]["root"]), repository)
+
+    def test_init_records_the_directory_name_without_a_remote(self) -> None:
+        state = ReviewState.load(self.review_dir)
+
+        self.assertEqual(
+            state.data["session"]["repository"], {"name": "repo", "remote": None, "branch": None}
+        )
+
     def test_init_rejects_malformed_target_descriptors(self) -> None:
         for target in (
             {"kind": "base", "value": ""},

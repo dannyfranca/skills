@@ -140,8 +140,56 @@ def repo_root(path: Path | None = None) -> Path:
     return start.resolve()
 
 
-def create_review_dir(root: Path) -> Path:
-    review_root = root.resolve() / ".review"
+def repository_identity(root: Path) -> dict[str, str | None]:
+    """Name, remote, and branch of the repository, so a session stays attributable after its
+    worktree is gone."""
+
+    remote = _git_output(root, "remote", "get-url", "origin")
+    # symbolic-ref also names an unborn branch; a detached HEAD has no branch.
+    branch = _git_output(root, "symbolic-ref", "--short", "HEAD")
+    name = _remote_slug(remote) if remote else None
+    if name is None:
+        common_dir = _git_output(root, "rev-parse", "--git-common-dir")
+        name = (root / common_dir).resolve().parent.name if common_dir else root.resolve().name
+    return {"name": name, "remote": remote, "branch": branch}
+
+
+def _git_output(root: Path, *args: str) -> str | None:
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip() or None
+
+
+def _remote_slug(remote: str) -> str | None:
+    path = remote.rstrip("/")
+    if path.endswith(".git"):
+        path = path[: -len(".git")]
+    if "://" in path:
+        path = path.split("://", 1)[1].split("/", 1)[-1]
+    elif ":" in path:
+        path = path.split(":", 1)[1]
+    parts = [part for part in path.split("/") if part]
+    if len(parts) < 2:
+        return None
+    return "/".join(parts[-2:])
+
+
+def create_review_dir(root: Path, *, review_root: Path | None = None, repository_name: str) -> Path:
+    if review_root is None:
+        review_root = root.resolve() / ".review"
+    else:
+        review_root = review_root.resolve() / repository_name
     for _ in range(10):
         review_dir = review_root / session_id()
         try:
@@ -166,13 +214,17 @@ def init_review_state(
     # The session pins its variant and settings at creation, so config edits and later draws
     # never change a running session.
     config = load_review_config(root, variant=variant)
-    review_dir = create_review_dir(root)
+    repository = repository_identity(root)
+    review_dir = create_review_dir(
+        root, review_root=config.review_root, repository_name=str(repository["name"])
+    )
     write_task_entrypoint(review_dir, task)
     state = ReviewState.new(
         review_dir=review_dir,
         root=root,
         target=target or {"kind": "uncommitted"},
         config=config,
+        repository=repository,
     )
     state.save()
     return review_dir
@@ -607,6 +659,7 @@ class ReviewState:
         root: Path,
         target: dict[str, str] | None = None,
         config: "ReviewConfig | None" = None,
+        repository: dict[str, str | None] | None = None,
     ) -> "ReviewState":
         from review_config import ReviewConfig
 
@@ -617,6 +670,7 @@ class ReviewState:
             "session": {
                 "config": config.to_snapshot(),
                 "created_at": now_iso(),
+                "repository": repository or {"name": root.resolve().name, "remote": None, "branch": None},
                 "review_dir": str(review_dir.resolve()),
                 "root": str(root.resolve()),
                 "target": target,

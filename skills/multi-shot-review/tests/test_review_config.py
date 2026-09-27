@@ -74,6 +74,22 @@ class ReviewConfigTests(unittest.TestCase):
             HarnessProfile(harness="codex", model="work-slice", reasoning="high"),
         )
 
+    def test_review_root_expands_home_and_requires_an_absolute_path(self) -> None:
+        self.write_config(self.home, 'review_root = "~/reviews"\n')
+
+        config = load_review_config(self.root, home=self.home)
+
+        self.assertEqual(config.review_root, Path("~/reviews").expanduser())
+        self.assertNotIn("review_root", config.to_snapshot())
+        self.assertEqual(
+            ReviewConfig.from_snapshot(config.to_snapshot(), variant="default").review_root, None
+        )
+        for text in ('review_root = "reviews"\n', 'review_root = ""\n', "review_root = 1\n"):
+            with self.subTest(text=text):
+                (self.home / ".agents" / "multi-shot-review.toml").write_text(text, encoding="utf-8")
+                with self.assertRaises(ReviewStateError):
+                    load_review_config(self.root, home=self.home)
+
     def test_max_passes_and_judge_profile_are_loaded(self) -> None:
         self.write_config(
             self.root,
