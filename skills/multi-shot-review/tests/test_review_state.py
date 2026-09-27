@@ -144,6 +144,17 @@ class ReviewStateTests(unittest.TestCase):
         )
         self.assertEqual(Path(state.data["session"]["root"]), repository)
 
+    def test_init_rejects_a_review_root_inside_the_repository(self) -> None:
+        (self.root / ".agents").mkdir()
+        (self.root / ".agents" / "multi-shot-review.toml").write_text(
+            f'review_root = "{self.root / "reviews"}"\n', encoding="utf-8"
+        )
+
+        with self.assertRaisesRegex(ReviewStateError, "outside the repository"):
+            init_review_state(self.root, "Review with an in-repository root.")
+
+        self.assertFalse((self.root / "reviews").exists())
+
     def test_init_ignores_local_path_remotes_for_the_repository_name(self) -> None:
         repository = Path(self.tmp.name) / "checkout"
         repository.mkdir()

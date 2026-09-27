@@ -220,6 +220,9 @@ def init_review_state(
     # The session pins its variant and settings at creation, so config edits and later draws
     # never change a running session.
     config = load_review_config(root, variant=variant)
+    # Session files inside the repository would appear as changes of the review target itself.
+    if config.review_root.resolve().is_relative_to(root):
+        raise ReviewStateError(f"review_root must be outside the repository under review: {config.review_root}")
     repository = repository_identity(root)
     review_dir = create_review_dir(config.review_root, str(repository["name"]))
     write_task_entrypoint(review_dir, task)
