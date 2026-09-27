@@ -28,7 +28,14 @@ them.
 Prefer ephemeral, non-persistent sessions. Disable external integrations and writable tools when
 the harness supports it. Reviewers need repository read access only; enforce this beneath ambient
 permission rules with the harness's native filesystem sandbox. A classifier may mutate review state
-solely through `add_slice.py` and `remove_slice.py`; grant no broader write path.
+solely through `add_slice.py` and `remove_slice.py`; grant no broader write path than the review
+directory, which is its working directory.
+
+Do not gate the classifier on interactive permission rules. It inspects the target with Git, reads
+the skill references outside its working directory, and streams each reviewer prompt to
+`add_slice.py --prompt-file -` on stdin. A mode that silently denies unmatched calls makes the
+classifier exit without slices. Skip permission prompts and let the filesystem sandbox bound the
+writes instead.
 
 Repository agent instructions remain available unless the project explicitly changes that policy.
 Do not depend on user hooks, memory, MCP servers, or ambient extensions for correct operation.

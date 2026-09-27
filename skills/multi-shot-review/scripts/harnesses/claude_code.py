@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import shlex
 from pathlib import Path
 
 from review_result import JUDGE_SCHEMA_PATH, RESULT_SCHEMA_PATH
@@ -23,13 +22,18 @@ class ClaudeCodeHarness(ReviewHarness):
         add_slice_script: Path,
         remove_slice_script: Path,
     ) -> Invocation:
-        del review_dir
-        allowed = (
-            f"Bash(python3 {shlex.quote(str(add_slice_script))} *)",
-            f"Bash(python3 {shlex.quote(str(remove_slice_script))} *)",
+        del review_dir, add_slice_script, remove_slice_script
+        # `dontAsk` silently denies every call outside the allow rules, and prefix rules cannot
+        # match the Git inspection, reads under the skill directory, and heredoc prompts on stdin
+        # that classification needs. The sandbox, not the permission prompt, bounds writes to the
+        # review directory, so state mutation still goes only through the slice scripts.
+        cmd = _base_command(
+            profile,
+            tools="Bash,Glob,Grep,Read",
+            read_only=False,
+            permission_mode="bypassPermissions",
         )
-        cmd = _base_command(profile, tools="Bash,Glob,Grep,Read", read_only=False)
-        cmd.extend(["--allowedTools", *allowed, "-p", prompt])
+        cmd.extend(["-p", prompt])
         return Invocation(cmd)
 
     def review_invocation(
@@ -91,6 +95,7 @@ def _base_command(
     *,
     tools: str,
     read_only: bool,
+    permission_mode: str = "dontAsk",
 ) -> list[str]:
     sandbox: dict[str, object] = {
         "enabled": True,
@@ -116,7 +121,7 @@ def _base_command(
         "--mcp-config",
         '{"mcpServers":{}}',
         "--permission-mode",
-        "dontAsk",
+        permission_mode,
         "--tools",
         tools,
     ]

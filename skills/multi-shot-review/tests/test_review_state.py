@@ -958,7 +958,7 @@ class ClassifierTests(unittest.TestCase):
             self.assertEqual(cmd[0], "claude")
             self.assertEqual(cmd[cmd.index("--model") + 1], "sonnet")
             self.assertEqual(cmd[cmd.index("--effort") + 1], "high")
-            self.assertIn("--allowedTools", cmd)
+            self.assertEqual(cmd[cmd.index("--permission-mode") + 1], "bypassPermissions")
             classification = ReviewState.load(review_dir).data["classifications"][0]
             self.assertEqual(classification["harness"], "claude-code")
             self.assertEqual(classification["model"], "sonnet")
@@ -968,6 +968,13 @@ class ClassifierTests(unittest.TestCase):
             root = Path(tmp) / "repo"
             root.mkdir()
             review_dir = init_review_state(root, "Review the current changes.")
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            def child_explains_denial(cmd, **kwargs):
+                kwargs["stdout"].write("Permission denied for add_slice.py; no slices added.\n")
+                kwargs["stderr"].write("child warning\n")
+                return subprocess.CompletedProcess(cmd, 0)
 
             with mock.patch.object(
                 classify_slices,
@@ -976,8 +983,8 @@ class ClassifierTests(unittest.TestCase):
             ), mock.patch.object(
                 classify_slices.subprocess,
                 "run",
-                return_value=subprocess.CompletedProcess([], 0),
-            ):
+                side_effect=child_explains_denial,
+            ), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                 with mock.patch.object(
                     sys,
                     "argv",
@@ -988,6 +995,19 @@ class ClassifierTests(unittest.TestCase):
             classification = ReviewState.load(review_dir).data["classifications"][0]
             self.assertEqual(classification["status"], "failed")
             self.assertEqual(classification["exit_code"], 2)
+            log_dir = review_dir / "_logs"
+            stdout_log = log_dir / f"classifier-{classification['id']}.stdout.log"
+            stderr_log = log_dir / f"classifier-{classification['id']}.stderr.log"
+            self.assertEqual(
+                stdout_log.read_text(encoding="utf-8"),
+                "Permission denied for add_slice.py; no slices added.\n",
+            )
+            self.assertEqual(stderr_log.read_text(encoding="utf-8"), "child warning\n")
+            self.assertIn("Permission denied for add_slice.py", stdout.getvalue())
+            self.assertIn("child warning", stderr.getvalue())
+            self.assertIn("without any active review slices", stderr.getvalue())
+            self.assertIn(str(stdout_log), stderr.getvalue())
+            self.assertIn(str(stderr_log), stderr.getvalue())
 
     def test_classifier_interruption_is_recorded_as_failed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

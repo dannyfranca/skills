@@ -2539,6 +2539,12 @@ def _log_paths(review_dir: Path, reservation: Reservation) -> tuple[Path, Path]:
     return log_dir / f"{prefix}.stdout.log", log_dir / f"{prefix}.stderr.log"
 
 
+def classifier_log_paths(review_dir: Path, classification_id: str) -> tuple[Path, Path]:
+    log_dir = review_dir / "_logs"
+    prefix = f"classifier-{classification_id}"
+    return log_dir / f"{prefix}.stdout.log", log_dir / f"{prefix}.stderr.log"
+
+
 def _write_completed_process_logs(proc: subprocess.CompletedProcess[str], stdout_log: Path, stderr_log: Path) -> None:
     stdout_log.parent.mkdir(parents=True, exist_ok=True)
     if proc.stdout:

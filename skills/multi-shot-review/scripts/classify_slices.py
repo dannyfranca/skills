@@ -5,13 +5,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 from harnesses import HarnessError, get_harness, resolve_profile
 from review_instructions import load_classifier_guidance
-from review_state import ReviewState, ReviewStateError
+from review_state import ReviewState, ReviewStateError, classifier_log_paths
 
 
 def main() -> int:
@@ -83,15 +84,9 @@ def _run_classifier(args: argparse.Namespace, review_dir: Path) -> int:
     with ReviewState.locked(review_dir) as state:
         classification_id = state.start_classification(profile)
         state.save()
+    stdout_log, stderr_log = classifier_log_paths(review_dir, classification_id)
     try:
-        proc = subprocess.run(
-            invocation.command,
-            cwd=review_dir,
-            input=invocation.input_text,
-            stdin=subprocess.DEVNULL if invocation.input_text is None else None,
-            text=True,
-            check=False,
-        )
+        proc = _run_logged(invocation.command, review_dir, invocation.input_text, stdout_log, stderr_log)
     except OSError:
         with ReviewState.locked(review_dir) as state:
             state.complete_classification(classification_id, 127)
@@ -103,6 +98,9 @@ def _run_classifier(args: argparse.Namespace, review_dir: Path) -> int:
             state.complete_classification(classification_id, exit_code)
             state.save()
         raise
+    finally:
+        _relay(stdout_log, sys.stdout)
+        _relay(stderr_log, sys.stderr)
     with ReviewState.locked(review_dir) as state:
         effective_exit_code = proc.returncode
         if proc.returncode == 0 and not any(
@@ -114,9 +112,42 @@ def _run_classifier(args: argparse.Namespace, review_dir: Path) -> int:
         state.save()
     if effective_exit_code != proc.returncode:
         raise ReviewStateError(
-            "classifier completed without any active review slices"
+            "classifier completed without any active review slices; "
+            f"see {stdout_log} and {stderr_log}"
         )
     return proc.returncode
+
+
+def _run_logged(
+    command: list[str],
+    review_dir: Path,
+    input_text: str | None,
+    stdout_log: Path,
+    stderr_log: Path,
+) -> subprocess.CompletedProcess[str]:
+    stdout_log.parent.mkdir(parents=True, exist_ok=True)
+    with stdout_log.open("w", encoding="utf-8") as out_fh, stderr_log.open("w", encoding="utf-8") as err_fh:
+        return subprocess.run(
+            command,
+            cwd=review_dir,
+            input=input_text,
+            stdin=subprocess.DEVNULL if input_text is None else None,
+            text=True,
+            stdout=out_fh,
+            stderr=err_fh,
+            check=False,
+        )
+
+
+def _relay(log: Path, stream) -> None:
+    """The parent session diagnoses a failed classification from the child's own account."""
+
+    try:
+        with log.open("r", encoding="utf-8") as fh:
+            shutil.copyfileobj(fh, stream)
+    except OSError:
+        return
+    stream.flush()
 
 
 def _classifier_prompt(
@@ -158,8 +189,8 @@ Manage slices only by executing these scripts:
 - add/reactivate: {add_slice}
 - remove: {remove_slice}
 
-Call them as many times as needed. Send every complete reviewer prompt through `--prompt-file -`,
-including whole-change reviews.
+Call them as many times as needed. Send every complete reviewer prompt through `--prompt-file -`
+on stdin, for example with a quoted heredoc, including whole-change reviews.
 
 Each add may pass `--harness <harness>`, `--model <model>`, and/or `--reasoning <effort>` when a
 specific choice materially suits that slice. Otherwise omit the option; the tool applies its
