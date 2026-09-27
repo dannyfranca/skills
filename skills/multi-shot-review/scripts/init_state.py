@@ -12,13 +12,16 @@ from review_state import ReviewStateError, init_review_state
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Create .review/<timestamp-random>/ with an initialized _state.json file."
+        description=(
+            "Create <review_root>/<owner>/<repo>/<timestamp-random>/ with an initialized "
+            "_state.json file. review_root defaults to ~/.reviews."
+        )
     )
     parser.add_argument(
         "--root",
         default=".",
         type=Path,
-        help="Execution path where .review should be created. Defaults to the current directory.",
+        help="Path inside the repository under review. Defaults to the current directory.",
     )
     target = parser.add_mutually_exclusive_group()
     target.add_argument("--uncommitted", action="store_true", help="Review current working-tree changes (default).")

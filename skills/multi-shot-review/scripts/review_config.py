@@ -6,7 +6,7 @@ from __future__ import annotations
 import random
 import re
 import tomllib
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +23,7 @@ SHOT_PASSES_ALWAYS = "always"
 DEFAULT_VARIANT = "default"
 _SETTING_KEYS = {
     "review_file",
+    "review_root",
     "max_passes",
     "shots",
     "shot_passes",
@@ -36,11 +37,13 @@ _PROFILE_KEYS = {"harness", "model", "reasoning"}
 _PROFILE_SETTINGS = {"classifier", "slice_default", "judge"}
 _REVIEW_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 VARIANT_TAG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_SESSION_OWNED_FIELDS = {"variant", "review_root"}
 
 
 @dataclass(frozen=True)
 class ReviewConfig:
     review_file: str = DEFAULT_REVIEW_FILE
+    review_root: Path = field(default_factory=lambda: Path.home() / ".reviews")
     max_passes: int = DEFAULT_MAX_PASSES
     shots: int = DEFAULT_SHOTS
     shot_passes: int | str = DEFAULT_SHOT_PASSES
@@ -59,13 +62,15 @@ class ReviewConfig:
         """Effective settings without the variant tag, which the session stores on its own."""
 
         snapshot: dict[str, Any] = {}
-        for field in fields(self):
-            value = getattr(self, field.name)
-            if field.name == "variant":
+        for config_field in fields(self):
+            value = getattr(self, config_field.name)
+            # The session already records its review_dir, and sessions created before the
+            # review_root setting existed must stay loadable.
+            if config_field.name in _SESSION_OWNED_FIELDS:
                 continue
             if isinstance(value, HarnessProfile):
                 value = {"harness": value.harness, "model": value.model, "reasoning": value.reasoning}
-            snapshot[field.name] = value
+            snapshot[config_field.name] = value
         return snapshot
 
     @classmethod
@@ -73,7 +78,7 @@ class ReviewConfig:
         """Rebuild the session config with the same validation as a config file."""
 
         owner = "session config snapshot"
-        expected = {field.name for field in fields(cls)} - {"variant"}
+        expected = {config_field.name for config_field in fields(cls)} - _SESSION_OWNED_FIELDS
         if not isinstance(snapshot, dict) or set(snapshot) != expected:
             raise ReviewStateError(f"invalid {owner}")
         if not isinstance(variant, str) or not VARIANT_TAG_RE.fullmatch(variant):
@@ -233,6 +238,8 @@ def _validate_settings(path: Path | str, data: dict[str, Any]) -> dict[str, Any]
     for key, value in data.items():
         if key == "review_file":
             validated[key] = _validate_review_file(path, value)
+        elif key == "review_root":
+            validated[key] = _validate_review_root(path, value)
         elif key in {"max_passes", "shots"}:
             validated[key] = _validate_positive_int(path, key, value)
         elif key == "shot_passes":
@@ -256,6 +263,19 @@ def _validate_review_file(path: Path | str, value: Any) -> str:
             f"review config review_file must be a basename without .md: {path}"
         )
     return value
+
+
+def _validate_review_root(path: Path | str, value: Any) -> Path:
+    if isinstance(value, Path):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        raise ReviewStateError(f"review config review_root must be a non-empty string: {path}")
+    root = Path(value.strip()).expanduser()
+    if not root.is_absolute():
+        raise ReviewStateError(
+            f"review config review_root must be an absolute path or start with ~: {path}"
+        )
+    return root
 
 
 def _validate_positive_int(path: Path | str, key: str, value: Any) -> int:

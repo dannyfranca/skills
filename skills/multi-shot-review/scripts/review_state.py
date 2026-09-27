@@ -140,10 +140,64 @@ def repo_root(path: Path | None = None) -> Path:
     return start.resolve()
 
 
-def create_review_dir(root: Path) -> Path:
-    review_root = root.resolve() / ".review"
+def repository_identity(root: Path) -> dict[str, str | None]:
+    """Name, remote, and branch of the repository, so a session stays attributable after its
+    worktree is gone."""
+
+    remote = _git_output(root, "remote", "get-url", "origin")
+    # symbolic-ref also names an unborn branch; a detached HEAD has no branch.
+    branch = _git_output(root, "symbolic-ref", "--short", "HEAD")
+    name = _remote_slug(remote) if remote else None
+    if name is None:
+        common_dir = _git_output(root, "rev-parse", "--git-common-dir")
+        name = (root / common_dir).resolve().parent.name if common_dir else root.resolve().name
+    return {"name": name, "remote": remote, "branch": branch}
+
+
+def _git_output(root: Path, *args: str) -> str | None:
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip() or None
+
+
+def _remote_slug(remote: str) -> str | None:
+    """owner/repo of a hosted remote. A local-path remote names no owner, and its `..` parts
+    would place sessions outside the review root."""
+
+    path = remote.rstrip("/")
+    if path.endswith(".git"):
+        path = path[: -len(".git")]
+    if path.startswith("file://"):
+        return None
+    if "://" in path:
+        path = path.split("://", 1)[1].split("/", 1)[-1]
+    elif ":" in path:
+        path = path.split(":", 1)[1]
+    else:
+        return None
+    parts = [part for part in path.split("/") if part not in {"", ".", ".."}]
+    if len(parts) < 2:
+        return None
+    return "/".join(parts[-2:])
+
+
+def create_review_dir(review_root: Path, repository_name: str) -> Path:
+    repository_dir = review_root.resolve() / repository_name
+    if not repository_dir.resolve().is_relative_to(review_root.resolve()):
+        raise ReviewStateError(f"repository name escapes the review root: {repository_name}")
     for _ in range(10):
-        review_dir = review_root / session_id()
+        review_dir = repository_dir / session_id()
         try:
             review_dir.mkdir(parents=True, exist_ok=False)
         except FileExistsError:
@@ -162,17 +216,24 @@ def init_review_state(
     from review_config import load_review_config
 
     task = _require_non_empty_text(task, "task")
+    if not root.is_dir():
+        raise ReviewStateError(f"review root is not a directory: {root}")
     root = repo_root(root)
     # The session pins its variant and settings at creation, so config edits and later draws
     # never change a running session.
     config = load_review_config(root, variant=variant)
-    review_dir = create_review_dir(root)
+    # Session files inside the repository would appear as changes of the review target itself.
+    if config.review_root.resolve().is_relative_to(root):
+        raise ReviewStateError(f"review_root must be outside the repository under review: {config.review_root}")
+    repository = repository_identity(root)
+    review_dir = create_review_dir(config.review_root, str(repository["name"]))
     write_task_entrypoint(review_dir, task)
     state = ReviewState.new(
         review_dir=review_dir,
         root=root,
         target=target or {"kind": "uncommitted"},
         config=config,
+        repository=repository,
     )
     state.save()
     return review_dir
@@ -607,6 +668,7 @@ class ReviewState:
         root: Path,
         target: dict[str, str] | None = None,
         config: "ReviewConfig | None" = None,
+        repository: dict[str, str | None] | None = None,
     ) -> "ReviewState":
         from review_config import ReviewConfig
 
@@ -617,6 +679,7 @@ class ReviewState:
             "session": {
                 "config": config.to_snapshot(),
                 "created_at": now_iso(),
+                "repository": repository or {"name": root.resolve().name, "remote": None, "branch": None},
                 "review_dir": str(review_dir.resolve()),
                 "root": str(root.resolve()),
                 "target": target,

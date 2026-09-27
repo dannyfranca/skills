@@ -117,8 +117,85 @@ class ReviewStateTests(unittest.TestCase):
         review_dir = init_review_state(nested, "Review nested invocation.")
         state = ReviewState.load(review_dir)
 
-        self.assertEqual(review_dir.parent, repository / ".review")
+        self.assertEqual(review_dir.parent, Path.home() / ".reviews" / "repository")
         self.assertEqual(Path(state.data["session"]["root"]), repository)
+
+    def test_init_places_sessions_under_review_root_by_repository_name(self) -> None:
+        repository = Path(self.tmp.name) / "repository"
+        repository.mkdir()
+        for command in (
+            ["git", "init", "-b", "main"],
+            ["git", "remote", "add", "origin", "git@github.com:owner/project.git"],
+        ):
+            subprocess.run(command, cwd=repository, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        reviews = Path(self.tmp.name) / "reviews"
+        (repository / ".agents").mkdir()
+        (repository / ".agents" / "multi-shot-review.toml").write_text(
+            f'review_root = "{reviews}"\n', encoding="utf-8"
+        )
+
+        review_dir = init_review_state(repository, "Review with a shared review root.")
+        state = ReviewState.load(review_dir)
+
+        self.assertEqual(review_dir.parent, reviews / "owner" / "project")
+        self.assertEqual(
+            state.data["session"]["repository"],
+            {"name": "owner/project", "remote": "git@github.com:owner/project.git", "branch": "main"},
+        )
+        self.assertEqual(Path(state.data["session"]["root"]), repository)
+
+    def test_init_rejects_a_review_root_inside_the_repository(self) -> None:
+        (self.root / ".agents").mkdir()
+        (self.root / ".agents" / "multi-shot-review.toml").write_text(
+            f'review_root = "{self.root / "reviews"}"\n', encoding="utf-8"
+        )
+
+        with self.assertRaisesRegex(ReviewStateError, "outside the repository"):
+            init_review_state(self.root, "Review with an in-repository root.")
+
+        self.assertFalse((self.root / "reviews").exists())
+
+    def test_init_ignores_local_path_remotes_for_the_repository_name(self) -> None:
+        repository = Path(self.tmp.name) / "checkout"
+        repository.mkdir()
+        for command in (
+            ["git", "init", "-b", "main"],
+            ["git", "remote", "add", "origin", "../../central.git"],
+        ):
+            subprocess.run(command, cwd=repository, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+
+        for remote in ("../../central.git", "file:///srv/git/owner/central.git"):
+            with self.subTest(remote=remote):
+                subprocess.run(
+                    ["git", "remote", "set-url", "origin", remote],
+                    cwd=repository,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=True,
+                )
+                review_dir = init_review_state(repository, "Review with a local remote.")
+
+                self.assertEqual(review_dir.parent, Path.home() / ".reviews" / "checkout")
+                self.assertEqual(
+                    ReviewState.load(review_dir).data["session"]["repository"]["name"], "checkout"
+                )
+
+    def test_sessions_created_before_repository_identity_still_load(self) -> None:
+        state_path = self.review_dir / "_state.json"
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+        del data["session"]["repository"]
+        state_path.write_text(json.dumps(data), encoding="utf-8")
+
+        state = ReviewState.load(self.review_dir)
+
+        self.assertEqual(state.config.max_passes, data["session"]["config"]["max_passes"])
+
+    def test_init_records_the_directory_name_without_a_remote(self) -> None:
+        state = ReviewState.load(self.review_dir)
+
+        self.assertEqual(
+            state.data["session"]["repository"], {"name": "repo", "remote": None, "branch": None}
+        )
 
     def test_init_rejects_malformed_target_descriptors(self) -> None:
         for target in (
@@ -284,9 +361,11 @@ class ReviewStateTests(unittest.TestCase):
 
     def test_related_task_directory_cannot_contain_review_directory(self) -> None:
         with self.assertRaises(ReviewStateError):
-            add_related_task(self.review_dir, "repo-root", text=None, file=None, directory=self.root)
+            add_related_task(
+                self.review_dir, "repository-sessions", text=None, file=None, directory=self.review_dir.parent
+            )
 
-        self.assertFalse((self.review_dir / "related-tasks" / "repo-root").exists())
+        self.assertFalse((self.review_dir / "related-tasks" / "repository-sessions").exists())
 
     def test_locked_add_slice_and_reload(self) -> None:
         with ReviewState.locked(self.review_dir) as state:
@@ -5117,10 +5196,12 @@ class VariantSessionTests(unittest.TestCase):
         self.assertTrue(artifact.read_text(encoding="utf-8").startswith('---\nvariant: "b"\n'))
 
     def test_unknown_forced_variant_fails_before_creating_a_session(self) -> None:
+        sessions_before = sorted((Path.home() / ".reviews").rglob("_state.json"))
+
         with self.assertRaisesRegex(ReviewStateError, "unknown review config variant"):
             init_review_state(self.root, "Review it.", variant="z")
 
-        self.assertFalse((self.root / ".review").exists())
+        self.assertEqual(sorted((Path.home() / ".reviews").rglob("_state.json")), sessions_before)
 
     def test_state_with_an_invalid_session_variant_is_rejected(self) -> None:
         review_dir = init_review_state(self.root, "Review it.")
