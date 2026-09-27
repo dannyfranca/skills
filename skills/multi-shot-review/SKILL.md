@@ -51,6 +51,8 @@ policy with its wording and scope preserved. Without review policy, use broad re
 content only as needed for context. Reviewers may read supporting context but report only on their
 assigned changes.
 
+If it exits 2 without slices, read `$REVIEW_DIR/_logs/classifier-<id>.stdout.log` before you
+retry; the child explains what blocked it.
 Classification runs once per session. `classify_slices.py` fails while the session has active
 slices. After a user directive removes every slice, the classifier can run again. Change the slice set only through
 [Explicit user slice changes](#explicit-user-slice-changes). Otherwise rerun incomplete slices.

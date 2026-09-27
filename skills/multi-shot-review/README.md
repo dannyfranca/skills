@@ -121,6 +121,11 @@ Classification runs one time for each session. `classify_slices.py` fails when a
 For a later slice change, use `add_slice.py` or `remove_slice.py` with a user directive. When a user
 directive removes all slices, you can run the classifier again in the same session.
 
+The classifier child writes its output to `_logs/classifier-<id>.stdout.log` and
+`_logs/classifier-<id>.stderr.log` in the review directory, where `<id>` is the classification
+entry in `_state.json`. `classify_slices.py` repeats that output on its own streams. When the
+classifier exits without an active slice, the error names both log files.
+
 ### Passes
 
 Each slice runs one pass in each wave. The slice continues until a wave gives no kept findings. A
