@@ -50,8 +50,7 @@ reasoning = "medium"
   the `.md` suffix.
 - `review_root`: directory that holds the review sessions of every repository, as
   `<review_root>/<owner>/<repo>/<session-id>/`. Sessions outlive the worktree that created them.
-  Must be an absolute path or start with `~`. Without it, sessions live in `.review/<session-id>/`
-  in the repository root.
+  Defaults to `~/.reviews`. Must be an absolute path or start with `~`.
 - `max_passes`: review passes a slice may run before the judge decides. Defaults to `3`. Must be a
   positive integer.
 - `shots`: reviewer shots per pass for a slice that `add_slice.py` creates without `--shots`.

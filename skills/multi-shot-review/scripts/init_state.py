@@ -13,8 +13,8 @@ from review_state import ReviewStateError, init_review_state
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Create <timestamp-random>/ with an initialized _state.json file under .review/ of "
-            "the repository, or under <review_root>/<owner/repo>/ when the config sets review_root."
+            "Create <review_root>/<owner>/<repo>/<timestamp-random>/ with an initialized "
+            "_state.json file. review_root defaults to ~/.reviews."
         )
     )
     parser.add_argument(

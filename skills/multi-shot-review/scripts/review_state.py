@@ -172,6 +172,9 @@ def _git_output(root: Path, *args: str) -> str | None:
 
 
 def _remote_slug(remote: str) -> str | None:
+    """owner/repo of a hosted remote. A local-path remote names no owner, and its `..` parts
+    would place sessions outside the review root."""
+
     path = remote.rstrip("/")
     if path.endswith(".git"):
         path = path[: -len(".git")]
@@ -179,19 +182,20 @@ def _remote_slug(remote: str) -> str | None:
         path = path.split("://", 1)[1].split("/", 1)[-1]
     elif ":" in path:
         path = path.split(":", 1)[1]
-    parts = [part for part in path.split("/") if part]
+    else:
+        return None
+    parts = [part for part in path.split("/") if part not in {"", ".", ".."}]
     if len(parts) < 2:
         return None
     return "/".join(parts[-2:])
 
 
-def create_review_dir(root: Path, *, review_root: Path | None = None, repository_name: str) -> Path:
-    if review_root is None:
-        review_root = root.resolve() / ".review"
-    else:
-        review_root = review_root.resolve() / repository_name
+def create_review_dir(review_root: Path, repository_name: str) -> Path:
+    repository_dir = review_root.resolve() / repository_name
+    if not repository_dir.resolve().is_relative_to(review_root.resolve()):
+        raise ReviewStateError(f"repository name escapes the review root: {repository_name}")
     for _ in range(10):
-        review_dir = review_root / session_id()
+        review_dir = repository_dir / session_id()
         try:
             review_dir.mkdir(parents=True, exist_ok=False)
         except FileExistsError:
@@ -210,14 +214,14 @@ def init_review_state(
     from review_config import load_review_config
 
     task = _require_non_empty_text(task, "task")
+    if not root.is_dir():
+        raise ReviewStateError(f"review root is not a directory: {root}")
     root = repo_root(root)
     # The session pins its variant and settings at creation, so config edits and later draws
     # never change a running session.
     config = load_review_config(root, variant=variant)
     repository = repository_identity(root)
-    review_dir = create_review_dir(
-        root, review_root=config.review_root, repository_name=str(repository["name"])
-    )
+    review_dir = create_review_dir(config.review_root, str(repository["name"]))
     write_task_entrypoint(review_dir, task)
     state = ReviewState.new(
         review_dir=review_dir,

@@ -174,5 +174,4 @@ Removal tombstones the slice; re-adding its name reactivates it. Definitions may
 runs, outputs, and history remain. A reactivated slice gets a new `max_passes` window.
 
 Treat scripts as sole owners of state, locking, output names, rendering, retries, and completion.
-Do not edit generated review Markdown. Review directories stay out of Git: `.review/` in the
-repository, or the configured `review_root` outside it.
+Do not edit generated review Markdown.

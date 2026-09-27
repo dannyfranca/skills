@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 import random
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -74,6 +76,12 @@ class ReviewConfigTests(unittest.TestCase):
             HarnessProfile(harness="codex", model="work-slice", reasoning="high"),
         )
 
+    def test_review_root_defaults_to_reviews_under_home(self) -> None:
+        with mock.patch.dict(os.environ, {"HOME": str(self.home)}):
+            config = load_review_config(self.root, home=self.home)
+
+        self.assertEqual(config.review_root, self.home / ".reviews")
+
     def test_review_root_expands_home_and_requires_an_absolute_path(self) -> None:
         self.write_config(self.home, 'review_root = "~/reviews"\n')
 
@@ -81,9 +89,6 @@ class ReviewConfigTests(unittest.TestCase):
 
         self.assertEqual(config.review_root, Path("~/reviews").expanduser())
         self.assertNotIn("review_root", config.to_snapshot())
-        self.assertEqual(
-            ReviewConfig.from_snapshot(config.to_snapshot(), variant="default").review_root, None
-        )
         for text in ('review_root = "reviews"\n', 'review_root = ""\n', "review_root = 1\n"):
             with self.subTest(text=text):
                 (self.home / ".agents" / "multi-shot-review.toml").write_text(text, encoding="utf-8")

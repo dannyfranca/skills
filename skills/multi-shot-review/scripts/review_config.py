@@ -6,7 +6,7 @@ from __future__ import annotations
 import random
 import re
 import tomllib
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -43,7 +43,7 @@ _SESSION_OWNED_FIELDS = {"variant", "review_root"}
 @dataclass(frozen=True)
 class ReviewConfig:
     review_file: str = DEFAULT_REVIEW_FILE
-    review_root: Path | None = None
+    review_root: Path = field(default_factory=lambda: Path.home() / ".reviews")
     max_passes: int = DEFAULT_MAX_PASSES
     shots: int = DEFAULT_SHOTS
     shot_passes: int | str = DEFAULT_SHOT_PASSES
@@ -62,15 +62,15 @@ class ReviewConfig:
         """Effective settings without the variant tag, which the session stores on its own."""
 
         snapshot: dict[str, Any] = {}
-        for field in fields(self):
-            value = getattr(self, field.name)
+        for config_field in fields(self):
+            value = getattr(self, config_field.name)
             # The session already records its review_dir, and sessions created before the
             # review_root setting existed must stay loadable.
-            if field.name in _SESSION_OWNED_FIELDS:
+            if config_field.name in _SESSION_OWNED_FIELDS:
                 continue
             if isinstance(value, HarnessProfile):
                 value = {"harness": value.harness, "model": value.model, "reasoning": value.reasoning}
-            snapshot[field.name] = value
+            snapshot[config_field.name] = value
         return snapshot
 
     @classmethod
@@ -78,7 +78,7 @@ class ReviewConfig:
         """Rebuild the session config with the same validation as a config file."""
 
         owner = "session config snapshot"
-        expected = {field.name for field in fields(cls)} - _SESSION_OWNED_FIELDS
+        expected = {config_field.name for config_field in fields(cls)} - _SESSION_OWNED_FIELDS
         if not isinstance(snapshot, dict) or set(snapshot) != expected:
             raise ReviewStateError(f"invalid {owner}")
         if not isinstance(variant, str) or not VARIANT_TAG_RE.fullmatch(variant):

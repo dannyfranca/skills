@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,24 @@ from harnesses import (  # noqa: E402
 )
 from review_state import ReviewState, init_review_state, run_reviews  # noqa: E402
 from review_result import JUDGE_SCHEMA_PATH, RESULT_SCHEMA_PATH  # noqa: E402
+
+
+_module_home: tempfile.TemporaryDirectory | None = None
+_module_home_patch = None
+
+
+def setUpModule() -> None:
+    # Sessions are created under $HOME/.reviews and read the config chain from $HOME, so tests
+    # must not write into or read from the developer's home.
+    global _module_home, _module_home_patch
+    _module_home = tempfile.TemporaryDirectory()
+    _module_home_patch = mock.patch.dict(os.environ, {"HOME": _module_home.name})
+    _module_home_patch.start()
+
+
+def tearDownModule() -> None:
+    _module_home_patch.stop()
+    _module_home.cleanup()
 
 
 class ProfileResolutionTests(unittest.TestCase):
