@@ -181,7 +181,11 @@ Read completely:
 Repository: {root}
 Review target: {json.dumps(target, sort_keys=True)}
 Session variant: {variant}
-Configured slice default: {_describe_profile(slice_default)}
+Configured slice default: {_describe_profile(slice_default)}. This prompt is the source of
+configured values. The tool applies the default to every add that omits `--harness`, `--model`,
+and `--reasoning`. Pass one of these options only when scoped guidance or the user directions
+below name the value for that slice; the option records a slice override and takes the slice out
+of the variant experiment.
 
 Inspect the target yourself with Git commands in the repository. Read changed code and applicable
 repository rules described by slice-selection.md.
@@ -199,14 +203,8 @@ Manage slices only by executing these scripts:
 Call them as many times as needed. Send every complete reviewer prompt through `--prompt-file -`
 on stdin, for example with a quoted heredoc, including whole-change reviews.
 
-Each add may pass `--harness <harness>`, `--model <model>`, and/or `--reasoning <effort>` only
-when scoped guidance or the user directions below name that value for the slice. Otherwise omit
-the option; the tool applies the configured slice default above or leaves the choice to the review
-harness. The session state above is the only source of configured values. Do not read
-`multi-shot-review.toml` files, and never repeat a configured value as an explicit option: the
-configured default belongs to a variant experiment, and an explicit option records a different
-source. Treat harness, model, and reasoning choices as part of the durable slice definition, not
-as prompt text.
+Treat harness, model, and reasoning choices as part of the durable slice definition, not as
+prompt text.
 
 Pass `--shots <n>` only when scoped guidance asks for parallel reviewer shots on that slice. Omit
 it to use the configured default. Each shot runs the same prompt independently in the same wave.

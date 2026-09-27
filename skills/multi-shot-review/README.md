@@ -121,10 +121,10 @@ Classification runs one time for each session. `classify_slices.py` fails when a
 For a later slice change, use `add_slice.py` or `remove_slice.py` with a user directive. When a user
 directive removes all slices, you can run the classifier again in the same session.
 
-The classifier prompt names the session variant and the configured slice default. The classifier
-passes `--harness`, `--model`, or `--reasoning` only when scoped guidance or a user directive names
-the value. It does not read the configuration file. An explicit option that repeats the configured
-value is recorded as a slice override, so it would remove that slice from the variant experiment.
+The classifier prompt names the session variant and the configured slice default, and is the
+classifier's source of configured values. The classifier passes `--harness`, `--model`, or
+`--reasoning` only when scoped guidance or a user directive names the value, because an explicit
+option is recorded as a slice override and removes that slice from the variant experiment.
 
 The classifier child writes its output to `_logs/classifier-<id>.stdout.log` and
 `_logs/classifier-<id>.stderr.log` in the review directory, where `<id>` is the classification
