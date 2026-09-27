@@ -120,27 +120,30 @@ class ClaudeCodeHarnessTests(unittest.TestCase):
         self.assertNotIn("$schema", schema)
         self.assertEqual(cmd[-2:], ["-p", "Review this change."])
 
-    def test_classifier_limits_mutating_bash_to_slice_scripts(self) -> None:
-        add_script = Path("/skill/scripts/add_slice.py")
-        remove_script = Path("/skill/scripts/remove_slice.py")
-
+    def test_classifier_skips_permission_prompts_inside_writable_sandbox(self) -> None:
         invocation = self.harness.classifier_invocation(
             prompt="Classify.",
             review_dir=Path("/review"),
             profile=self.profile,
-            add_slice_script=add_script,
-            remove_slice_script=remove_script,
+            add_slice_script=Path("/skill/scripts/add_slice.py"),
+            remove_slice_script=Path("/skill/scripts/remove_slice.py"),
         )
 
-        allowed_index = invocation.command.index("--allowedTools")
-        allowed = invocation.command[allowed_index + 1 : -2]
-        self.assertIn(f"Bash(python3 {add_script} *)", allowed)
-        self.assertIn(f"Bash(python3 {remove_script} *)", allowed)
-        self.assertEqual(invocation.command[-2:], ["-p", "Classify."])
-        settings = json.loads(
-            invocation.command[invocation.command.index("--settings") + 1]
+        cmd = invocation.command
+        self.assertEqual(cmd[cmd.index("--permission-mode") + 1], "bypassPermissions")
+        self.assertNotIn("dontAsk", cmd)
+        self.assertNotIn("--allowedTools", cmd)
+        self.assertEqual(cmd[cmd.index("--tools") + 1], "Bash,Glob,Grep,Read")
+        self.assertEqual(cmd[-2:], ["-p", "Classify."])
+        settings = json.loads(cmd[cmd.index("--settings") + 1])
+        self.assertEqual(
+            settings["sandbox"],
+            {
+                "enabled": True,
+                "failIfUnavailable": True,
+                "allowUnsandboxedCommands": False,
+            },
         )
-        self.assertNotIn("filesystem", settings["sandbox"])
 
     def test_materializes_shared_result_from_claude_envelope(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
