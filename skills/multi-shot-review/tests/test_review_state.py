@@ -164,10 +164,21 @@ class ReviewStateTests(unittest.TestCase):
         ):
             subprocess.run(command, cwd=repository, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
 
-        review_dir = init_review_state(repository, "Review with a local remote.")
+        for remote in ("../../central.git", "file:///srv/git/owner/central.git"):
+            with self.subTest(remote=remote):
+                subprocess.run(
+                    ["git", "remote", "set-url", "origin", remote],
+                    cwd=repository,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=True,
+                )
+                review_dir = init_review_state(repository, "Review with a local remote.")
 
-        self.assertEqual(review_dir.parent, Path.home() / ".reviews" / "checkout")
-        self.assertEqual(ReviewState.load(review_dir).data["session"]["repository"]["name"], "checkout")
+                self.assertEqual(review_dir.parent, Path.home() / ".reviews" / "checkout")
+                self.assertEqual(
+                    ReviewState.load(review_dir).data["session"]["repository"]["name"], "checkout"
+                )
 
     def test_sessions_created_before_repository_identity_still_load(self) -> None:
         state_path = self.review_dir / "_state.json"

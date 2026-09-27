@@ -178,6 +178,8 @@ def _remote_slug(remote: str) -> str | None:
     path = remote.rstrip("/")
     if path.endswith(".git"):
         path = path[: -len(".git")]
+    if path.startswith("file://"):
+        return None
     if "://" in path:
         path = path.split("://", 1)[1].split("/", 1)[-1]
     elif ":" in path:
