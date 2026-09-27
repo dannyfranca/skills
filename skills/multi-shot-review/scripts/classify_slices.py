@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from harnesses import HarnessError, get_harness, resolve_profile
+from harnesses import HarnessError, HarnessProfile, get_harness, resolve_profile
 from review_instructions import load_classifier_guidance
 from review_state import ReviewState, ReviewStateError, classifier_log_paths
 
@@ -46,6 +46,7 @@ def _run_classifier(args: argparse.Namespace, review_dir: Path) -> int:
         state.require_no_active_slices()
         root = Path(state.data["session"]["root"])
         target = dict(state.data["session"]["target"])
+        variant = state.data["session"]["variant"]
         config = state.config
 
     review_instructions = load_classifier_guidance(
@@ -57,6 +58,8 @@ def _run_classifier(args: argparse.Namespace, review_dir: Path) -> int:
         review_dir=review_dir,
         root=root,
         target=target,
+        variant=variant,
+        slice_default=config.slice_default,
         review_instructions=review_instructions,
         user_directives=_read_optional(args.user_directives_file),
         user_directives_file=(
@@ -155,6 +158,8 @@ def _classifier_prompt(
     review_dir: Path,
     root: Path,
     target: dict[str, str],
+    variant: str,
+    slice_default: HarnessProfile | None,
     review_instructions: str,
     user_directives: str,
     user_directives_file: Path | None,
@@ -175,6 +180,8 @@ Read completely:
 
 Repository: {root}
 Review target: {json.dumps(target, sort_keys=True)}
+Session variant: {variant}
+Configured slice default: {_describe_profile(slice_default)}
 
 Inspect the target yourself with Git commands in the repository. Read changed code and applicable
 repository rules described by slice-selection.md.
@@ -192,11 +199,14 @@ Manage slices only by executing these scripts:
 Call them as many times as needed. Send every complete reviewer prompt through `--prompt-file -`
 on stdin, for example with a quoted heredoc, including whole-change reviews.
 
-Each add may pass `--harness <harness>`, `--model <model>`, and/or `--reasoning <effort>` when a
-specific choice materially suits that slice. Otherwise omit the option; the tool applies its
-configured slice default or leaves the choice to the review harness. Scoped REVIEW guidance may
-require one or more of these choices. Treat harness, model, and reasoning choices as part of the
-durable slice definition, not as prompt text.
+Each add may pass `--harness <harness>`, `--model <model>`, and/or `--reasoning <effort>` only
+when scoped guidance or the user directions below name that value for the slice. Otherwise omit
+the option; the tool applies the configured slice default above or leaves the choice to the review
+harness. The session state above is the only source of configured values. Do not read
+`multi-shot-review.toml` files, and never repeat a configured value as an explicit option: the
+configured default belongs to a variant experiment, and an explicit option records a different
+source. Treat harness, model, and reasoning choices as part of the durable slice definition, not
+as prompt text.
 
 Pass `--shots <n>` only when scoped guidance asks for parallel reviewer shots on that slice. Omit
 it to use the configured default. Each shot runs the same prompt independently in the same wave.
@@ -219,6 +229,14 @@ Advisory parent context:
 Finish after the ordinary state accurately represents the contextual slice selection. Briefly
 summarize mutations in your final response.
 """
+
+
+def _describe_profile(profile: HarnessProfile | None) -> str:
+    if profile is None:
+        return "harness codex, model and reasoning left to the harness"
+    model = profile.model or "left to the harness"
+    reasoning = profile.reasoning or "left to the harness"
+    return f"harness {profile.harness}, model {model}, reasoning {reasoning}"
 
 
 def _read_optional(path: Path | None) -> str:

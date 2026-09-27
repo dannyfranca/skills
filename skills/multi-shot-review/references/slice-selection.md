@@ -34,9 +34,9 @@ preserving its runs and history. The reactivated definition gets a new pass wind
 mutations remain if classification stops early; the next clean classifier reasons from that state.
 To revise an active classifier slice, remove it and add the same name with its new definition.
 
-Pass `--harness <harness>` only when a specific harness materially suits a slice. Apply the same
-rule to `--model <model>` and `--reasoning <effort>`. Omitting them uses the configured slice
-profile or harness defaults. Pass `--shots <n>` only when scoped guidance asks for parallel
+Pass `--harness <harness>`, `--model <model>`, or `--reasoning <effort>` only when scoped guidance
+or a user directive names that value for the slice. Omitting them uses the configured slice
+profile or harness defaults. Do not read configuration files to find these values. Pass `--shots <n>` only when scoped guidance asks for parallel
 reviewer shots on that slice. Apply the same rule to `--shot-passes <n|always>`, which sets how many
 passes of a slice run more than one shot. A guidance rule can use the change size and the slice
 verbosity as factors. All selections are persisted with the slice. Each run keeps a snapshot of

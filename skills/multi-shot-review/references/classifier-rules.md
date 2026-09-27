@@ -50,11 +50,14 @@ additional review assignment. The runner supplies only the output-format contrac
 
 ## Harness, model, reasoning, and shots selection
 
-Each slice may select a harness with `add_slice.py --harness <harness>` when the target, risk, or
-scoped guidance makes it materially more suitable. The same rule applies to `--model <model>` and
-`--reasoning <effort>`. Otherwise omit them; tooling applies the configured slice profile or
-harness defaults. Do not change these performatively. All three choices are durable slice state,
-not reviewer prompt content.
+Pass `add_slice.py --harness <harness>`, `--model <model>`, or `--reasoning <effort>` only when
+scoped guidance or a user directive names that value for the slice. Otherwise omit them; tooling
+applies the configured slice profile or harness defaults. The classifier prompt names the session
+variant and the configured slice default. That prompt is the only source of configured values:
+do not read `multi-shot-review.toml` files. Never repeat a configured value as an explicit option.
+The configured default belongs to a variant experiment; an explicit option records a slice
+override and the experiment loses that slice. All three choices are durable slice state, not
+reviewer prompt content.
 
 Pass `--shots <n>` only when scoped guidance asks for parallel reviewer shots on a slice. Omit it
 to use the configured default. Shots run the same prompt independently in one wave; the tool marks
