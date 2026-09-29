@@ -17,6 +17,7 @@ npx skills add dannyfranca/skills --skill multi-shot-review
 
 ## Available skills
 
+- `browser` — Browser guidance for agents.
 - `implement-issues-github` — Implement GitHub issues with reviews.
 - `implement-tickets-local` — Implement local tickets with reviews.
 - `micro-commits` — Create focused, incremental commits.
