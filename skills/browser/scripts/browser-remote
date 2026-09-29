@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+api="https://api.browser-use.com/api/v4"
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/browser-remote"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  browser-remote start <session> [--from <local-session>] [--country <code>|none] [--timeout <minutes>] [--profile <id>]
+  browser-remote stop <session>
+  browser-remote status [<session>]
+
+start   Create a Browser Use cloud browser and attach it as playwright-cli session <session>.
+        --from copies cookies and storage from a local playwright-cli session.
+        --country sets the residential proxy country (default: $BROWSER_USE_PROXY_COUNTRY, else us).
+        --profile loads a Browser Use profile and saves cookies back to it on stop.
+stop    Stop the cloud browser and detach the session. Billing continues until you do this.
+status  Show the cloud browser state for one session, or for all sessions.
+EOF
+}
+
+die() {
+  printf 'browser-remote: %s\n' "$*" >&2
+  exit 1
+}
+
+require() {
+  local tool
+  for tool in curl jq playwright-cli; do
+    command -v "$tool" >/dev/null || die "$tool is not on PATH"
+  done
+  [[ -n "${BROWSER_USE_API_KEY:-}" ]] || die "BROWSER_USE_API_KEY is not set"
+}
+
+api_call() {
+  local method="$1" path="$2" body="${3:-}"
+  local args=(-sS -X "$method" -H "X-Browser-Use-API-Key: $BROWSER_USE_API_KEY" -w '\n%{http_code}')
+  [[ -n "$body" ]] && args+=(-H 'Content-Type: application/json' -d "$body")
+  local response code
+  response="$(curl "${args[@]}" "$api$path")"
+  code="${response##*$'\n'}"
+  response="${response%$'\n'*}"
+  if [[ "$code" != 2* ]]; then
+    printf 'browser-remote: Browser Use API %s %s returned HTTP %s\n%s\n' "$method" "$path" "$code" "$response" >&2
+    return 1
+  fi
+  printf '%s\n' "$response"
+}
+
+state_file() {
+  printf '%s/%s.json\n' "$state_dir" "$1"
+}
+
+cmd_start() {
+  local session="${1:-}"
+  [[ -n "$session" && "$session" != -* ]] || die "start needs a session name"
+  shift
+  local from="" country="${BROWSER_USE_PROXY_COUNTRY:-us}" timeout="" profile=""
+  while (($#)); do
+    case "$1" in
+      --from) from="${2:?--from needs a session}"; shift 2 ;;
+      --country) country="${2:?--country needs a code}"; shift 2 ;;
+      --timeout) timeout="${2:?--timeout needs minutes}"; shift 2 ;;
+      --profile) profile="${2:?--profile needs an id}"; shift 2 ;;
+      *) die "unknown option: $1" ;;
+    esac
+  done
+
+  local file
+  file="$(state_file "$session")"
+  [[ ! -e "$file" ]] || die "session $session already has a cloud browser; run: browser-remote stop $session"
+
+  # Global so the EXIT trap still sees the path after this function returns.
+  handoff=""
+  if [[ -n "$from" ]]; then
+    handoff="$(mktemp --suffix=.json)"
+    trap 'rm -f "$handoff"' EXIT
+    playwright-cli -s="$from" state-save "$handoff" >/dev/null || die "could not save state from session $from"
+  fi
+
+  # Residential proxy and CAPTCHA solving are Browser Use defaults; they are set explicitly so a default change upstream cannot silently weaken the disguise.
+  local body
+  body="$(jq -n --arg country "$country" --arg timeout "$timeout" --arg profile "$profile" '{
+      solveCaptchas: true,
+      proxyCountryCode: (if $country == "none" then null else ($country | ascii_downcase) end)
+    } + (if $timeout == "" then {} else {timeout: ($timeout | tonumber)} end)
+      + (if $profile == "" then {} else {profileId: $profile} end)')"
+
+  local browser id cdp_url live_url
+  browser="$(api_call POST /browsers "$body")" || exit 1
+  id="$(jq -r .id <<<"$browser")"
+  cdp_url="$(jq -r .cdpUrl <<<"$browser")"
+  live_url="$(jq -r .liveUrl <<<"$browser")"
+
+  mkdir -p "$state_dir"
+  (umask 077 && jq -n --arg id "$id" --arg live "$live_url" --arg country "$country" \
+    '{id: $id, liveUrl: $live, country: $country}' >"$file")
+
+  if ! playwright-cli attach --cdp="$cdp_url" --session="$session" >/dev/null; then
+    api_call PATCH "/browsers/$id" '{"action":"stop"}' >/dev/null || true
+    rm -f "$file"
+    die "could not attach to the cloud browser; it was stopped"
+  fi
+
+  if [[ -n "$handoff" ]]; then
+    playwright-cli -s="$session" state-load "$handoff" >/dev/null || printf 'browser-remote: warning: could not load state from %s\n' "$from" >&2
+  fi
+
+  jq -n --arg session "$session" --arg id "$id" --arg live "$live_url" --arg country "$country" \
+    --arg timeout_at "$(jq -r .timeoutAt <<<"$browser")" \
+    '{session: $session, browserId: $id, liveUrl: $live, proxyCountry: $country, timeoutAt: $timeout_at}'
+}
+
+cmd_stop() {
+  local session="${1:?stop needs a session name}"
+  local file id result
+  file="$(state_file "$session")"
+  [[ -e "$file" ]] || die "no cloud browser recorded for session $session"
+  id="$(jq -r .id "$file")"
+  result="$(api_call PATCH "/browsers/$id" '{"action":"stop"}')" || exit 1
+  playwright-cli -s="$session" close >/dev/null 2>&1 || true
+  rm -f "$file"
+  jq --arg session "$session" '{session: $session, status, browserCost, proxyCost, proxyUsedMb}' <<<"$result"
+}
+
+cmd_status() {
+  local files=()
+  if [[ -n "${1:-}" ]]; then
+    files=("$(state_file "$1")")
+    [[ -e "${files[0]}" ]] || die "no cloud browser recorded for session $1"
+  else
+    shopt -s nullglob
+    files=("$state_dir"/*.json)
+    ((${#files[@]})) || { printf '[]\n'; return; }
+  fi
+  local file session
+  for file in "${files[@]}"; do
+    session="$(basename "$file" .json)"
+    api_call GET "/browsers/$(jq -r .id "$file")" |
+      jq --arg session "$session" '{session: $session, status, liveUrl, timeoutAt, browserCost, proxyCost}'
+  done
+}
+
+main() {
+  local cmd="${1:-}"
+  case "$cmd" in
+    start | stop | status) shift; require; "cmd_$cmd" "$@" ;;
+    -h | --help | help) usage ;;
+    *) usage >&2; exit 1 ;;
+  esac
+}
+
+main "$@"
