@@ -441,6 +441,21 @@ class JanitorTests(unittest.TestCase):
         self.assertTrue(worktree.exists())
         self.assertEqual(report["skipped"]["embedded_repository"], 1)
 
+    def test_directory_vanishing_during_repository_scan_is_not_a_failure(self) -> None:
+        worktree = self.add_worktree("vanishing", age=dt.timedelta(days=30))
+        vanishing = worktree / "target" / "debug" / ".fingerprint"
+        vanishing.mkdir(parents=True)
+        real_walk = os.walk
+
+        def walk_while_build_deletes(*args, **kwargs):
+            for entry in real_walk(*args, **kwargs):
+                yield entry
+                if vanishing.name in entry[1]:
+                    shutil.rmtree(vanishing)
+
+        with mock.patch.object(janitor_module.os, "walk", walk_while_build_deletes):
+            self.assertFalse(janitor_module.has_embedded_repository(worktree))
+
     def test_ignored_nested_bare_repository_is_safety_held(self) -> None:
         worktree = self.add_worktree("nested-bare", age=dt.timedelta(days=30))
         (worktree / ".gitignore").write_text("nested.git/\n", encoding="utf-8")
@@ -676,7 +691,7 @@ class JanitorTests(unittest.TestCase):
         path, _ = self.orphan_worktree()
         mount = path / "mounted"
         mount.mkdir()
-        with mock.patch.object(janitor_module.os.path, "ismount", side_effect=lambda p: p == mount):
+        with mock.patch.object(janitor_module.os.path, "ismount", side_effect=lambda p: Path(p).resolve() == mount.resolve()):
             report, code = self.janitor().sweep(True)
         self.assertEqual(code, 0, report)
         self.assertTrue(path.exists())

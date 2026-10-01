@@ -482,6 +482,9 @@ def has_embedded_repository(path: Path) -> bool:
     submodule_roots = tracked_submodule_roots(path)
 
     def traversal_failed(error: OSError) -> None:
+        # Build tools delete files during the walk; an entry that vanished cannot hold a repository.
+        if isinstance(error, FileNotFoundError):
+            return
         raise JanitorError(f"cannot inspect nested repositories in {path}: {error}")
 
     for directory, names, files in os.walk(
