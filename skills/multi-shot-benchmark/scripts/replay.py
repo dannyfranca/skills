@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
-from benchmark_store import BenchmarkError, digest, execute, git, instructions, load, resolve, save, tool_versions, import_history
+from benchmark_store import BenchmarkError, digest, execute, git, instructions, load, resolve, save, tool_versions, import_history, snapshot_tool
 
 REVIEW = Path(__file__).resolve().parents[2] / 'multi-shot-review'
 sys.path.insert(0, str(REVIEW / 'scripts'))
 from review_config import load_explicit_review_config
-from review_state import init_review_state
+from review_state import ReviewState, ReviewStateError, _running_reservation_is_active
+from contextlib import ExitStack
+from ownership import locked
+from storage import configure
 
 
 def config_text(config, output: Path) -> str:
@@ -29,9 +32,15 @@ def config_text(config, output: Path) -> str:
     return '\n'.join(lines) + '\n'
 
 
-def prepare(repo: Path, head: str, task: str, config_file: Path, output: Path,
+def prepare(repo: Path, head: str, task: str, config_file: Path, output: Path, **options) -> dict:
+    with locked(output):
+        return _prepare(repo, head, task, config_file, output, **options)
+
+
+def _prepare(repo: Path, head: str, task: str, config_file: Path, output: Path,
             *, base: str | None = None, variant: str | None = None,
-            worktree_root: Path | None = None, benchmark_root: Path | None = None) -> dict:
+            worktree_root: Path | None = None, benchmark_root: Path | None = None,
+            tool_snapshot: Path | None = None, run_root: Path | None = None) -> dict:
     repo = Path(git(repo, 'rev-parse', '--show-toplevel').decode().strip()).resolve()
     output = output.resolve()
     boundary = (benchmark_root or output.parent).resolve()
@@ -56,10 +65,18 @@ def prepare(repo: Path, head: str, task: str, config_file: Path, output: Path,
             git(repo, 'merge-base', '--is-ancestor', base_sha, head_sha)
         except BenchmarkError as exc:
             raise BenchmarkError('Base must be an ancestor of the selected head') from exc
-    config = load_explicit_review_config(config_file, variant=variant)
+    review_tool = tool_snapshot or REVIEW
+    program = "import json,sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]); from review_config import load_explicit_review_config; c=load_explicit_review_config(Path(sys.argv[2]),variant=sys.argv[3] or None); print(json.dumps({'settings':c.to_snapshot(),'variant':c.variant}))"
+    frozen_config = json.loads(execute([sys.executable, '-c', program, str(review_tool / 'scripts'),
+                                       str(config_file), variant or '']))
+    config = SimpleNamespace(variant=frozen_config['variant'], to_snapshot=lambda: frozen_config['settings'])
     common = git(repo, 'rev-parse', '--path-format=absolute', '--git-common-dir').decode().strip()
     source_worktrees = git(repo, 'worktree', 'list', '--porcelain').decode().splitlines()
     source_paths = [line.removeprefix('worktree ') for line in source_worktrees if line.startswith('worktree ')]
+    worktrees = (worktree_root or Path.home() / '.worktrees').resolve()
+    if worktrees.is_relative_to(output) or output.is_relative_to(worktrees):
+        raise BenchmarkError('Worktrees and replay outputs need separate roots')
+    configure(boundary, worktrees, run_root or output)
     output.mkdir(parents=True)
     state = {'schema': 1, 'status': 'preparing', 'source': str(repo), 'head': head_sha,
              'base': base_sha, 'root_commit': not parents and base is None, 'owned': [],
@@ -76,12 +93,9 @@ def prepare(repo: Path, head: str, task: str, config_file: Path, output: Path,
         (output / 'arm-source.toml').write_bytes(config_file.read_bytes())
         (output / 'session.toml').write_text(config_text(config, output))
         save(output / 'instructions.json', instructions(repo, head_sha))
-        save(output / 'tools.json', tool_versions(REVIEW))
+        save(output / 'tools.json', tool_versions(review_tool))
         tool = output / 'tool' / 'multi-shot-review'
-        tool.mkdir(parents=True)
-        shutil.copyfile(REVIEW / 'SKILL.md', tool / 'SKILL.md')
-        for name in ('scripts', 'references'):
-            shutil.copytree(REVIEW / name, tool / name, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+        state['tool_hashes'] = snapshot_tool(review_tool, tool)
         state['diff_sha256'] = digest(patch)
         state['source_remote'] = git(repo, 'remote', '-v').decode()
         state['initial_tree'] = git(repo, 'rev-parse', f'{head_sha}^{{tree}}').decode().strip()
@@ -110,7 +124,7 @@ def prepare(repo: Path, head: str, task: str, config_file: Path, output: Path,
         state['asset_hashes'] = {name: digest((output / name).read_bytes()) for name in
                                  ('initial.patch', 'task.md', 'session.toml', 'instructions.json', 'tools.json')}
         save(output / 'replay.json', state)
-        return resume(output)
+        return _resume(output)
     except Exception as exc:
         state = load(output / 'replay.json')
         state.update(status='failed', error=str(exc))
@@ -129,6 +143,11 @@ def verify_ownership(output: Path, state: dict) -> tuple[Path, Path]:
 
 
 def resume(output: Path) -> dict:
+    with locked(output):
+        return _resume(output)
+
+
+def _resume(output: Path) -> dict:
     output = output.resolve()
     state = load(output / 'replay.json')
     if state['status'] == 'cleaned':
@@ -138,6 +157,12 @@ def resume(output: Path) -> dict:
     for name, expected in state['asset_hashes'].items():
         if digest((output / name).read_bytes()) != expected:
             raise BenchmarkError(f'Frozen asset changed: {name}')
+    hashes = state.get('tool_hashes', load(output / 'tools.json')['review_scripts'])
+    for name, expected in hashes.items():
+        tool_file = output / 'tool/multi-shot-review' / name
+        if (name in state.get('tool_hashes', {}) and not tool_file.is_file()) or (
+                tool_file.is_file() and digest(tool_file.read_bytes()) != expected):
+            raise BenchmarkError(f'Frozen review tool changed: {name}')
     store, worktree = verify_ownership(output, state)
     if state['status'] == 'ready' and worktree.is_dir():
         return state
@@ -161,9 +186,10 @@ def resume(output: Path) -> dict:
         if git(worktree, 'write-tree').decode().strip() != state['initial_tree'] or git(worktree, 'diff', '--binary', '--no-ext-diff'):
             raise BenchmarkError('Hydration changed tracked files')
         if state['review_dir'] is None:
-            review_dir = init_review_state(worktree, (output / 'task.md').read_text(),
-                                           config_file=output / 'session.toml', variant=state['variant'])
-            state['review_dir'] = str(review_dir)
+            state['review_dir'] = execute([sys.executable, str(output / 'tool/multi-shot-review/scripts/init_state.py'),
+                                          '--root', str(worktree), '--task-file', str(output / 'task.md'),
+                                          '--config-file', str(output / 'session.toml'),
+                                          '--variant', state['variant']]).decode().strip()
         state.update(status='ready')
         state.pop('error', None)
         save(output / 'replay.json', state)
@@ -175,6 +201,40 @@ def resume(output: Path) -> dict:
 
 
 def cleanup(output: Path) -> None:
+    from execution import snapshot
+    from benchmark_store import active
+    with locked(output), ExitStack() as guards:
+        execution = output / 'execution.json'
+        if execution.exists() and active(load(execution)):
+            raise BenchmarkError('Cannot clean an active driver')
+        state = load(output / 'replay.json')
+        if state['status'] == 'cleaned':
+            return
+        if 'worktree' in state:
+            verify_ownership(output, state)
+        if state.get('review_dir'):
+            review_dir = Path(state['review_dir'])
+            try:
+                guards.enter_context(ReviewState.classifier_locked(review_dir))
+                review = guards.enter_context(ReviewState.locked(review_dir))
+            except ReviewStateError as exc:
+                raise BenchmarkError(f'Active or unavailable review session: {exc}') from exc
+            for item in review.data['slices'].values():
+                pending = item.get('judge_pending')
+                records = [r for r in item['runs'] if r['status'] == 'running'] + ([pending] if pending else [])
+                if any(_running_reservation_is_active(r) for r in records):
+                    raise BenchmarkError('Cannot clean an active review session')
+        if 'worktree' in state and Path(state['worktree']).is_dir():
+            archive = output / 'cleanup-evidence'
+            archive.mkdir(exist_ok=True)
+            snapshot(state, archive)
+            save(archive / 'code-state.json', {
+                'head': git(Path(state['worktree']), 'rev-parse', 'HEAD').decode().strip(),
+                'index_tree': git(Path(state['worktree']), 'write-tree').decode().strip()})
+        _remove_owned_worktree(output, state)
+
+
+def _remove_owned_worktree(output: Path, state: dict) -> None:
     state = load(output / 'replay.json')
     if 'worktree' in state:
         store, worktree = verify_ownership(output, state)

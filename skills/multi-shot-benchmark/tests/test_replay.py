@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
@@ -14,6 +15,9 @@ class ReplayTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
+        registry = patch('storage.registry_path', return_value=self.root / 'host/storage.json')
+        registry.start()
+        self.addCleanup(registry.stop)
         self.repo = self.root / 'repo'
         self.repo.mkdir()
         git(self.repo, 'init')
@@ -60,7 +64,7 @@ class ReplayTests(unittest.TestCase):
         self.assertTrue(self.repo.exists())
 
     def test_root_commit_replays_empty_tree(self):
-        state = prepare(self.repo, self.base, 'Task', self.config, self.root / 'root-run',
+        state = prepare(self.repo, self.base, 'Task', self.config, self.root / 'runs' / 'root-run',
                         worktree_root=self.root / 'worktrees')
         self.assertTrue(state['root_commit'])
         self.assertEqual(git(Path(state['worktree']), 'write-tree').decode().strip(), state['initial_tree'])
@@ -76,7 +80,7 @@ class ReplayTests(unittest.TestCase):
 
     def test_variant_identity_and_resume(self):
         self.config.write_text('shots = 2\n[variants]\nchosen = 1\n[variant.chosen]\n')
-        out = self.root / 'chosen'
+        out = self.root / 'runs' / 'chosen'
         state = prepare(self.repo, self.head, 'Task', self.config, out, variant='chosen',
                         worktree_root=self.root / 'worktrees')
         self.assertEqual(load(Path(state['review_dir']) / '_state.json')['session']['variant'], 'chosen')
@@ -91,7 +95,7 @@ class ReplayTests(unittest.TestCase):
         self.assertFalse((self.root / 'invalid').exists())
 
     def test_missing_prepared_worktree_is_rebuilt_without_answers(self):
-        out = self.root / 'rebuild'
+        out = self.root / 'runs' / 'rebuild'
         state = prepare(self.repo, self.head, 'Task', self.config, out,
                         worktree_root=self.root / 'worktrees')
         git(out / 'history', 'worktree', 'remove', '--force', state['worktree'])
@@ -103,7 +107,7 @@ class ReplayTests(unittest.TestCase):
 
     def test_unicode_config_round_trip(self):
         self.config.write_text('[slice_default]\nharness = "codex"\nmodel = "model-🚀"\n')
-        state = prepare(self.repo, self.head, 'Task', self.config, self.root / '🚀',
+        state = prepare(self.repo, self.head, 'Task', self.config, self.root / 'runs' / '🚀',
                         worktree_root=self.root / 'worktrees')
         self.assertEqual(load(Path(state['review_dir']) / '_state.json')['session']['config']['slice_default']['model'], 'model-🚀')
 
@@ -126,7 +130,7 @@ class ReplayTests(unittest.TestCase):
         (repo / 'code').write_text('content\n')
         git(repo, 'add', '.')
         git(repo, 'commit', '-m', 'root')
-        state = prepare(repo, 'HEAD', 'Task', self.config, self.root / 'sha256-run',
+        state = prepare(repo, 'HEAD', 'Task', self.config, self.root / 'runs' / 'sha256-run',
                         worktree_root=self.root / 'worktrees')
         self.assertEqual(state['object_format'], 'sha256')
         self.assertEqual(git(Path(state['worktree']), 'write-tree').decode().strip(), state['initial_tree'])
@@ -139,7 +143,7 @@ class ReplayTests(unittest.TestCase):
         (self.repo / 'new').write_text('changed\n')
         git(self.repo, 'add', '.')
         git(self.repo, 'commit', '-m', 'real change')
-        state = prepare(self.repo, 'HEAD', 'Task', self.config, self.root / 'legacy-run',
+        state = prepare(self.repo, 'HEAD', 'Task', self.config, self.root / 'runs' / 'legacy-run',
                         worktree_root=self.root / 'worktrees')
         self.assertEqual(git(Path(state['worktree']), 'write-tree').decode().strip(), state['initial_tree'])
 
@@ -148,7 +152,7 @@ class ReplayTests(unittest.TestCase):
         (self.repo / 'scripts/hydrate-worktree.sh').write_text('exit 42\n')
         git(self.repo, 'add', '.')
         git(self.repo, 'commit', '-m', 'failed hydration')
-        out = self.root / 'failed'
+        out = self.root / 'runs' / 'failed'
         with self.assertRaises(BenchmarkError):
             prepare(self.repo, 'HEAD', 'Task', self.config, out, worktree_root=self.root / 'worktrees')
         self.assertEqual(load(out / 'replay.json')['status'], 'failed')

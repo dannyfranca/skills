@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -114,3 +115,11 @@ def diff(repo: Path, *refs: str) -> bytes:
                '--no-color', '--src-prefix=a/', '--dst-prefix=b/', '--unified=3',
                '--inter-hunk-context=0', '--diff-algorithm=myers', '--no-indent-heuristic',
                '--submodule=short', '--ignore-submodules=none', '--no-relative', *refs)
+
+
+def snapshot_tool(source: Path, target: Path) -> dict[str, str]:
+    target.mkdir(parents=True)
+    shutil.copyfile(source / 'SKILL.md', target / 'SKILL.md')
+    for name in ('scripts', 'references'):
+        shutil.copytree(source / name, target / name, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    return {str(p.relative_to(target)): digest(p.read_bytes()) for p in target.rglob('*') if p.is_file()}

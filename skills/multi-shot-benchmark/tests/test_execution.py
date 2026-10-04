@@ -24,6 +24,9 @@ class ExecutionTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
+        registry = patch('storage.registry_path', return_value=self.root / 'host/storage.json')
+        registry.start()
+        self.addCleanup(registry.stop)
         repo = self.root / 'source'
         repo.mkdir()
         git(repo, 'init')
@@ -85,10 +88,29 @@ class ExecutionTests(unittest.TestCase):
         state = run(self.output, PROFILE, command_factory=self.factory('silent'))
         state['status'] = 'running'
         state['attempts'][-1]['status'] = 'running'
+        state['attempts'][-1]['ended_at'] = None
+        state['attempts'][-1]['exit_code'] = None
         save(self.output / 'execution.json', state)
         restored = run(self.output, PROFILE)
         self.assertEqual(restored['status'], 'completed')
         self.assertEqual(len(restored['attempts']), 1)
+
+        self.assertEqual(restored['attempts'][-1]['ended_at'], load(self.output / 'driver/1/exit.json')['ended_at'])
+        self.assertEqual(restored['attempts'][-1]['exit_code'], 0)
+
+    def test_nonzero_exit_evidence_keeps_original_time_on_retry(self):
+        with self.assertRaises(BenchmarkError):
+            run(self.output, PROFILE, command_factory=self.factory('fail'))
+        state = load(self.output / 'execution.json')
+        saved_end = '2026-10-01T10:00:00+00:00'
+        save(self.output / 'driver/1/exit.json', {'exit_code': 7, 'ended_at': saved_end})
+        state['status'] = 'running'
+        state['attempts'][0].update(status='running', ended_at=None, exit_code=None)
+        save(self.output / 'execution.json', state)
+        restored = run(self.output, PROFILE, command_factory=self.factory('silent'))
+        self.assertEqual(restored['attempts'][0]['ended_at'], saved_end)
+        self.assertEqual(restored['attempts'][0]['exit_code'], 7)
+        self.assertEqual(restored['attempts'][0]['status'], 'failed')
 
     def test_archived_kept_finding_cannot_disappear(self):
         with self.assertRaisesRegex(BenchmarkError, 'Unresolved terminal finding'):
