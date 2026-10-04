@@ -212,8 +212,9 @@ def init_review_state(
     *,
     target: dict[str, str] | None = None,
     variant: str | None = None,
+    config_file: Path | None = None,
 ) -> Path:
-    from review_config import load_review_config
+    from review_config import load_review_config, load_explicit_review_config
 
     task = _require_non_empty_text(task, "task")
     if not root.is_dir():
@@ -221,7 +222,8 @@ def init_review_state(
     root = repo_root(root)
     # The session pins its variant and settings at creation, so config edits and later draws
     # never change a running session.
-    config = load_review_config(root, variant=variant)
+    config = (load_review_config(root, variant=variant) if config_file is None
+              else load_explicit_review_config(config_file, variant=variant))
     # Session files inside the repository would appear as changes of the review target itself.
     if config.review_root.resolve().is_relative_to(root):
         raise ReviewStateError(f"review_root must be outside the repository under review: {config.review_root}")

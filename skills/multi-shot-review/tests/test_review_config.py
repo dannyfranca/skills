@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from review_config import ReviewConfig, load_review_config  # noqa: E402
+from review_config import ReviewConfig, load_review_config, load_explicit_review_config  # noqa: E402
 from harnesses import HarnessProfile  # noqa: E402
 from review_state import ReviewStateError  # noqa: E402
 
@@ -32,6 +32,15 @@ class ReviewConfigTests(unittest.TestCase):
         agents = directory / ".agents"
         agents.mkdir()
         (agents / "multi-shot-review.toml").write_text(text, encoding="utf-8")
+
+    def test_explicit_file_bypasses_live_chain(self) -> None:
+        self.write_config(self.home, 'shots = 9\n')
+        explicit = self.home / 'arm.toml'
+        explicit.write_text('shots = 2\n')
+        self.assertEqual(load_explicit_review_config(explicit).shots, 2)
+        self.assertEqual(load_review_config(self.root, home=self.home).shots, 9)
+        with self.assertRaises(ReviewStateError):
+            load_explicit_review_config(self.home / 'missing.toml')
 
     def test_defaults_every_setting_when_chain_is_empty(self) -> None:
         config = load_review_config(self.root, home=self.home)

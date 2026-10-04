@@ -40,6 +40,7 @@ def main() -> int:
             "Use only on explicit user request."
         ),
     )
+    parser.add_argument("--config-file", type=Path, help="Use only this config; bypass the live config chain.")
     args = parser.parse_args()
     if (args.task is not None) == (args.task_file is not None):
         parser.error("choose exactly one task source: --task or --task-file")
@@ -59,6 +60,7 @@ def main() -> int:
             task or "",
             target=review_target,
             variant=args.variant,
+            config_file=args.config_file,
         )
     except (OSError, ReviewStateError) as exc:
         parser.error(str(exc))
