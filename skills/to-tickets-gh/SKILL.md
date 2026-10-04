@@ -7,4 +7,6 @@ description: Publish tracer-bullet tickets as GitHub Issues
 
 Read and follow `/to-tickets` completely. Read [`references/tracker.md`](references/tracker.md) completely and treat it as the configured tracker, replacing `/to-tickets`' real-tracker publication rules.
 
+Size each ticket at roughly 700–1000 changed lines, tests excluded. The range is a rough guide that sets breakdown granularity; it refines `/to-tickets`' single-context-window rule.
+
 Publish blockers before dependents. Publishing is complete when every approved leaf belongs to the Epic, every dependency edge exists, and every leaf that is done by an agent is labeled `ready-for-agent`. Executions agents will check for blockers before tackling a leaf.
