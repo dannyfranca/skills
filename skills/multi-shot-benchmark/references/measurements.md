@@ -1,6 +1,6 @@
 # Saved measurements
 
-Run `scripts/measure.py --run <run-directory> [--rates <rates.json>]` after drivers stop.
+Run `python3 "$SKILL_DIR/scripts/benchmark.py" measure --run <run-directory> [--rates <rates.json>]` after drivers stop.
 This command makes no model calls. It takes the run and execution locks, verifies the frozen tool and validates saved
 review state with the trusted installed validator, reads finding archives, and writes `measurements.json`.
 Active driver PIDs, classifiers, review reservations, and judges prevent measurement. Invalid or missing required evidence stops the command.
@@ -54,7 +54,9 @@ unknown when any observed role record lacks usable tokens or a matching rate. A 
 and its coverage remain available. Even a complete estimate of recorded events is not an invoice
 or proof that all provider charges were captured.
 
-The parent agent assesses final code. Call `assessment.record(execution_directory, value)` with
+The parent agent assesses final code. Save an assessment JSON file. Run
+`python3 "$SKILL_DIR/scripts/benchmark.py" assess --run <run-directory> --execution <assignment-id> --assessment <assessment.json>`.
+Use these fields:
 `summary`, nonempty `evidence`, `residual_defects`, `regressions`, and `disputed_findings`.
 Each defect or regression has `severity`, `description`, and nonempty `evidence`. Each dispute has
 `id`, `reason`, and nonempty `evidence`. Empty defect lists mean no defects confirmed by that
