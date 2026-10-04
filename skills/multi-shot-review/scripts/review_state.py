@@ -1145,8 +1145,19 @@ class ReviewState:
                 "session. Use add_slice.py or remove_slice.py for explicit user changes."
             )
 
-    def start_classification(self, profile: ResolvedProfile) -> str:
+    def require_classifiable(self, *, resume_incomplete: bool = False) -> None:
+        active = [item for item in self.data['slices'].values() if not item.get('removed')]
+        if resume_incomplete and active:
+            attempts = self.data['classifications']
+            if not attempts or attempts[-1]['status'] != 'failed' or any(
+                attempt['status'] == 'succeeded' for attempt in attempts
+            ) or any(item['runs'] for item in self.data['slices'].values()):
+                raise ReviewStateError('Only an incomplete classification before review can resume')
+            return
         self.require_no_active_slices()
+
+    def start_classification(self, profile: ResolvedProfile, *, resume_incomplete: bool = False) -> str:
+        self.require_classifiable(resume_incomplete=resume_incomplete)
         classification_id = uuid.uuid4().hex
         self.data["classifications"].append(
             {

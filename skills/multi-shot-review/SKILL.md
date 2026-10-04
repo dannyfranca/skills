@@ -53,6 +53,11 @@ assigned changes.
 
 If it exits 2 without slices, read `$REVIEW_DIR/_logs/classifier-<id>.stdout.log` before you
 retry; the child explains what blocked it.
+If classification fails after it creates slices, use `--resume-incomplete` to finish that
+classification before any review starts. This option requires a failed classification, no earlier
+successful classification, and no review runs. It preserves the partial slice set and uses the
+current classifier to finish it. It does not authorize a new classification after review.
+
 Classification runs once per session. `classify_slices.py` fails while the session has active
 slices. After a user directive removes every slice, the classifier can run again. Change the slice set only through
 [Explicit user slice changes](#explicit-user-slice-changes). Otherwise rerun incomplete slices.
