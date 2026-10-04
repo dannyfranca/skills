@@ -22,6 +22,7 @@ def main() -> int:
     parser.add_argument("--review-dir", required=True, type=Path)
     parser.add_argument("--user-directives-file", type=Path)
     parser.add_argument("--executor-context-file", type=Path)
+    parser.add_argument("--resume-incomplete", action="store_true")
     parser.add_argument("--harness")
     parser.add_argument("--model")
     parser.add_argument("--reasoning")
@@ -43,7 +44,7 @@ def _run_classifier(args: argparse.Namespace, review_dir: Path) -> int:
     """Resolve and run one classifier while the session lock is held."""
 
     with ReviewState.locked(review_dir) as state:
-        state.require_no_active_slices()
+        state.require_classifiable(resume_incomplete=getattr(args, 'resume_incomplete', False))
         root = Path(state.data["session"]["root"])
         target = dict(state.data["session"]["target"])
         variant = state.data["session"]["variant"]
@@ -85,7 +86,7 @@ def _run_classifier(args: argparse.Namespace, review_dir: Path) -> int:
         remove_slice_script=skill_dir / "scripts" / "remove_slice.py",
     )
     with ReviewState.locked(review_dir) as state:
-        classification_id = state.start_classification(profile)
+        classification_id = state.start_classification(profile, resume_incomplete=getattr(args, 'resume_incomplete', False))
         state.save()
     stdout_log, stderr_log = classifier_log_paths(review_dir, classification_id)
     try:
@@ -218,6 +219,8 @@ Normally omit `--user-directive-file`. If the supplemental user directions expli
 changing a user-controlled slice, pass this exact source file to the mutation:
 {user_directives_file or "(none supplied)"}
 
+If you resume incomplete classification, inspect existing slices and finish the selection.
+Do not add an existing name again. Keep complete prompts unless context requires a change.
 Do not review or edit source code. Do not create a classification plan or JSON artifact.
 
 Authoritative supplemental user directions:

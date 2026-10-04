@@ -20,3 +20,8 @@ config, and current replay evidence to a child. Keep assessments outside replay 
 
 Hydration uses the historical project script when present. Review tracked changes after hydration.
 Generated files can affect checks. Record their effect before comparing arms.
+
+The driver uses a private runtime directory for harness session state. Existing credentials and
+config files have read-only mounts. Credential contents are not copied into benchmark assets.
+The host Cargo and general cache directories remain writable for normal project checks. These
+shared caches can affect timing. Record this limit when you compare elapsed time across arms.

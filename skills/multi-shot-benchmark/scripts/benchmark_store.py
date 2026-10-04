@@ -6,6 +6,7 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
+from datetime import datetime, timezone
 
 
 class BenchmarkError(RuntimeError):
@@ -88,3 +89,28 @@ def import_history(repo: Path, store: Path, base: str) -> None:
             if producer.poll() is None:
                 producer.terminate()
                 producer.wait()
+
+
+def now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def process_key(pid: int) -> str | None:
+    try:
+        fields = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
+        return None if fields[0] == 'Z' else fields[19]
+    except (OSError, IndexError):
+        return None
+
+
+def active(state: dict) -> bool:
+    attempt = state.get('attempts', [{}])[-1] if state.get('attempts') else {}
+    return bool(attempt.get('pid') and attempt.get('process_key') and
+                process_key(attempt['pid']) == attempt['process_key'])
+
+
+def diff(repo: Path, *refs: str) -> bytes:
+    return git(repo, 'diff', '--binary', '--full-index', '--no-ext-diff', '--no-textconv',
+               '--no-color', '--src-prefix=a/', '--dst-prefix=b/', '--unified=3',
+               '--inter-hunk-context=0', '--diff-algorithm=myers', '--no-indent-heuristic',
+               '--submodule=short', '--ignore-submodules=none', '--no-relative', *refs)
