@@ -15,6 +15,13 @@ from isolation import child_command
 
 @unittest.skipUnless(shutil.which('bwrap'), 'bubblewrap unavailable')
 class IsolationTests(unittest.TestCase):
+    def setUp(self):
+        registry_temp = tempfile.TemporaryDirectory()
+        self.addCleanup(registry_temp.cleanup)
+        registry = patch('storage.registry_path', return_value=Path(registry_temp.name) / 'storage.json')
+        registry.start()
+        self.addCleanup(registry.stop)
+
     def test_nested_siblings_history_and_host_proc_are_hidden(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

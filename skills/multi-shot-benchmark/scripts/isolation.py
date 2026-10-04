@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 from benchmark_store import BenchmarkError, load
+from storage import known_roots, registry_path
 
 
 def child_command(output: Path, command: list[str]) -> list[str]:
@@ -17,6 +18,7 @@ def child_command(output: Path, command: list[str]) -> list[str]:
     output = output.resolve()
     hidden = {Path(state['source']).resolve(), Path(state['benchmark_root']), worktree.parent, Path.home() / '.reviews',
               Path.home() / '.agents/skills/multi-shot-review/reports',
+              *known_roots(), registry_path().parent,
               *(Path(p) for p in state['hidden_paths'])}
     if any(worktree == path or output == path for path in hidden):
         raise BenchmarkError('Isolation roots overlap')

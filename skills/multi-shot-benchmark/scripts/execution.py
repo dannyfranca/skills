@@ -1,37 +1,23 @@
 from __future__ import annotations
 
-import fcntl
 import subprocess
 import tarfile
 import os
-from contextlib import contextmanager
 from pathlib import Path
 
 from benchmark_store import BenchmarkError, git, load, save, now, active, process_key, diff
 from isolation import child_command
-from replay import resume
+from replay import _resume as resume
+from ownership import locked
+from storage import shared_storage
 from driver import driver_command, driver_prompt, validate_profile
 from completion import completion
 
 
-@contextmanager
-def locked(output: Path):
-    with (output / '.execution.lock').open('a') as stream:
-        try:
-            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise BenchmarkError('Execution is owned by another active launcher') from exc
-        try:
-            yield
-        finally:
-            fcntl.flock(stream, fcntl.LOCK_UN)
-
-
-
-def run(output: Path, profile: dict, *, command_factory=driver_command) -> dict:
+def run(output: Path, profile: dict, *, command_factory=driver_command, cancellation=None) -> dict:
     profile = validate_profile(profile)
     output = output.resolve()
-    with locked(output):
+    with locked(output), shared_storage(Path(load(output / 'replay.json')['benchmark_root']), output):
         replay = resume(output)
         path = output / 'execution.json'
         state = load(path) if path.exists() else {'schema': 1, 'status': 'pending', 'driver': profile, 'attempts': []}
@@ -44,20 +30,26 @@ def run(output: Path, profile: dict, *, command_factory=driver_command) -> dict:
         if state['attempts']:
             previous = state['attempts'][-1]
             directory = Path(previous.get('directory', output / 'missing'))
-            if (directory / 'exit.json').is_file() and load(directory / 'exit.json')['exit_code'] == 0:
+            exit_evidence = load(directory / 'exit.json') if (directory / 'exit.json').is_file() else None
+            if exit_evidence:
+                previous.update(exit_code=exit_evidence['exit_code'], ended_at=exit_evidence.get('ended_at'),
+                                status='failed')
+                state['status'] = 'failed'
+            if exit_evidence and exit_evidence['exit_code'] == 0:
                 try:
                     final = finish(replay, profile, directory, output)
                 except (BenchmarkError, KeyError, ValueError, OSError):
                     pass
                 else:
-                    previous.update(status='completed')
+                    previous.update(status='completed', exit_code=exit_evidence['exit_code'],
+                                    ended_at=exit_evidence.get('ended_at'))
                     state.update(status='completed', completion=final)
                     state.pop('error', None)
                     save(path, state)
                     return state
         if state['status'] == 'running':
             state['status'] = 'interrupted'
-            state['attempts'][-1].update(status='interrupted', ended_at=now())
+            state['attempts'][-1].update(status='interrupted', recovered_at=now())
         number = len(state['attempts']) + 1
         attempt_dir = output / 'driver' / str(number)
         attempt = {'number': number, 'status': 'running', 'started_at': now(), 'ended_at': None,
@@ -79,7 +71,14 @@ def run(output: Path, profile: dict, *, command_factory=driver_command) -> dict:
                 proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr)
                 attempt.update(pid=proc.pid, process_key=process_key(proc.pid))
                 save(path, state)
-                code = proc.wait()
+                while True:
+                    if cancellation is not None and cancellation.is_set():
+                        raise KeyboardInterrupt('Scheduler cancelled this owned driver')
+                    try:
+                        code = proc.wait(timeout=0.2 if cancellation is not None else None)
+                        break
+                    except subprocess.TimeoutExpired:
+                        continue
             attempt.update(exit_code=code, ended_at=now())
             save(attempt_dir / 'exit.json', {'exit_code': code, 'ended_at': attempt['ended_at']})
             snapshot(replay, attempt_dir)
@@ -92,7 +91,11 @@ def run(output: Path, profile: dict, *, command_factory=driver_command) -> dict:
         except BaseException as exc:
             if proc is not None and proc.poll() is None:
                 proc.terminate()
-                proc.wait()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
             try:
                 if attempt_dir.is_dir():
                     snapshot(replay, attempt_dir)
@@ -119,7 +122,7 @@ def finish(replay: dict, profile: dict, directory: Path, output: Path) -> dict:
 
 def snapshot(replay: dict, directory: Path) -> None:
     worktree = Path(replay['worktree'])
-    (directory / 'code.patch').write_bytes(diff(worktree, 'HEAD'))
+    (directory / 'code.patch').write_bytes(diff(worktree, replay['replay_base']))
     (directory / 'status.txt').write_bytes(git(worktree, 'status', '--porcelain=v1'))
     names = os.fsdecode(git(worktree, 'ls-files', '--others', '--exclude-standard', '-z')).split('\0')
     with tarfile.open(directory / 'untracked.tar', 'w') as archive:
