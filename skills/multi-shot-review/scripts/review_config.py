@@ -122,6 +122,18 @@ def load_review_config(
     return ReviewConfig(**merged, variant=tag)
 
 
+def load_explicit_review_config(path: Path, *, variant: str | None = None) -> ReviewConfig:
+    settings, experiment = _load_config_file(path)
+    if not path.is_file():
+        raise ReviewStateError(f"explicit review config is not a file: {path}")
+    experiment = experiment or _NO_EXPERIMENT
+    if variant is None and experiment != _NO_EXPERIMENT:
+        raise ReviewStateError("explicit experiment config requires a variant")
+    tag = experiment.require(variant or DEFAULT_VARIANT)
+    settings.update(experiment.bodies.get(tag, {}))
+    return ReviewConfig(**settings, variant=tag)
+
+
 @dataclass(frozen=True)
 class _Experiment:
     weights: dict[str, int]
