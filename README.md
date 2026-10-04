@@ -22,6 +22,7 @@ npx skills add dannyfranca/skills --skill multi-shot-review
 - `implement-issues-github` — Implement GitHub issues with reviews.
 - `implement-tickets-local` — Implement local tickets with reviews.
 - `micro-commits` — Create focused, incremental commits.
+- `multi-shot-benchmark` — Compare full review workflows on isolated real historical diffs.
 - `multi-shot-review` — Split changes into content slices for repeated harness reviews.
 - `to-tickets-gh` — Publish tracer-bullet tickets as GitHub issues.
 - `to-tickets-local` — Publish tracer-bullet tickets as local files.
