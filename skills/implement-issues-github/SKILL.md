@@ -9,7 +9,7 @@ Read [`../to-tickets-gh/references/tracker.md`](../to-tickets-gh/references/trac
 
 - leaf issue(s): exactly those issues
 - Epic(s): their open descendant leaves
-- `drain-ready`: repeatedly query the repository-wide Ready frontier until empty
+- `drain-ready`: repeatedly query the Ready frontier until empty. With Epics or leaves, the frontier is only their leaves. With no other selector, the frontier is the full repository.
 - any combination of explicit leaves and Epics, where Epics resolve to leaves
 - One PR per leaf
 - If pointed to a(n) Epic(s), loop over one leaf at a time
@@ -45,4 +45,4 @@ If an explicit leaf is blocked outside the selection, show the required expansio
 ## Completion Criterion
 
 - Explicit selection finishes when every selected leaf reaches its mode's completion state. In `review` mode, also finish when each remaining selected leaf is blocked solely by selected leaves at their completion state.
-- `drain-ready` finishes when a state refresh finds no `ready-for-agent` leaf and every leaf handled by the run has reached its mode's completion state.
+- `drain-ready` finishes when a state refresh finds no `ready-for-agent` leaf in its frontier and every leaf handled by the run has reached its mode's completion state.
