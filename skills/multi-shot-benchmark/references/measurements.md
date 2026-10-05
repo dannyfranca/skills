@@ -11,7 +11,7 @@ driver resolution, repeated link, and canonical chain. A retained finding has a 
 validated completion evidence. Failed-attempt claims retain attempt provenance and links, but
 remain unconfirmed. An unresolved finding has no terminal rejection, duplicate, or completed fix claim.
 Repeated findings retain separate observations but share a canonical chain. Invalid chain links
-are reported as errors. No ground-truth recall or fixed winner score is inferred.
+are reported as errors. Interpret these values as observed workflow decisions; recall requires independent ground truth.
 
 Review waves are contiguous reservation groups in review history. Retry waves count too.
 Slice passes, logical reviewer shots, actual review attempts, and driver attempts are separate.
@@ -27,7 +27,7 @@ Claude modelUsage retains every model, including auxiliary models. It takes prec
 top-level usage; the two are never added. Missing fields stay unknown. A plain `tokens used` summary has no billing fields. Judge logs lack
 reliable per-attempt command profiles and lifecycle timestamps. These values stay unknown.
 Harness duration_ms and duration_api_ms remain available when present. Saved verdicts retain
-their known profiles. Role times overlap. Do not add them to obtain workflow elapsed time.
+their known profiles. Role times overlap. Use workflow elapsed time for the total wall span.
 
 Optional rates use this JSON shape:
 
@@ -49,19 +49,13 @@ Optional rates use this JSON shape:
 }
 ```
 
-These numbers are examples. Use supplied rates; do not infer a current price. The estimate is
+These numbers are examples. Use supplied, dated rates. The estimate is
 unknown when any observed role record lacks usable tokens or a matching rate. A known subtotal
 and its coverage remain available. Even a complete estimate of recorded events is not an invoice
 or proof that all provider charges were captured.
 
-The parent agent assesses final code. Save an assessment JSON file. Run
-`python3 "$SKILL_DIR/scripts/benchmark.py" assess --run <run-directory> --execution <assignment-id> --assessment <assessment.json>`.
-Use these fields:
-`summary`, nonempty `evidence`, `residual_defects`, `regressions`, and `disputed_findings`.
-Each defect or regression has `severity`, `description`, and nonempty `evidence`. Each dispute has
-`id`, `reason`, and nonempty `evidence`. Empty defect lists mean no defects confirmed by that
-assessment. A missing assessment means quality is unknown. The record binds to saved final code
-evidence and becomes stale when that evidence changes. No assessor harness is launched.
+For assessment fields, evidence requirements, and current/stale status, follow
+[Assess final code](reporting.md#assess-final-code). Missing quality evidence remains unknown.
 
 Case and arm aggregates retain repetitions, repository identity, frozen task context, and
 coverage denominators. Paired deltas use only groups completed by every arm. Unfinished pairs
@@ -71,4 +65,3 @@ complete totals; an unknown value is not zero. Paired usage and time deltas requ
 values on both sides. Workflow elapsed time is the wall span across driver attempts. It includes
 waits between retries and does not sum overlapping role times. Missing intermediate attempt
 end times leave attempt duration unknown but do not erase a known workflow wall span.
-The parent must explain its recommendation, uncertainty, and quality-versus-effort tradeoffs.

@@ -1,8 +1,6 @@
 # Decision reports
 
-Run `measure --run <directory> [--rates <rates.json>]` after drivers stop. It saves measurements
-and returns their `basis`. Use the same rate file for measurement and reporting. Rates need
-source, date, units, and assumptions; see [measurements](measurements.md).
+## Assess final code
 
 The parent inspects final code. Use `assess --run <directory> --execution <assignment-id>
 --assessment <assessment.json>` for each completed assignment. The assessment has this shape:
@@ -19,9 +17,13 @@ The parent inspects final code. Use `assess --run <directory> --execution <assig
 
 Each defect or regression needs `severity`, `description`, and nonempty `evidence`.
 Each dispute needs `id`, `reason`, and nonempty `evidence`. Assessments bind to final code evidence.
-Changes to that evidence make an assessment stale. The scripts never launch an assessor model.
+Changes to that evidence make an assessment stale. The parent agent owns this assessment.
 
-Run measure again after assessments. Prepare a parent decision:
+## Write the decision
+
+Run `measure` again after assessments. It returns the measurement `basis`.
+Use the same rates for measurement and reporting. For rate fields and accounting semantics,
+read [measurements](measurements.md). Prepare a parent decision:
 
 ```json
 {
@@ -36,9 +38,12 @@ Run measure again after assessments. Prepare a parent decision:
 ```
 
 Give every case a contextual note. Explain whether additional retained findings led to better
-final code. Consider repeated findings, driver fixes, regressions, and unresolved coverage.
-A costly arm can be suitable for critical changes and unsuitable for routine work. State the
-reason for that choice. Do not convert rounds into tokens or treat missing cost as zero.
+final code. Consider repeated findings, driver fixes, regressions, and unresolved coverage. A
+costly arm can be suitable for critical changes and unsuitable for routine work. State the
+reason for that choice. Compare rounds and measured tokens separately. Preserve unknown cost as
+unknown.
+
+## Save the report
 
 Use `report --run <directory> --decision <decision.json> [--rates <rates.json>]`.
 It measures current saved evidence again and rejects a stale decision basis. A final report
@@ -53,6 +58,7 @@ unfinished coverage, final-code assessments, effort, role token/time coverage, c
 and workflow elapsed time. Evidence paths and hashes support later inspection.
 
 Read classification definitions and reviewer failures in saved sessions when comparing coverage.
-Finding counts are observations of driver decisions. They are not ground-truth recall. A retained
-finding can still be disputed. Silence does not prove that final code has no defects. Explain the
-sample and uncertainty before recommending adoption, mixed use, more data, or no change.
+Finding counts are observations of driver decisions. They are not ground-truth recall. A
+retained finding can still be disputed. Silence does not prove that final code has no defects.
+Explain the sample and uncertainty before recommending adoption, mixed use, more data, or no
+change.
