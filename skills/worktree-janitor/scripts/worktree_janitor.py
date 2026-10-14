@@ -79,6 +79,7 @@ class Worktree:
     dirty_submodule: bool
     embedded_repository: bool
     git_file_identity: tuple[int, int, int]
+    submodule_state: str = ""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -428,13 +429,11 @@ def has_dirty_submodule(path: Path, common_dir: Path | None = None) -> bool:
     roots = tracked_submodule_roots(path)
     if not roots:
         return False
-    result = git(["submodule", "status", "--recursive"], cwd=path, check=False)
-    if result.returncode:
-        raise JanitorError(f"cannot inspect submodules in {path}: {result.stderr.strip()}")
-    if any(line and line[0] in "+U" for line in result.stdout.splitlines()):
+    status = submodule_status(path)
+    if any(line and line[0] in "+U" for line in status.splitlines()):
         return True
     direct = {str(root.relative_to(path.resolve(strict=False))) for root in roots}
-    for line in result.stdout.splitlines():
+    for line in status.splitlines():
         match = re.match(r"^.[0-9a-f]{40,64} (.*?)(?: \(.*\))?$", line)
         if match and match.group(1) not in direct:
             return True
@@ -475,6 +474,50 @@ def has_dirty_submodule(path: Path, common_dir: Path | None = None) -> bool:
         if not retained.stdout.strip():
             return True
     return False
+
+
+def submodule_status(path: Path) -> str:
+    result = git(["submodule", "status", "--recursive"], cwd=path, check=False)
+    if result.returncode:
+        raise JanitorError(f"cannot inspect submodules in {path}: {result.stderr.strip()}")
+    return result.stdout
+
+
+def checked_out_submodules(path: Path) -> list[Path]:
+    paths = []
+    for line in submodule_status(path).splitlines():
+        match = re.match(r"^.[0-9a-f]{40,64} (.*?)(?: \(.*\))?$", line)
+        if match and (path / match.group(1) / ".git").exists():
+            paths.append(path / match.group(1))
+    return paths
+
+
+def file_digest(path: Path) -> str:
+    if path.is_symlink():
+        return f"link {os.readlink(path)}"
+    if path.is_file():
+        with path.open("rb") as handle:
+            return f"file {os.access(path, os.X_OK)} {hashlib.file_digest(handle, 'sha256').hexdigest()}"
+    return "directory" if path.is_dir() else "missing"
+
+
+def submodule_state(path: Path) -> str:
+    # The removal deletes submodule data without a snapshot. Porcelain status
+    # hides a second edit to a modified file, so the audit hashes contents.
+    # The digest is read-only because dry runs must not write Git objects.
+    state = [submodule_status(path)]
+    for submodule in checked_out_submodules(path):
+        refs = git(["for-each-ref", "--format=%(objectname) %(refname)"], cwd=submodule).stdout
+        index = git(["ls-files", "--stage", "-z"], cwd=submodule).stdout
+        listed = git(["ls-files", "-z", "--cached", "--others", "--exclude-standard"], cwd=submodule).stdout
+        files = sorted({relative for relative in listed.split("\0") if relative})
+        digests = "".join(f"{relative}\0{file_digest(submodule / relative)}\0" for relative in files)
+        state.append(f"{submodule}\0{refs}\0{index}\0{digests}")
+    return "\0".join(state)
+
+
+def submodule_has_embedded_repository(path: Path) -> bool:
+    return any(has_embedded_repository(submodule) for submodule in checked_out_submodules(path))
 
 
 def has_embedded_repository(path: Path) -> bool:
@@ -632,6 +675,10 @@ class Janitor:
         age = max(dt.timedelta(), self.now - dt.datetime.fromtimestamp(git_stat.st_mtime, dt.timezone.utc))
         status = worktree_status(path)
         dirty = bool(status)
+        dirty_submodule = has_dirty_submodule(path, common)
+        embedded_repository = has_embedded_repository(path) or (
+            dirty_submodule and submodule_has_embedded_repository(path)
+        )
         return Worktree(
             path=path,
             git_file=git_file,
@@ -642,8 +689,8 @@ class Janitor:
             locked=bool(record.get("locked")) or (admin_dir / "locked").exists(),
             dirty=dirty,
             status=status,
-            dirty_submodule=has_dirty_submodule(path, common),
-            embedded_repository=has_embedded_repository(path),
+            dirty_submodule=dirty_submodule,
+            embedded_repository=embedded_repository,
             git_file_identity=(git_stat.st_dev, git_stat.st_ino, git_stat.st_mtime_ns),
         )
 
@@ -750,6 +797,10 @@ class Janitor:
             if worktree.embedded_repository:
                 result.skipped["embedded_repository"] += 1
                 result.events.append({"path": str(path), "status": "preserved", "reason": "embedded_repository"})
+                continue
+            if worktree.dirty_submodule and worktree.age >= self.policy.dirty_age:
+                worktree.submodule_state = submodule_state(path)
+                result.dirty_expired.append(worktree)
                 continue
             if worktree.dirty_submodule:
                 result.skipped["dirty_submodule"] += 1
@@ -904,7 +955,12 @@ class Janitor:
             raise MutationError("worktree HEAD changed after audit")
         if worktree_status(worktree.path) != worktree.status:
             raise MutationError("worktree contents changed after audit")
-        if force and has_dirty_submodule(worktree.path):
+        if worktree.dirty_submodule:
+            if submodule_has_embedded_repository(worktree.path):
+                raise MutationError("submodule contains an untracked embedded Git repository")
+            if submodule_state(worktree.path) != worktree.submodule_state:
+                raise MutationError("submodule state changed after audit")
+        elif force and has_dirty_submodule(worktree.path):
             raise MutationError("worktree contains a dirty submodule")
         if force and has_embedded_repository(worktree.path):
             raise MutationError("worktree contains an untracked embedded Git repository")
@@ -1151,6 +1207,10 @@ class Janitor:
             report["planned"]["dirty_worktrees_removed"] += 1
             report["planned"]["archives_created"] += 1
             event = {"path": str(worktree.path), "action": "snapshot_and_remove_dirty_worktree"}
+            # The snapshot holds only the parent tree. Submodule repositories of a
+            # linked worktree live in its admin directory, which Git deletes with it.
+            if worktree.dirty_submodule:
+                event["submodules_recoverable"] = False
             report["events"].append(event)
             if not apply:
                 continue
