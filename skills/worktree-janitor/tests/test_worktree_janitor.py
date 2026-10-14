@@ -724,8 +724,8 @@ class JanitorTests(unittest.TestCase):
         self.assertTrue(locked.exists())
         self.assertTrue(invalid.exists())
 
-    def test_dirty_submodule_and_its_worktree_are_fully_preserved(self) -> None:
-        subrepo = self.base / "subrepo"
+    def add_submodule_worktree(self, name: str, *, age: dt.timedelta) -> Path:
+        subrepo = self.base / f"{name} subrepo"
         run_git("init", "-q", str(subrepo))
         run_git("config", "user.name", "Test User", cwd=subrepo)
         run_git("config", "user.email", "test@example.invalid", cwd=subrepo)
@@ -734,8 +734,14 @@ class JanitorTests(unittest.TestCase):
         run_git("commit", "-qm", "chore: submodule initial", cwd=subrepo)
         run_git("-c", "protocol.file.allow=always", "submodule", "add", "-q", str(subrepo), "module", cwd=self.repo)
         run_git("commit", "-qam", "chore: add submodule", cwd=self.repo)
-        worktree = self.add_worktree("submodule dirty", age=dt.timedelta(days=60))
+        worktree = self.add_worktree(name, age=age)
         run_git("-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q", cwd=worktree)
+        run_git("config", "user.name", "Test User", cwd=worktree / "module")
+        run_git("config", "user.email", "test@example.invalid", cwd=worktree / "module")
+        return worktree
+
+    def test_dirty_submodule_and_its_worktree_are_preserved_during_grace(self) -> None:
+        worktree = self.add_submodule_worktree("submodule dirty", age=dt.timedelta(days=6, hours=23, minutes=59))
         (worktree / "module" / "sub.txt").write_text("dirty\n", encoding="utf-8")
         target = worktree / "target"
         target.mkdir()
@@ -755,45 +761,44 @@ class JanitorTests(unittest.TestCase):
         self.assertEqual(report["skipped"]["dirty_submodule"], 1)
         self.assertTrue(worktree.exists())
 
-    def test_submodule_at_divergent_local_commit_is_preserved(self) -> None:
-        subrepo = self.base / "divergent-subrepo"
-        run_git("init", "-q", str(subrepo))
-        run_git("config", "user.name", "Test User", cwd=subrepo)
-        run_git("config", "user.email", "test@example.invalid", cwd=subrepo)
-        (subrepo / "sub.txt").write_text("base\n", encoding="utf-8")
-        run_git("add", "sub.txt", cwd=subrepo)
-        run_git("commit", "-qm", "chore: submodule initial", cwd=subrepo)
-        run_git("-c", "protocol.file.allow=always", "submodule", "add", "-q", str(subrepo), "module", cwd=self.repo)
-        run_git("commit", "-qam", "chore: add submodule", cwd=self.repo)
-        worktree = self.add_worktree("divergent-submodule", age=dt.timedelta(days=60))
-        run_git("-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q", cwd=worktree)
-        run_git("config", "user.name", "Test User", cwd=worktree / "module")
-        run_git("config", "user.email", "test@example.invalid", cwd=worktree / "module")
-        (worktree / "module" / "sub.txt").write_text("local commit\n", encoding="utf-8")
-        run_git("add", "sub.txt", cwd=worktree / "module")
-        run_git("commit", "-qm", "wip: local-only submodule commit", cwd=worktree / "module")
-        local_oid = run_git("rev-parse", "HEAD", cwd=worktree / "module")
+    def test_expired_dirty_submodule_worktree_is_snapshot_and_removed(self) -> None:
+        worktree = self.add_submodule_worktree("submodule expired", age=dt.timedelta(days=7))
+        (worktree / "module" / "sub.txt").write_text("lost\n", encoding="utf-8")
+        (worktree / "parent.txt").write_text("recover me\n", encoding="utf-8")
+
+        report, code = self.janitor().sweep(False)
+        self.assertEqual(code, 0, report)
+        self.assertTrue(worktree.exists())
+        self.assertEqual(report["planned"]["dirty_worktrees_removed"], 1)
+        self.assertNotIn("dirty_submodule", report["skipped"])
+        planned = report["events"][-1]
+        self.assertEqual(planned["action"], "snapshot_and_remove_dirty_worktree")
+        self.assertIs(planned["submodules_recoverable"], False)
 
         report, code = self.janitor().sweep(True)
         self.assertEqual(code, 0, report)
-        self.assertTrue(worktree.exists())
-        self.assertEqual(report["skipped"]["dirty_submodule"], 1)
-        self.assertEqual(run_git("rev-parse", "HEAD", cwd=worktree / "module"), local_oid)
+        self.assertFalse(worktree.exists())
+        self.assertEqual(report["applied"]["dirty_worktrees_removed"], 1)
+        removed = report["events"][-1]
+        self.assertIs(removed["submodules_recoverable"], False)
 
-    def test_clean_parent_with_local_only_submodule_commit_is_preserved(self) -> None:
-        subrepo = self.base / "clean-local-subrepo"
-        run_git("init", "-q", str(subrepo))
-        run_git("config", "user.name", "Test User", cwd=subrepo)
-        run_git("config", "user.email", "test@example.invalid", cwd=subrepo)
-        (subrepo / "sub.txt").write_text("base\n", encoding="utf-8")
-        run_git("add", "sub.txt", cwd=subrepo)
-        run_git("commit", "-qm", "chore: submodule initial", cwd=subrepo)
-        run_git("-c", "protocol.file.allow=always", "submodule", "add", "-q", str(subrepo), "module", cwd=self.repo)
-        run_git("commit", "-qam", "chore: add submodule", cwd=self.repo)
-        worktree = self.add_worktree("clean-local-submodule", age=dt.timedelta(days=60))
-        run_git("-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q", cwd=worktree)
-        run_git("config", "user.name", "Test User", cwd=worktree / "module")
-        run_git("config", "user.email", "test@example.invalid", cwd=worktree / "module")
+        destination = self.root / "restored submodule parent"
+        restored, code = self.janitor().restore(removed["archive_id"], destination)
+        self.assertEqual(code, 0, restored)
+        self.assertEqual((destination / "parent.txt").read_text(), "recover me\n")
+
+    def test_expired_divergent_local_submodule_commit_is_removed(self) -> None:
+        worktree = self.add_submodule_worktree("divergent-submodule", age=dt.timedelta(days=60))
+        (worktree / "module" / "sub.txt").write_text("local commit\n", encoding="utf-8")
+        run_git("commit", "-qam", "wip: local-only submodule commit", cwd=worktree / "module")
+
+        report, code = self.janitor().sweep(True)
+        self.assertEqual(code, 0, report)
+        self.assertFalse(worktree.exists())
+        self.assertIs(report["events"][-1]["submodules_recoverable"], False)
+
+    def test_expired_clean_parent_with_local_only_submodule_commit_is_removed(self) -> None:
+        worktree = self.add_submodule_worktree("clean-local-submodule", age=dt.timedelta(days=60))
         (worktree / "module" / "sub.txt").write_text("local commit\n", encoding="utf-8")
         run_git("commit", "-qam", "wip: local-only submodule commit", cwd=worktree / "module")
         run_git("add", "module", cwd=worktree)
@@ -801,8 +806,78 @@ class JanitorTests(unittest.TestCase):
 
         report, code = self.janitor().sweep(True)
         self.assertEqual(code, 0, report)
+        self.assertFalse(worktree.exists())
+        self.assertEqual(report["applied"]["dirty_worktrees_removed"], 1)
+        self.assertIs(report["events"][-1]["submodules_recoverable"], False)
+
+    def test_same_status_submodule_edit_after_audit_preserves_worktree(self) -> None:
+        worktree = self.add_submodule_worktree("submodule race", age=dt.timedelta(days=8))
+        (worktree / "module" / "sub.txt").write_text("audited\n", encoding="utf-8")
+
+        class RacingJanitor(janitor_module.Janitor):
+            def create_archive(self, candidate, kind):
+                record = super().create_archive(candidate, kind)
+                (candidate.path / "module" / "sub.txt").write_text("late\n", encoding="utf-8")
+                return record
+
+        report, code = RacingJanitor(
+            self.root,
+            self.cache,
+            janitor_module.Policy(),
+            now=self.NOW,
+            active_paths=lambda: set(),
+        ).sweep(True)
+        self.assertEqual(code, 2, report)
         self.assertTrue(worktree.exists())
-        self.assertEqual(report["skipped"]["dirty_submodule"], 1)
+        self.assertIn("submodule state changed", report["failures"][0]["error"])
+
+    def test_submodule_ref_change_after_audit_preserves_worktree(self) -> None:
+        worktree = self.add_submodule_worktree("submodule ref race", age=dt.timedelta(days=8))
+        module = worktree / "module"
+        (module / "sub.txt").write_text("audited\n", encoding="utf-8")
+        tree = run_git("rev-parse", "HEAD^{tree}", cwd=module).strip()
+        late_commit = run_git("commit-tree", tree, "-m", "chore: late work", cwd=module).strip()
+
+        class RacingJanitor(janitor_module.Janitor):
+            def create_archive(self, candidate, kind):
+                record = super().create_archive(candidate, kind)
+                run_git("update-ref", "refs/heads/late-work", late_commit, cwd=candidate.path / "module")
+                return record
+
+        report, code = RacingJanitor(
+            self.root,
+            self.cache,
+            janitor_module.Policy(),
+            now=self.NOW,
+            active_paths=lambda: set(),
+        ).sweep(True)
+        self.assertEqual(code, 2, report)
+        self.assertTrue(worktree.exists())
+        self.assertIn("submodule state changed", report["failures"][0]["error"])
+
+    def test_dry_run_of_expired_submodule_worktree_writes_no_objects(self) -> None:
+        worktree = self.add_submodule_worktree("submodule dry run", age=dt.timedelta(days=8))
+        module = worktree / "module"
+        (module / "sub.txt").write_text("unwritten\n", encoding="utf-8")
+        (module / "new.txt").write_text("untracked\n", encoding="utf-8")
+        module_git = Path(run_git("rev-parse", "--absolute-git-dir", cwd=module).strip())
+        before = sorted(path for path in (module_git / "objects").rglob("*") if path.is_file())
+
+        report, code = self.janitor().sweep(False)
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["planned"]["dirty_worktrees_removed"], 1)
+        after = sorted(path for path in (module_git / "objects").rglob("*") if path.is_file())
+        self.assertEqual(after, before)
+
+    def test_expired_submodule_with_nested_repository_is_safety_held(self) -> None:
+        worktree = self.add_submodule_worktree("submodule nested", age=dt.timedelta(days=60))
+        (worktree / "module" / "sub.txt").write_text("dirty\n", encoding="utf-8")
+        run_git("init", "-q", str(worktree / "module" / "nested"))
+
+        report, code = self.janitor().sweep(True)
+        self.assertEqual(code, 0, report)
+        self.assertTrue(worktree.exists())
+        self.assertEqual(report["skipped"]["embedded_repository"], 1)
 
     def test_archive_expiry_deletes_only_owned_ref_and_state(self) -> None:
         oid = run_git("rev-parse", "HEAD", cwd=self.repo)
