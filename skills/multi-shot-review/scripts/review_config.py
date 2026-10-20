@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import random
 import re
 import tomllib
@@ -20,6 +21,12 @@ DEFAULT_MAX_PASSES = 3
 DEFAULT_SHOTS = 1
 DEFAULT_SHOT_PASSES = 1
 SHOT_PASSES_ALWAYS = "always"
+MAX_PARALLEL_AUTO = "auto"
+DEFAULT_MAX_PARALLEL = MAX_PARALLEL_AUTO
+# Reviewers mostly wait on model APIs, but they also run builds and test suites in the review
+# target. An unbounded wave of them once filled 62G of RAM and 62G of swap, so auto keeps room
+# for one such command per child.
+AUTO_MEMORY_PER_CHILD = 2 * 1024**3
 DEFAULT_VARIANT = "default"
 _SETTING_KEYS = {
     "review_file",
@@ -27,6 +34,7 @@ _SETTING_KEYS = {
     "max_passes",
     "shots",
     "shot_passes",
+    "max_parallel",
     "classifier",
     "slice_default",
     "judge",
@@ -47,6 +55,7 @@ class ReviewConfig:
     max_passes: int = DEFAULT_MAX_PASSES
     shots: int = DEFAULT_SHOTS
     shot_passes: int | str = DEFAULT_SHOT_PASSES
+    max_parallel: int | str = DEFAULT_MAX_PARALLEL
     classifier: HarnessProfile | None = None
     slice_default: HarnessProfile | None = None
     judge: HarnessProfile | None = None
@@ -79,6 +88,9 @@ class ReviewConfig:
 
         owner = "session config snapshot"
         expected = {config_field.name for config_field in fields(cls)} - _SESSION_OWNED_FIELDS
+        if isinstance(snapshot, dict):
+            # Sessions created before max_parallel existed must stay loadable.
+            snapshot = {"max_parallel": DEFAULT_MAX_PARALLEL, **snapshot}
         if not isinstance(snapshot, dict) or set(snapshot) != expected:
             raise ReviewStateError(f"invalid {owner}")
         if not isinstance(variant, str) or not VARIANT_TAG_RE.fullmatch(variant):
@@ -256,6 +268,8 @@ def _validate_settings(path: Path | str, data: dict[str, Any]) -> dict[str, Any]
             validated[key] = _validate_positive_int(path, key, value)
         elif key == "shot_passes":
             validated[key] = _validate_shot_passes(path, value)
+        elif key == "max_parallel":
+            validated[key] = _validate_max_parallel(path, value)
         else:
             validated[key] = _validate_profile(path, key, value)
     return validated
@@ -306,6 +320,52 @@ def _validate_shot_passes(path: Path | str, value: Any) -> int | str:
             f'review config shot_passes must be a positive integer or "{SHOT_PASSES_ALWAYS}": {path}'
         )
     return value
+
+
+def _validate_max_parallel(path: Path | str, value: Any) -> int | str:
+    if value == MAX_PARALLEL_AUTO:
+        return MAX_PARALLEL_AUTO
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ReviewStateError(
+            f'review config max_parallel must be a positive integer or "{MAX_PARALLEL_AUTO}": {path}'
+        )
+    return value
+
+
+def parse_max_parallel(value: str) -> int | str:
+    """Parse a CLI `--max-parallel` value with the same rules as the config key."""
+
+    text = value.strip()
+    if text == MAX_PARALLEL_AUTO:
+        return MAX_PARALLEL_AUTO
+    if text.isdigit() and int(text) >= 1:
+        return int(text)
+    raise ValueError(f'expected a positive integer or "{MAX_PARALLEL_AUTO}", got {value!r}')
+
+
+def resolve_max_parallel(value: int | str) -> int:
+    """Turn `auto` into a child limit from the cores and memory free when the wave starts."""
+
+    if value != MAX_PARALLEL_AUTO:
+        return value
+    # process_cpu_count honors CPU affinity but only exists from Python 3.13.
+    count_cpus = getattr(os, "process_cpu_count", os.cpu_count)
+    cpus = count_cpus() or 1
+    available = _available_memory_bytes()
+    if available is None:
+        return cpus
+    return max(1, min(cpus, available // AUTO_MEMORY_PER_CHILD))
+
+
+def _available_memory_bytes() -> int | None:
+    # MemAvailable counts reclaimable cache and excludes swap: swap-backed children are the
+    # failure mode the limit exists to prevent. Hosts without /proc fall back to cores only.
+    try:
+        meminfo = Path("/proc/meminfo").read_text(encoding="ascii")
+    except OSError:
+        return None
+    match = re.search(r"^MemAvailable:\s+(\d+) kB$", meminfo, re.MULTILINE)
+    return int(match.group(1)) * 1024 if match else None
 
 
 def parse_shot_passes(value: str) -> int | str:
