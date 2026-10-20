@@ -1277,6 +1277,82 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(json.loads((self.review_dir / "_last-run.json").read_text(encoding="utf-8")), summary)
         self.assertFalse(any(path.name.startswith("._last-run.json") for path in self.review_dir.iterdir()))
 
+    def test_max_parallel_queues_slices_over_the_limit_in_one_wave(self) -> None:
+        for index in range(5):
+            self.add_slice(f"s{index}")
+        probe = _ConcurrencyProbe(_writes_review_result([]))
+
+        rc, summary = self.run_reviews(command_runner=probe, stdout=io.StringIO(), max_parallel=2)
+
+        self.assertEqual(rc, 0)
+        self.assertEqual((summary["st"], summary["ran"], summary["rem"]), ("done", 5, 0))
+        self.assertEqual(probe.calls, 5)
+        self.assertEqual(probe.peak, 2)
+
+    def test_configured_max_parallel_applies_without_an_override(self) -> None:
+        for index in range(3):
+            self.add_slice(f"s{index}")
+        _pin_session_config(self.review_dir, ReviewConfig(max_parallel=1))
+        probe = _ConcurrencyProbe(_writes_review_result([]))
+
+        rc, summary = self.run_reviews(command_runner=probe, stdout=io.StringIO())
+
+        self.assertEqual((rc, summary["ran"]), (0, 3))
+        self.assertEqual(probe.peak, 1)
+
+    def test_auto_max_parallel_resolves_when_the_wave_starts(self) -> None:
+        for index in range(3):
+            self.add_slice(f"s{index}")
+        probe = _ConcurrencyProbe(_writes_review_result([]))
+
+        with mock.patch("review_config.resolve_max_parallel", return_value=1) as resolve:
+            rc, _summary = self.run_reviews(command_runner=probe, stdout=io.StringIO())
+
+        self.assertEqual(rc, 0)
+        resolve.assert_called_once_with("auto")
+        self.assertEqual(probe.peak, 1)
+
+    def test_queued_reservations_stay_running_while_their_runner_is_alive(self) -> None:
+        for index in range(2):
+            self.add_slice(f"s{index}")
+        statuses_seen: list[list[str]] = []
+        inner = _writes_review_result([])
+
+        def recover_while_queued(cmd, cwd, input_text, output_file, slice_data):
+            with ReviewState.locked(self.review_dir) as state:
+                state._recover_stale_running_runs()
+                statuses_seen.append(
+                    [item["runs"][-1]["status"] for item in state.data["slices"].values()]
+                )
+            return inner(cmd, cwd, input_text, output_file, slice_data)
+
+        rc, summary = self.run_reviews(
+            command_runner=recover_while_queued, stdout=io.StringIO(), max_parallel=1
+        )
+
+        self.assertEqual((rc, summary["ran"], summary["rem"]), (0, 2, 0))
+        self.assertEqual(statuses_seen[0], ["running", "running"])
+
+    def test_interrupt_does_not_start_queued_children(self) -> None:
+        for index in range(3):
+            self.add_slice(f"s{index}")
+        probe = _ConcurrencyProbe(_writes_review_result([]))
+        first_child_started = threading.Event()
+
+        def started(cmd, cwd, input_text, output_file, slice_data):
+            first_child_started.set()
+            return probe(cmd, cwd, input_text, output_file, slice_data)
+
+        def interrupt_while_the_first_child_runs(futures):
+            first_child_started.wait(5)
+            raise KeyboardInterrupt
+
+        with mock.patch("review_state.as_completed", interrupt_while_the_first_child_runs), \
+                self.assertRaises(KeyboardInterrupt):
+            self.run_reviews(command_runner=started, stdout=io.StringIO(), max_parallel=1)
+
+        self.assertEqual(probe.calls, 1)
+
     def test_summary_json_no_stdout_writes_atomic_summary(self) -> None:
         self.add_slice("api")
         summary_path = self.review_dir / "_last-run.json"
@@ -1879,7 +1955,7 @@ class RunnerTests(unittest.TestCase):
             _write_review_result(output_file, [])
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
-        run_reviews(self.review_dir, command_runner=runner, stdout=io.StringIO())
+        run_reviews(self.review_dir, command_runner=runner, stdout=io.StringIO(), max_parallel=3)
 
         self.assertEqual(set(started), {"api", "tests", "ui"})
         state = ReviewState.load(self.review_dir)
@@ -1916,7 +1992,11 @@ class RunnerTests(unittest.TestCase):
 
         def invoke() -> None:
             try:
-                results.append(run_reviews(self.review_dir, command_runner=runner, stdout=io.StringIO()))
+                results.append(
+                    run_reviews(
+                        self.review_dir, command_runner=runner, stdout=io.StringIO(), max_parallel=3
+                    )
+                )
             except BaseException as exc:
                 errors.append(exc)
             finally:
@@ -2367,7 +2447,12 @@ class RunnerTests(unittest.TestCase):
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
         runner = threading.Thread(
-            target=lambda: run_reviews(self.review_dir, command_runner=findings_runner, stdout=io.StringIO())
+            target=lambda: run_reviews(
+                self.review_dir,
+                command_runner=findings_runner,
+                stdout=io.StringIO(),
+                max_parallel=2,
+            )
         )
         runner.start()
         started.wait()
@@ -3622,7 +3707,14 @@ class CliTests(unittest.TestCase):
         }
 
         proc = subprocess.run(
-            [sys.executable, str(SCRIPTS / "run_reviews.py"), "--review-dir", str(review_dir)],
+            [
+                sys.executable,
+                str(SCRIPTS / "run_reviews.py"),
+                "--review-dir",
+                str(review_dir),
+                "--max-parallel",
+                "10",
+            ],
             cwd=self.root,
             env=env,
             text=True,
@@ -3633,6 +3725,78 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(started_log.read_text(encoding="utf-8").splitlines()), 10)
+        self.assertTrue(ReviewState.load(review_dir).data["completed"])
+
+    def test_max_parallel_cli_queues_children_and_times_each_from_its_start(self) -> None:
+        review_dir = Path(
+            self.run_cli(
+                str(SCRIPTS / "init_state.py"),
+                "--root",
+                str(self.root),
+                "--task",
+                "Run slices one at a time.",
+            ).stdout.strip()
+        )
+        for index in range(3):
+            proc = self.run_cli(
+                str(SCRIPTS / "add_slice.py"),
+                "--review-dir",
+                str(review_dir),
+                "--name",
+                f"slice-{index}",
+                "--uncommitted",
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+
+        fake_bin = Path(self.tmp.name) / "queued-bin"
+        fake_bin.mkdir()
+        fake_codex = fake_bin / "codex"
+        active_dir = Path(self.tmp.name) / "queued-active"
+        active_dir.mkdir()
+        overlap_log = Path(self.tmp.name) / "queued-overlap.log"
+        fake_codex.write_text(
+            "#!/usr/bin/env python3\n"
+            "import os, sys, time\n"
+            "active = os.environ['ACTIVE_DIR']\n"
+            "marker = os.path.join(active, str(os.getpid()))\n"
+            "open(marker, 'w').close()\n"
+            "if len(os.listdir(active)) > 1:\n"
+            "    open(os.environ['OVERLAP_LOG'], 'a').write('overlap\\n')\n"
+            "time.sleep(0.6)\n"
+            "os.remove(marker)\n"
+            "out = sys.argv[sys.argv.index('-o') + 1]\n"
+            "open(out, 'w', encoding='utf-8').write('{\"schema_version\":1,\"findings\":[]}')\n",
+            encoding="utf-8",
+        )
+        fake_codex.chmod(0o755)
+        env = {
+            **os.environ,
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+            "ACTIVE_DIR": str(active_dir),
+            "OVERLAP_LOG": str(overlap_log),
+        }
+
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "run_reviews.py"),
+                "--review-dir",
+                str(review_dir),
+                "--max-parallel",
+                "1",
+                "--child-timeout-seconds",
+                "1",
+            ],
+            cwd=self.root,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertFalse(overlap_log.exists())
         self.assertTrue(ReviewState.load(review_dir).data["completed"])
 
     def test_prompt_file_cli_passes_positional_prompt_to_fake_codex(self) -> None:
@@ -4483,6 +4647,21 @@ class ShotsAndJudgeTests(unittest.TestCase):
         rc, summary = self.run_reviews(_should_not_run, max_passes=1)
         self.assertEqual((summary["st"], summary["rem"]), ("no_work", 0))
 
+    def test_max_parallel_limits_concurrent_judges(self) -> None:
+        names = ("api", "cli", "ui")
+        for name in names:
+            self.add_slice(name)
+        self.run_reviews(
+            _writes_review_result([_finding(title="Minor naming", severity="P2")]), max_passes=1
+        )
+        probe = _ConcurrencyProbe(_judge_aware(_should_not_run, verdict="stop"))
+
+        rc, summary = self.run_reviews(probe, config=ReviewConfig(max_passes=1, max_parallel=1))
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(sorted(record["s"] for record in summary["judge"]), list(names))
+        self.assertEqual(probe.peak, 1)
+
     def test_judge_continue_grants_another_pass_window_then_judges_again(self) -> None:
         self.add_slice("api")
         self.run_reviews(_writes_review_result([_finding()]), max_passes=1)
@@ -5242,6 +5421,29 @@ def _write_review_result(path: Path, findings: list[dict[str, object]]) -> None:
         json.dumps({"schema_version": 1, "findings": findings}),
         encoding="utf-8",
     )
+
+
+class _ConcurrencyProbe:
+    """Hold each child briefly so overlapping children are observable."""
+
+    def __init__(self, inner) -> None:
+        self.inner = inner
+        self.lock = threading.Lock()
+        self.active = 0
+        self.peak = 0
+        self.calls = 0
+
+    def __call__(self, cmd, cwd, input_text, output_file, slice_data):
+        with self.lock:
+            self.active += 1
+            self.calls += 1
+            self.peak = max(self.peak, self.active)
+        try:
+            time.sleep(0.05)
+            return self.inner(cmd, cwd, input_text, output_file, slice_data)
+        finally:
+            with self.lock:
+                self.active -= 1
 
 
 def _should_not_run(cmd, cwd, input_text, output_file, slice_data):

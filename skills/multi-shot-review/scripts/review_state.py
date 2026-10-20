@@ -2562,6 +2562,14 @@ def _process_key(pid: int) -> str | None:
     return f"{pid}:{parts[19]}"
 
 
+class _ChildPool(ThreadPoolExecutor):
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        # The default exit starts every queued child before an interrupt can return. Cancelled
+        # reservations recover as stale once this runner exits, so the next call retries them.
+        self.shutdown(wait=True, cancel_futures=exc_type is not None)
+        return False
+
+
 def _running_reservation_is_active(run: dict[str, Any]) -> bool:
     runner_pid = run.get("runner_pid")
     if not isinstance(runner_pid, int) or not _pid_is_alive(runner_pid):
@@ -3162,7 +3170,10 @@ def run_reviews(
     stdout_json: bool = False,
     pretty_json: bool = False,
     child_timeout_seconds: float | None = None,
+    max_parallel: int | str | None = None,
 ) -> tuple[int, dict[str, Any]]:
+    import review_config
+
     if no_stdout and summary_json is None:
         raise ReviewStateError("--no-stdout requires --summary-json")
     if stream_progress and no_stdout:
@@ -3182,6 +3193,7 @@ def run_reviews(
         if not state._has_running_runs():
             judge_inputs = state.reserve_judges(max_passes=config.max_passes)
         state.save()
+    configured_limit = config.max_parallel if max_parallel is None else max_parallel
 
     out_records: list[dict[str, Any]] = []
     err_records: list[dict[str, Any]] = []
@@ -3190,7 +3202,8 @@ def run_reviews(
     progress_stream = sys.stderr if progress_stream is None else progress_stream
     if judge_inputs:
         judge_profile = resolve_profile(config.judge_profile, override_source="slice-override")
-        with ThreadPoolExecutor(max_workers=len(judge_inputs)) as executor:
+        child_limit = review_config.resolve_max_parallel(configured_limit)
+        with _ChildPool(max_workers=min(len(judge_inputs), child_limit)) as executor:
             futures = [
                 executor.submit(
                     run_judge,
@@ -3314,7 +3327,9 @@ def run_reviews(
         )
         return (0 if ok else 2), summary
 
-    with ThreadPoolExecutor(max_workers=len(reservations)) as executor:
+    # A judge phase can run long, so auto reads the free memory again for the reviewer wave.
+    child_limit = review_config.resolve_max_parallel(configured_limit)
+    with _ChildPool(max_workers=min(len(reservations), child_limit)) as executor:
         futures = [
             executor.submit(run_reserved_review, reservation, command_runner, child_timeout_seconds)
             for reservation in reservations

@@ -7,6 +7,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from review_config import parse_max_parallel
 from review_state import ReviewStateError, run_reviews
 
 
@@ -27,6 +28,14 @@ def main() -> int:
         default=0,
         help="Timeout for each child review process; 0 or omitted means no timeout.",
     )
+    parser.add_argument(
+        "--max-parallel",
+        type=parse_max_parallel,
+        help=(
+            'Maximum reviewer or judge children that run at the same time, or "auto". '
+            "Defaults to the configured max_parallel."
+        ),
+    )
     args = parser.parse_args()
 
     if args.no_stdout and args.summary_json is None:
@@ -46,6 +55,7 @@ def main() -> int:
             progress_stream=sys.stderr,
             pretty_json=args.pretty_json,
             child_timeout_seconds=args.child_timeout_seconds or None,
+            max_parallel=args.max_parallel,
         )
         return rc
     except ReviewStateError as exc:

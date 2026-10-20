@@ -13,7 +13,13 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from review_config import ReviewConfig, load_review_config, load_explicit_review_config  # noqa: E402
+from review_config import (  # noqa: E402
+    ReviewConfig,
+    load_explicit_review_config,
+    load_review_config,
+    parse_max_parallel,
+    resolve_max_parallel,
+)
 from harnesses import HarnessProfile  # noqa: E402
 from review_state import ReviewStateError  # noqa: E402
 
@@ -334,12 +340,62 @@ class ReviewConfigTests(unittest.TestCase):
                 with self.assertRaises(ReviewStateError):
                     load_review_config(directory, home=self.home)
 
+    def test_max_parallel_defaults_to_auto(self) -> None:
+        self.assertEqual(load_review_config(self.root, home=self.home).max_parallel, "auto")
+
+    def test_max_parallel_accepts_a_positive_integer_or_auto_from_the_chain(self) -> None:
+        self.write_config(self.home, "max_parallel = 4\n")
+        self.assertEqual(load_review_config(self.root, home=self.home).max_parallel, 4)
+        self.write_config(self.root, 'max_parallel = "auto"\n')
+        self.assertEqual(load_review_config(self.root, home=self.home).max_parallel, "auto")
+
+    def test_max_parallel_works_in_a_variant_body(self) -> None:
+        self.write_config(self.root, "[variants]\ndefault = 0\n[variant.small]\nmax_parallel = 2\n")
+        self.assertEqual(load_review_config(self.root, home=self.home).max_parallel, 2)
+
+    def test_max_parallel_rejects_invalid_values(self) -> None:
+        for index, text in enumerate(("max_parallel = 0\n", "max_parallel = true\n", 'max_parallel = "many"\n')):
+            with self.subTest(text=text):
+                directory = self.root / f"invalid-{index}"
+                directory.mkdir()
+                self.write_config(directory, text)
+                with self.assertRaises(ReviewStateError):
+                    load_review_config(directory, home=self.home)
+
+    def test_parse_max_parallel_uses_the_config_rules(self) -> None:
+        self.assertEqual(parse_max_parallel("3"), 3)
+        self.assertEqual(parse_max_parallel("auto"), "auto")
+        for value in ("0", "-1", "many", ""):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                parse_max_parallel(value)
+
+    def test_auto_max_parallel_is_bounded_by_cores_and_available_memory(self) -> None:
+        gib = 1024**3
+        cases = (
+            (16, 50 * gib, 16),
+            (16, 9 * gib, 4),
+            (16, gib, 1),
+            (4, None, 4),
+        )
+        for cpus, memory, expected in cases:
+            with self.subTest(cpus=cpus, memory=memory), \
+                    mock.patch("review_config.os.process_cpu_count", return_value=cpus, create=True), \
+                    mock.patch("review_config._available_memory_bytes", return_value=memory):
+                self.assertEqual(resolve_max_parallel("auto"), expected)
+        self.assertEqual(resolve_max_parallel(5), 5)
+
+    def test_snapshot_without_max_parallel_loads_with_the_default(self) -> None:
+        snapshot = ReviewConfig().to_snapshot()
+        del snapshot["max_parallel"]
+        self.assertEqual(ReviewConfig.from_snapshot(snapshot, variant="default").max_parallel, "auto")
+
     def test_snapshot_round_trips_the_effective_config(self) -> None:
         config = ReviewConfig(
             review_file="SECURITY",
             max_passes=2,
             shots=3,
             shot_passes="always",
+            max_parallel=6,
             slice_default=HarnessProfile(harness="codex", model="m"),
             variant="a",
         )

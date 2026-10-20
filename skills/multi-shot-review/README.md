@@ -28,6 +28,7 @@ review_root = "~/.reviews"
 max_passes = 3
 shots = 1
 shot_passes = 1
+max_parallel = "auto"
 
 [classifier]
 harness = "codex"
@@ -59,6 +60,11 @@ reasoning = "medium"
 - `shot_passes`: number of passes at the start of a slice definition that run more than one shot.
   Applies to a slice that `add_slice.py` creates without `--shot-passes`. Defaults to `1`. Must be a
   positive integer or `"always"`.
+- `max_parallel`: maximum number of reviewer or judge children that run at the same time. Other
+  children of the wave wait in a queue. Defaults to `"auto"`. When a wave starts, `"auto"` uses the
+  lower of the CPU count and the available memory divided by 2 GiB, with a minimum of `1`. When the
+  host has no `/proc/meminfo`, `"auto"` uses the CPU count. Must be a positive integer or `"auto"`.
+  `run_reviews.py --max-parallel <n|auto>` overrides it for one call.
 - `classifier`: harness profile used by the slice classifier.
 - `slice_default`: harness profile used when a slice does not override it.
 - `judge`: harness profile used by the pass-budget judge. When no config in the chain has a
