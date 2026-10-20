@@ -69,7 +69,8 @@ python3 "$SKILL_DIR/scripts/run_reviews.py" --review-dir "$REVIEW_DIR" \
   --child-timeout-seconds 3600
 ```
 
-All eligible slices run in one parallel wave. A slice with `shots > 1` runs that many
+All eligible slices run in one wave. At most `max_parallel` children run at the same time;
+the other children wait in a queue. A slice with `shots > 1` runs that many
 independent reviewer shots of the same prompt in the wave; the runner marks a finding that a
 sibling shot already reported as an automatic duplicate. Reviewers emit the strict
 JSON shape in `references/review-result.schema.json`; the runner validates it, assigns
