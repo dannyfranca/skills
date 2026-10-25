@@ -73,15 +73,15 @@ def _run(args: argparse.Namespace, now: datetime) -> dict[str, Any]:
         return draw_second_round(eval_dir, sessions_by_id, kept=args.sample_kept, seed=args.seed)
     plan = plan_arms(sessions, config.active_tags, _arm_request(args))
     eval_dir = _new_eval_dir(evals, now, plan)
+    prices = load_price_table(Path(args.prices).expanduser() if args.prices else default_cache_path())
     request = StatsRequest(
         eval_id=eval_dir.name,
         created_at=format_timestamp(now),
         seed=args.seed,
-        argv=_reproduction_argv(args, review_root, plan),
+        argv=_reproduction_argv(args, review_root, plan, prices.path),
         specs=apply_margin_overrides(METRICS, args.margin),
         today=now.date(),
     )
-    prices = load_price_table(Path(args.prices).expanduser() if args.prices else default_cache_path())
     context = StatsContext(FactsCache(prices), prices, ledger, sessions_by_id)
     stats = build_stats(plan, request, context)
     if not args.allow_unpriced and (stats["prices"]["missing_models"] or stats["prices"]["stale_models"]):
@@ -144,7 +144,7 @@ def _arm_request(args: argparse.Namespace) -> ArmRequest:
     )
 
 
-def _reproduction_argv(args: argparse.Namespace, review_root: Path, plan: ArmPlan) -> tuple[str, ...]:
+def _reproduction_argv(args: argparse.Namespace, review_root: Path, plan: ArmPlan, prices: Path) -> tuple[str, ...]:
     """Pin what the config chain and the window search resolved, so a later config or session change keeps the same arms."""
 
     argv = ["--review-root", str(review_root)]
@@ -160,6 +160,8 @@ def _reproduction_argv(args: argparse.Namespace, review_root: Path, plan: ArmPla
     for margin in args.margin:
         argv += ["--margin", margin]
     argv += ["--sample-kept", str(args.sample_kept), "--sample-rejected", str(args.sample_rejected), "--seed", str(args.seed)]
+    argv += ["--prices", str(prices)]
+    argv += ["--allow-unpriced"] if args.allow_unpriced else []
     return tuple(argv)
 
 

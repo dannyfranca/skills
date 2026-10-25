@@ -721,7 +721,9 @@
       "--tags",
       "a,b",
       "--seed",
-      "11"
+      "11",
+      "--prices",
+      "/home/user/.cache/multi-shot-review-eval/prices.toml"
     ],
     "resamples": 2000,
     "seed": 11
@@ -1282,9 +1284,18 @@
     "assumptions": [
       "Codex logs report only a total token count; USD prices that total at the model input rate, so it overstates cached input and understates output."
     ],
+    "cache": "/home/user/.cache/multi-shot-review-eval/prices.toml",
     "missing_models": [],
-    "stale": false,
-    "updated": "2026-10-25"
+    "models": {
+      "gpt-6-sol": {
+        "cached_input": 0.2,
+        "fetched_at": "2026-10-20",
+        "input": 2.0,
+        "output": 10.0,
+        "source": "https://example.test/pricing"
+      }
+    },
+    "stale_models": []
   },
   "primary_metric": "kept_p0_p2",
   "second_round_offer": {

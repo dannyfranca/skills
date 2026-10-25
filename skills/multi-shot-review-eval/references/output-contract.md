@@ -60,7 +60,7 @@ Path: `synthesis.json`.
 ```
 
 - `recommendations`: the same rule as analyst `views`: one entry that is not `new_variant` for each arm that is not the baseline, plus optional `new_variant` entries. Each entry uses the analyst view fields.
-- `analysts_missing`: one entry for each default analyst that did not give an analyst file. An analyst with a file in `analysts/` is not in this list. Use an empty list when both ran. Each default analyst (SKILL.md step 3) has exactly one file or one entry here, and only default analysts have files.
+- `analysts_missing`: one entry for each default analyst that did not give an analyst file. An analyst with a file in `analysts/` is not in this list. Use an empty list when both ran. Each default analyst (SKILL.md, Analysts) has exactly one file or one entry here, and only default analysts have files.
 
 ## Renderer result
 

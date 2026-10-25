@@ -8,7 +8,7 @@ from typing import Any, TypeVar
 from eval_errors import EvalError
 
 
-# Keep in step with the analyst table in SKILL.md step 3.
+# Keep in step with the analyst table in the SKILL.md Analysts step.
 DEFAULT_ANALYSTS = ("claude-code/claude-opus-5-5", "codex/gpt-6.1-sol")
 
 

@@ -85,6 +85,7 @@ class EvalStatsCliTests(unittest.TestCase):
         code, out = self.invoke("--seed", "11", "--allow-unpriced", prices=Path(self.tmp.name) / "none.toml")
         self.assertEqual(code, 0)
         stats = json.loads((Path(out["eval_dir"]) / "stats.json").read_text())
+        self.assertEqual(stats["inputs"]["argv"][-3:], ["--prices", str(Path(self.tmp.name) / "none.toml"), "--allow-unpriced"])
         self.assertEqual(stats["prices"]["missing_models"], ["gpt-6-sol"])
         self.assertEqual(stats["prices"]["models"], {})
 
@@ -108,7 +109,7 @@ class EvalStatsCliTests(unittest.TestCase):
         self.assertEqual(
             stats["inputs"]["argv"],
             ["--review-root", str(self.reviews), "--tags", "a,b", "--since", stats["window"]["start"], "--until", stats["window"]["end"],
-             "--sample-kept", "20", "--sample-rejected", "10", "--seed", "11"],
+             "--sample-kept", "20", "--sample-rejected", "10", "--seed", "11", "--prices", str(PRICES)],
         )
         self.assertNotIn("verdict", keys(stats))
         self.assertNotIn("label", keys(stats))

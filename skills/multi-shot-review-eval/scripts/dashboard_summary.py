@@ -36,10 +36,12 @@ def header(stats: Mapping[str, Any]) -> str:
 
 def _price_warnings(prices: Mapping[str, Any]) -> str:
     parts = []
-    if prices.get("stale"):
-        parts.append(notice("warn", f"The price table is stale (updated {text(prices.get('updated'))}); USD values may be off."))
+    if prices.get("stale_models"):
+        parts.append(notice("warn", "Prices older than 30 days: " + text(", ".join(prices["stale_models"])) + "; their USD may be off."))
     if prices.get("missing_models"):
         parts.append(notice("warn", "No price for models: " + text(", ".join(prices["missing_models"])) + "; their USD is missing."))
+    for model, price in sorted((prices.get("models") or {}).items()):
+        parts.append(notice("info", text(f"{model}: input {price['input']} USD/1M tokens, from {price['source']} on {price['fetched_at']}.")))
     parts += [notice("info", text(assumption)) for assumption in prices.get("assumptions") or []]
     return "".join(parts)
 

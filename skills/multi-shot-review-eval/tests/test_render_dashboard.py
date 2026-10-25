@@ -109,7 +109,8 @@ class RenderDashboardTests(unittest.TestCase):
 
     def test_self_contained(self) -> None:
         page = self.render().lower()
-        for forbidden in ("http://", "https://", "<script", "<link", "@import", "url("):
+        # Price source URLs show as text; only a loaded resource breaks offline viewing.
+        for forbidden in ('src="http', 'href="http', "<script", "<link", "@import", "url("):
             with self.subTest(forbidden):
                 self.assertNotIn(forbidden, page)
         self.assertIn("prefers-color-scheme: dark", page)
@@ -127,11 +128,12 @@ class RenderDashboardTests(unittest.TestCase):
 
     def test_header_reports_arms_and_prices(self) -> None:
         stats = load_stats()
-        stats["prices"].update(stale=True, missing_models=["gpt-9"])
+        stats["prices"].update(stale_models=["gpt-6-sol"], missing_models=["gpt-9"])
         page = self.render(stats=stats)
         self.assertIn("baseline", page)
-        self.assertIn("stale", page)
+        self.assertIn("older than 30 days: gpt-6-sol", page)
         self.assertIn("gpt-9", page)
+        self.assertIn("from https://example.test/pricing on 2026-10-20", page)
 
     def test_forest_plot(self) -> None:
         page = self.render()
@@ -201,7 +203,7 @@ class RenderDashboardTests(unittest.TestCase):
     def test_reproduction_footer(self) -> None:
         page = self.render()
         footer = page[page.index('id="reproduction"'):]
-        for value in ("20261025-1200-a-vs-b", "2000", "tags:a|b", "2026-10-25T12:00:00Z", "eval_stats.py --tags a,b --seed 11", "analysts/codex-gpt-6.1-sol.json", "synthesis.json"):
+        for value in ("20261025-1200-a-vs-b", "2000", "tags:a|b", "2026-10-25T12:00:00Z", "eval_stats.py --tags a,b --seed 11 --prices /home/user/.cache/multi-shot-review-eval/prices.toml", "analysts/codex-gpt-6.1-sol.json", "synthesis.json"):
             with self.subTest(value):
                 self.assertIn(value, footer)
 

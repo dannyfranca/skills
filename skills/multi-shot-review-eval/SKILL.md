@@ -10,25 +10,19 @@ You run a deterministic stats pack, send it to two independent analysts, and syn
 
 Set `SKILL_DIR` to the absolute directory that contains this file. Run `python3 "$SKILL_DIR/scripts/eval_stats.py"`; use `--help` for flags. All files go to the eval directory `<review_root>/_evals/<eval-id>/`; [the output contract](references/output-contract.md) defines each file.
 
-Configs and skill files stay as they are; [the price table](references/prices.toml) is the only file you change without a user request.
+Configs and skill files stay as they are. Model prices are in a machine cache outside the skill, and `prices.py set` is the only writer; `prices.py --help` gives its path.
 
-## 1. Prices
-
-When `updated` in the price table is more than 30 days before today, follow [the price refresh](references/prices-refresh.md).
-
-Continue when `updated` is 30 days old or less.
-
-## 2. Stats
+## 1. Stats
 
 Run `eval_stats.py` with the user's arguments. With no arguments it uses the active tags of the nearest config.
 
 - Exit code 2: give the error to the user and stop.
-- `prices.missing_models` in `stats.json` is not empty: follow [the price refresh](references/prices-refresh.md) for those models. Then delete the eval directory and the `ledger.jsonl` line with its `eval_id`, and run `eval_stats.py` again with the same arguments.
+- Exit code 3: the run wrote no files. Do [the price research](references/price-research.md) for each model in `prices_needed.missing_models` and `prices_needed.stale_models`, then run `eval_stats.py` again with the same arguments. When the research finds no price for a model, add `--allow-unpriced`. Tell the user which missing model has no USD and which stale model uses its old rate, with its `fetched_at`.
 - `second_round_offer.<arm>.offer` is true for an arm: tell the user the CI overlap and the kept-share gap, and offer a second sample round of 20 kept findings per arm. On yes, run `eval_stats.py --second-round <eval-id>`.
 
-Continue when `stats.json` has no missing models, `sample.json` exists, and the user has answered each second-round offer.
+Continue when `eval_stats.py` exits 0, `sample.json` exists, and the user has answered each second-round offer.
 
-## 3. Analysts
+## 2. Analysts
 
 Read [the analyst brief](references/analyst-brief.md). The default analysts:
 
@@ -51,7 +45,7 @@ When all routes fail for one analyst, continue with the other analyst and record
 
 Continue when `agreement.py` exits 0 and each default analyst has a file or an `analysts_missing` reason.
 
-## 4. Synthesis
+## 3. Synthesis
 
 Read `stats.json`, every analyst file, and the `agreement.py` result. Write `synthesis.json` with one recommendation per non-baseline arm and a `new_variant` recommendation for each variant idea that the data supports.
 
@@ -63,14 +57,14 @@ Then run `python3 "$SKILL_DIR/scripts/render_dashboard.py" <eval_dir>`.
 
 Continue when the renderer exits 0 and each non-baseline arm has a recommendation whose reasoning cites the primary-metric CI and its margin.
 
-## 5. Report
+## 4. Report
 
 Write `report.md` from [the report template](references/report-template.md). When T3 `html_render` is available, check `dashboard.html` with `html_preview`, then publish it with `html_render`. Give the user the chat summary from the template.
 
 Continue when `report.md` exists and the user has the chat summary.
 
-## 6. Decision
+## 5. Decision
 
-The run is complete after step 5 when the user gives no decision. When the user decides about an eval, run `eval_stats.py --record-decision <eval-id> adopt|reject|continue`. `adopt` means the user applies the change; later evals add it to the cumulative adopted gains.
+The run is complete after step 4 when the user gives no decision. When the user decides about an eval, run `eval_stats.py --record-decision <eval-id> adopt|reject|continue`. `adopt` means the user applies the change; later evals add it to the cumulative adopted gains.
 
 Continue when the command prints `adopted_gains`.
