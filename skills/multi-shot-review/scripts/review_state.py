@@ -24,6 +24,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 from harnesses import HarnessError, ResolvedProfile, get_harness, resolve_profile
+from skill_revision import skill_revision
+from target_size import measure_target_size
 
 if TYPE_CHECKING:
     from review_config import ReviewConfig
@@ -42,6 +44,7 @@ from review_result import (
 
 
 SCHEMA_VERSION = 4
+SKILL_DIR = Path(__file__).resolve().parents[1]
 HARNESS_SOURCES = frozenset(
     {
         "slice-override",
@@ -684,7 +687,9 @@ class ReviewState:
                 "repository": repository or {"name": root.resolve().name, "remote": None, "branch": None},
                 "review_dir": str(review_dir.resolve()),
                 "root": str(root.resolve()),
+                "skill_revision": skill_revision(SKILL_DIR),
                 "target": target,
+                "target_size": measure_target_size(root, target),
                 "variant": config.variant,
             },
             "classifications": [],

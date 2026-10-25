@@ -28,6 +28,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 import classify_slices  # noqa: E402
 import review_state as review_state_module  # noqa: E402
+from skill_revision import skill_revision  # noqa: E402
 from review_config import ReviewConfig  # noqa: E402
 from harnesses import HarnessProfile  # noqa: E402
 from review_state import (  # noqa: E402
@@ -5350,6 +5351,32 @@ class VariantSessionTests(unittest.TestCase):
             ["--review-dir", str(review_dir), "--name", name, "--uncommitted"]
         ))
         return ReviewState.load(review_dir).data["slices"][name]
+
+    def test_session_records_the_skill_revision_that_created_it(self) -> None:
+        review_dir = init_review_state(self.root, "Review it.")
+        session = ReviewState.load(review_dir).data["session"]
+        self.assertEqual(session["skill_revision"], skill_revision(ROOT))
+
+    def test_session_without_skill_revision_stays_valid(self) -> None:
+        review_dir = init_review_state(self.root, "Review it.")
+        state_file = review_dir / "_state.json"
+        data = json.loads(state_file.read_text(encoding="utf-8"))
+        del data["session"]["skill_revision"]
+        state_file.write_text(json.dumps(data), encoding="utf-8")
+        self.assertNotIn("skill_revision", ReviewState.load(review_dir).data["session"])
+
+    def test_session_records_the_target_size_at_creation(self) -> None:
+        for args in (["init", "-q"], ["config", "user.email", "t@example.com"], ["config", "user.name", "T"],
+                     ["add", "."], ["commit", "-q", "-m", "base"]):
+            subprocess.run(["git", *args], cwd=self.root, check=True, capture_output=True)
+        (self.root / "change.txt").write_text("one\ntwo\n", encoding="utf-8")
+        review_dir = init_review_state(self.root, "Review it.")
+        session = ReviewState.load(review_dir).data["session"]
+        self.assertEqual(session["target_size"], {"files": 1, "added": 2, "deleted": 0})
+
+    def test_session_outside_git_has_no_target_size(self) -> None:
+        review_dir = init_review_state(self.root, "Review it.")
+        self.assertIsNone(ReviewState.load(review_dir).data["session"]["target_size"])
 
     def test_session_pins_the_drawn_variant_and_ignores_later_config_edits(self) -> None:
         review_dir = init_review_state(self.root, "Review it.")
