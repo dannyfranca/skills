@@ -100,7 +100,7 @@ class EvalStatsCliTests(unittest.TestCase):
         self.config.write_text(self.config.read_text() + '[[eval.analysts]]\nharness = "h1"\nmodel = "m1"\n[[eval.analysts]]\nharness = "h2"\nmodel = "m2"\neffort = "max"\n')
         _, summary = self.invoke("--seed", "11")
         self.assertEqual([spec["analyst"] for spec in summary["configured_analysts"]], ["h1/m1", "h2/m2"])
-        self.assertEqual(summary["configured_analysts"][1]["effort"], "max")
+        self.assertEqual([spec["effort"] for spec in summary["configured_analysts"]], ["high", "max"])
         stats = json.loads((Path(summary["eval_dir"]) / "stats.json").read_text())
         self.assertEqual(stats["configured_analysts"], summary["configured_analysts"])
 

@@ -98,7 +98,7 @@ class RenderDashboardTests(unittest.TestCase):
     def test_configured_analysts_reject_a_substituted_roster(self) -> None:
         chosen = ["claude-code/model-future-a", "codex/model-future-b"]
         stats = load_stats()
-        stats["configured_analysts"] = [{"analyst": name, "effort": None} for name in ANALYSTS]
+        stats["configured_analysts"] = [{"analyst": name, "effort": "high"} for name in ANALYSTS]
         eval_dir = write_eval_dir(
             self.root,
             analysts=[analyst_document(name, self.entries) for name in chosen],
@@ -127,10 +127,35 @@ class RenderDashboardTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("two different harnesses", err)
 
+    def test_run_time_pick_rejects_an_analyst_above_the_default_effort(self) -> None:
+        chosen = ["claude-code/model-future-a", "codex/model-future-b"]
+        analysts = [analyst_document(name, self.entries) for name in chosen]
+        analysts[1]["effort"] = "max"
+        code, result, err = self.invoke(write_eval_dir(self.root, analysts=analysts, synthesis=synthesis_document(analysts=chosen)))
+        self.assertEqual(code, 2)
+        self.assertIn("codex/model-future-b ran at effort max, not the default high", err)
+
     def test_configured_analysts_render(self) -> None:
         stats = load_stats()
-        stats["configured_analysts"] = [{"analyst": name, "effort": None} for name in ANALYSTS]
+        stats["configured_analysts"] = [{"analyst": name, "effort": "high"} for name in ANALYSTS]
         code, result, err = self.invoke(write_eval_dir(self.root, stats=stats))
+        self.assertEqual(code, 0, err)
+
+    def test_configured_roster_with_a_null_effort_accepts_any_effort(self) -> None:
+        stats = load_stats()
+        stats["configured_analysts"] = [{"analyst": name, "effort": None} for name in ANALYSTS]
+        analysts = [analyst_document(name, self.entries) for name in ANALYSTS]
+        analysts[0]["effort"] = "max"
+        code, result, err = self.invoke(write_eval_dir(self.root, analysts=analysts, stats=stats))
+        self.assertEqual(code, 0, err)
+
+    def test_configured_effort_above_the_default_renders(self) -> None:
+        stats = load_stats()
+        stats["configured_analysts"] = [{"analyst": name, "effort": "max"} for name in ANALYSTS]
+        analysts = [analyst_document(name, self.entries) for name in ANALYSTS]
+        for analyst in analysts:
+            analyst["effort"] = "max"
+        code, result, err = self.invoke(write_eval_dir(self.root, analysts=analysts, stats=stats))
         self.assertEqual(code, 0, err)
 
     def test_one_analyst_with_a_missing_reason_renders(self) -> None:

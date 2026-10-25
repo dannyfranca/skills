@@ -63,7 +63,7 @@ class EvalConfigTests(unittest.TestCase):
         analysts = load_eval_config(self.cwd, home=self.home).analysts
         self.assertEqual([spec.as_dict() for spec in analysts], [
             {"analyst": "a/new", "harness": "a", "model": "new", "effort": "max"},
-            {"analyst": "b/new", "harness": "b", "model": "new", "effort": None},
+            {"analyst": "b/new", "harness": "b", "model": "new", "effort": "high"},
         ])
 
     def test_nearer_valid_analysts_override_an_invalid_farther_list(self) -> None:
