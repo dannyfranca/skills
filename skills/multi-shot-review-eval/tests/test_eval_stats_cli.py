@@ -105,6 +105,11 @@ class EvalStatsCliTests(unittest.TestCase):
         self.assertEqual([arm["n"] for arm in summary["arms"]], [5, 5])
 
         stats = json.loads((eval_dir / "stats.json").read_text())
+        self.assertEqual(
+            stats["inputs"]["argv"],
+            ["--review-root", str(self.reviews), "--tags", "a,b", "--since", stats["window"]["start"], "--until", stats["window"]["end"],
+             "--sample-kept", "20", "--sample-rejected", "10", "--seed", "11"],
+        )
         self.assertNotIn("verdict", keys(stats))
         self.assertNotIn("label", keys(stats))
         primary = stats["contrasts"]["b"]["kept_p0_p2"]
@@ -158,6 +163,15 @@ class EvalStatsCliTests(unittest.TestCase):
         second_ids = {(e["session_id"], e["finding_id"]) for e in round2_sample["entries"]}
         self.assertFalse(first_ids & second_ids)
         self.assertEqual(len([e for e in round2_sample["entries"] if e["arm"] == "b"]), 5)
+
+    def test_recorded_argv_reproduces_the_contrasts(self) -> None:
+        _, summary = self.invoke("--seed", "11")
+        first = json.loads((Path(summary["eval_dir"]) / "stats.json").read_text())
+        code, again = self.invoke(*first["inputs"]["argv"])
+        self.assertEqual(code, 0)
+        second = json.loads((Path(again["eval_dir"]) / "stats.json").read_text())
+        self.assertEqual(second["contrasts"], first["contrasts"])
+        self.assertEqual(second["inputs"]["argv"], first["inputs"]["argv"])
 
     def test_unknown_decision_target_fails(self) -> None:
         code, _ = self.invoke("--record-decision", "nope", "adopt")

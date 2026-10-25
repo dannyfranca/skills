@@ -77,6 +77,7 @@ def _run(args: argparse.Namespace, now: datetime) -> dict[str, Any]:
         eval_id=eval_dir.name,
         created_at=format_timestamp(now),
         seed=args.seed,
+        argv=_reproduction_argv(args, review_root, plan),
         specs=apply_margin_overrides(METRICS, args.margin),
         today=now.date(),
     )
@@ -141,6 +142,25 @@ def _arm_request(args: argparse.Namespace) -> ArmRequest:
         repo=args.repo,
         cutoff=args.cutoff,
     )
+
+
+def _reproduction_argv(args: argparse.Namespace, review_root: Path, plan: ArmPlan) -> tuple[str, ...]:
+    """Pin what the config chain and the window search resolved, so a later config or session change keeps the same arms."""
+
+    argv = ["--review-root", str(review_root)]
+    if plan.mode == PlanMode.CUTOFF:
+        argv += ["--cutoff", args.cutoff]
+        argv += ["--tags", args.tags] if args.tags else []
+        argv += ["--since", args.since] if args.since else []
+        argv += ["--until", args.until] if args.until else []
+    else:
+        argv += ["--tags", ",".join(arm.name for arm in plan.arms)]
+        argv += ["--since", format_timestamp(plan.window.start), "--until", format_timestamp(plan.window.end)]
+    argv += ["--repo", args.repo] if args.repo else []
+    for margin in args.margin:
+        argv += ["--margin", margin]
+    argv += ["--sample-kept", str(args.sample_kept), "--sample-rejected", str(args.sample_rejected), "--seed", str(args.seed)]
+    return tuple(argv)
 
 
 def _moment(value: str | None, flag: str) -> datetime | None:
