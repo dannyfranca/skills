@@ -278,6 +278,18 @@ target flags remain available for explicit whole-target slices; they carry no sc
 the repository directory name), `remote`, and `branch`, next to `session.root` and
 `session.review_dir`. A session stays attributable after its worktree is deleted.
 
+`session.skill_revision` is a 12-character content digest of `SKILL.md`, `scripts/`, and
+`references/` of the skill copy that created the session. Only source files (`.py`, `.md`,
+`.json`, `.toml`) count, so caches, logs, and scratch files do not change it.
+Installed copies are not Git checkouts, so the digest is the revision that lets you compare
+sessions before and after a skill change. Older sessions do not have this field.
+
+`session.target_size` records the size of the review target when the session starts: `files`,
+`added` lines, and `deleted` lines from Git numstat. Uncommitted targets include untracked files.
+Binary files count as files without lines. Uncommitted changes leave no trace in Git after a
+commit, so this field is the only size source for later evaluations. The value is `null` when Git
+cannot resolve the target. Older sessions do not have this field.
+
 ## Harness audit data
 
 Execution selections are durable:
