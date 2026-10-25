@@ -10,19 +10,21 @@ from eval_errors import EvalError
 
 CONFIG_FILENAME = "multi-shot-review.toml"
 DEFAULT_VARIANT = "default"
+# Higher efforts multiply analyst cost and time for little gain on a judging task; users who want more set it in config.
+DEFAULT_ANALYST_EFFORT = "high"
 
 
 @dataclass(frozen=True)
 class AnalystSpec:
     harness: str
     model: str
-    effort: str | None
+    effort: str
 
     @property
     def name(self) -> str:
         return f"{self.harness}/{self.model}"
 
-    def as_dict(self) -> dict[str, str | None]:
+    def as_dict(self) -> dict[str, str]:
         return {"analyst": self.name, "harness": self.harness, "model": self.model, "effort": self.effort}
 
 
@@ -130,5 +132,5 @@ def _analyst(item: Any, where: str) -> AnalystSpec:
     return AnalystSpec(
         harness=fields["harness"].strip(),
         model=fields["model"].strip(),
-        effort=fields["effort"].strip() if fields["effort"] else None,
+        effort=fields["effort"].strip() if fields["effort"] else DEFAULT_ANALYST_EFFORT,
     )

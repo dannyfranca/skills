@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from analyst_files import AnalystFile, SampleScope, Synthesis, parse_analyst, parse_synthesis
+from eval_config import DEFAULT_ANALYST_EFFORT
 from eval_errors import EvalError
 
 
@@ -87,13 +88,18 @@ def _roster_problems(chosen: tuple[str, ...], inputs: AnalystInputs) -> list[str
     if configured is None:
         # A run-time pick must bring a second provider; two models from one harness give no independent opinion.
         harnesses = {name.split("/", 1)[0] for name in chosen}
-        return ["analysts needs two different harnesses"] if len(set(chosen)) >= 2 and len(harnesses) < 2 else []
-    names = {spec["analyst"] for spec in configured}
-    if set(chosen) != names:
-        return [f"analysts must be the configured analysts {sorted(names)}"]
-    efforts = {spec["analyst"]: spec["effort"] for spec in configured if spec["effort"] is not None}
-    return [
-        f"{analyst.analyst} ran at effort {analyst.effort}, not the configured {efforts[analyst.analyst]}"
+        distinct = ["analysts needs two different harnesses"] if len(set(chosen)) >= 2 and len(harnesses) < 2 else []
+        efforts, origin = {name: DEFAULT_ANALYST_EFFORT for name in chosen}, "default"
+    else:
+        names = {spec["analyst"] for spec in configured}
+        if set(chosen) != names:
+            return [f"analysts must be the configured analysts {sorted(names)}"]
+        distinct = []
+        # Rosters saved before the default existed store null for an omitted effort; those analysts ran at any effort.
+        efforts = {spec["analyst"]: spec["effort"] for spec in configured if spec["effort"] is not None}
+        origin = "configured"
+    return distinct + [
+        f"{analyst.analyst} ran at effort {analyst.effort}, not the {origin} {efforts[analyst.analyst]}"
         for analyst in inputs.analysts
         if analyst.analyst in efforts and analyst.effort != efforts[analyst.analyst]
     ]
