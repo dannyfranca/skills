@@ -1,0 +1,76 @@
+---
+name: multi-shot-review-eval
+description: Evaluate multi-shot-review A/B tests from live review sessions, with recommendations from independent analyst models.
+disable-model-invocation: true
+---
+
+# Multi-Shot Review Eval
+
+You run a deterministic stats pack, send it to two independent analysts, and synthesize **proposals** with a reasoned confidence. The user decides. Expected effects are small but valuable: read effect sizes and uncertainty, not pass/fail.
+
+Set `SKILL_DIR` to the absolute directory that contains this file. Run `python3 "$SKILL_DIR/scripts/eval_stats.py"`; use `--help` for flags. All files go to the eval directory `<review_root>/_evals/<eval-id>/`; [the output contract](references/output-contract.md) defines each file.
+
+Configs and skill files stay as they are; [the price table](references/prices.toml) is the only file you change without a user request.
+
+## 1. Prices
+
+When `updated` in the price table is more than 30 days before today, follow [the price refresh](references/prices-refresh.md).
+
+Continue when `updated` is 30 days old or less.
+
+## 2. Stats
+
+Run `eval_stats.py` with the user's arguments. With no arguments it uses the active tags of the nearest config.
+
+- Exit code 2: give the error to the user and stop.
+- `prices.missing_models` in `stats.json` is not empty: follow [the price refresh](references/prices-refresh.md) for those models. Then delete the eval directory and the `ledger.jsonl` line with its `eval_id`, and run `eval_stats.py` again with the same arguments.
+- `second_round_offer.<arm>.offer` is true for an arm: tell the user the CI overlap and the kept-share gap, and offer a second sample round of 20 kept findings per arm. On yes, run `eval_stats.py --second-round <eval-id>`.
+
+Continue when `stats.json` has no missing models, `sample.json` exists, and the user has answered each second-round offer.
+
+## 3. Analysts
+
+Read [the analyst brief](references/analyst-brief.md). The default analysts:
+
+| analyst | provider | model | effort |
+| --- | --- | --- | --- |
+| `claude-code/claude-opus-5-5` | Claude Code | `claude-opus-5-5` | high |
+| `codex/gpt-6.1-sol` | Codex | `gpt-6.1-sol` | high |
+
+Start both analysts in parallel, each with the same brief. For each analyst, try these routes in order until one gives an analyst file that `agreement.py` accepts:
+
+1. The native subagent tool, when it runs that provider and model.
+2. T3 `delegate_task` with that provider instance, model, and effort. Get the IDs from `orchestrator_capabilities`.
+3. The headless CLI, from the eval directory, with the brief on stdin:
+   - `claude -p --model claude-opus-5-5 --effort high --allowedTools "Read Grep Glob Bash(git -C * show *) Bash(git -C * log *)" > <answer-file>`
+   - `codex exec -m gpt-6.1-sol -c model_reasoning_effort=high -s read-only --skip-git-repo-check -o <answer-file> -`
+
+Save each answer as `analysts/<analyst>.json`. Run `python3 "$SKILL_DIR/scripts/agreement.py" <eval_dir>`. When it reports a contract error, send the error to that analyst and ask for a corrected answer.
+
+When all routes fail for one analyst, continue with the other analyst and record the failure in `synthesis.json` `analysts_missing`. When both fail, give the failures to the user and stop.
+
+Continue when `agreement.py` exits 0 and each default analyst has a file or an `analysts_missing` reason.
+
+## 4. Synthesis
+
+Read `stats.json`, every analyst file, and the `agreement.py` result. Write `synthesis.json` with one recommendation per non-baseline arm and a `new_variant` recommendation for each variant idea that the data supports.
+
+- Each recommendation is a **proposal**: `promote`, `drop`, `keep_testing`, or `new_variant`. The test as a whole gets no verdict and no label.
+- Set `confidence` by reasoning over: the 95% CI against the margin band, the MDE against the margin, `sessions_needed`, the worsening flags, the cost differences, the imbalanced strata, the pooled result, the analyst agreement and kappa, and the sample accuracy per arm.
+- The `reasoning` states those numbers. When the analysts disagree, state each position and the data that separates them.
+
+Then run `python3 "$SKILL_DIR/scripts/render_dashboard.py" <eval_dir>`.
+
+Continue when the renderer exits 0 and each non-baseline arm has a recommendation whose reasoning cites the primary-metric CI and its margin.
+
+## 5. Report
+
+Write `report.md` from [the report template](references/report-template.md). When T3 `html_render` is available, check `dashboard.html` with `html_preview`, then publish it with `html_render`. Give the user the chat summary from the template.
+
+Continue when `report.md` exists and the user has the chat summary.
+
+## 6. Decision
+
+The run is complete after step 5 when the user gives no decision. When the user decides about an eval, run `eval_stats.py --record-decision <eval-id> adopt|reject|continue`. `adopt` means the user applies the change; later evals add it to the cumulative adopted gains.
+
+Continue when the command prints `adopted_gains`.
