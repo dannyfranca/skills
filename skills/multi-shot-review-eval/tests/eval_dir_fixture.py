@@ -6,6 +6,8 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
+import fixtures  # noqa: F401
+
 
 DATA = Path(__file__).resolve().parent / "data"
 Entry = Mapping[str, Any]
@@ -48,8 +50,11 @@ def view(arm: str, proposal: str = "keep_testing", confidence: str = "medium") -
     return {"arm": arm, "proposal": proposal, "confidence": confidence, "reasoning": "kept P0-P2 +2.0 per session, CI [0.9, 3.1]."}
 
 
-def synthesis_document(missing: list[dict[str, str]] | None = None) -> dict[str, Any]:
-    return {"recommendations": [view("b")], "analysts_missing": missing or []}
+ANALYSTS = ["claude-code/claude-opus-5-5", "codex/gpt-6.1-sol"]
+
+
+def synthesis_document(missing: list[dict[str, str]] | None = None, analysts: list[Any] | None = None) -> dict[str, Any]:
+    return {"analysts": ANALYSTS if analysts is None else analysts, "recommendations": [view("b")], "analysts_missing": missing or []}
 
 
 def write_eval_dir(

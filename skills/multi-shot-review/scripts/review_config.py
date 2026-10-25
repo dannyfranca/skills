@@ -40,7 +40,9 @@ _SETTING_KEYS = {
     "judge",
 }
 _EXPERIMENT_KEYS = {"variants", "variant"}
-_SUPPORTED_KEYS = _SETTING_KEYS | _EXPERIMENT_KEYS
+# multi-shot-review-eval shares this config chain and owns the [eval] table.
+_EVAL_KEYS = {"eval"}
+_SUPPORTED_KEYS = _SETTING_KEYS | _EXPERIMENT_KEYS | _EVAL_KEYS
 _PROFILE_KEYS = {"harness", "model", "reasoning"}
 _PROFILE_SETTINGS = {"classifier", "slice_default", "judge"}
 _REVIEW_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")

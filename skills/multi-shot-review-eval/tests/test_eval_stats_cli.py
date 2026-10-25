@@ -96,6 +96,14 @@ class EvalStatsCliTests(unittest.TestCase):
         stats = json.loads((Path(summary["eval_dir"]) / "stats.json").read_text())
         self.assertEqual(stats["arms"]["a"]["usage_coverage"]["sessions_with_usd"], 0)
 
+    def test_summary_reports_configured_analysts(self) -> None:
+        self.config.write_text(self.config.read_text() + '[[eval.analysts]]\nharness = "h1"\nmodel = "m1"\n[[eval.analysts]]\nharness = "h2"\nmodel = "m2"\neffort = "max"\n')
+        _, summary = self.invoke("--seed", "11")
+        self.assertEqual([spec["analyst"] for spec in summary["configured_analysts"]], ["h1/m1", "h2/m2"])
+        self.assertEqual(summary["configured_analysts"][1]["effort"], "max")
+        stats = json.loads((Path(summary["eval_dir"]) / "stats.json").read_text())
+        self.assertEqual(stats["configured_analysts"], summary["configured_analysts"])
+
     def test_full_cycle(self) -> None:
         code, summary = self.invoke("--seed", "11")
         self.assertEqual(code, 0)
@@ -104,6 +112,7 @@ class EvalStatsCliTests(unittest.TestCase):
         self.assertEqual(eval_dir.name, "20261025-1200-a-vs-b")
         self.assertEqual([arm["name"] for arm in summary["arms"]], ["a", "b"])
         self.assertEqual([arm["n"] for arm in summary["arms"]], [5, 5])
+        self.assertIsNone(summary["configured_analysts"])
 
         stats = json.loads((eval_dir / "stats.json").read_text())
         self.assertEqual(

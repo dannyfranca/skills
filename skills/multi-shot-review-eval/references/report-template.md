@@ -29,7 +29,7 @@ Pooled (<eval ids>): <diff, CI, bucket> — or "no earlier evals of this contras
 
 - <analyst>: <view per arm, one line>.
 - Missing: <analyst and reason>, or none.
-- Sample agreement: <agreement> (κ=<kappa>, n=<n>).
+- Sample agreement, one line per analyst pair: <a> vs <b>: <agreement> (κ=<kappa>, n=<n>).
 - Sample accuracy: <arm>: kept valid <share>, rejected invalid <share>.
 
 ## Next
@@ -48,7 +48,7 @@ Give the user this summary after the report, at most 8 lines:
 <eval-id>: <arm> vs <baseline>, n=<n>/<n>
 Primary <metric>: <diff> (<rel>), CI <lo>..<hi>, <bucket>
 Flags: <worsening, imbalance, prices>, or none
-Analysts: <agree/disagree>, κ=<kappa>
+Analysts: <a> vs <b> <agree/disagree>, κ=<kappa>; one entry per pair
 Proposal: <arm> <proposal> (<confidence>): <one-line reason>
 Report: <path to report.md> · Dashboard: <path to dashboard.html>
 ```

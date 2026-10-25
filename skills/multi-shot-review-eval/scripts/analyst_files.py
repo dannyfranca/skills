@@ -8,10 +8,6 @@ from typing import Any, TypeVar
 from eval_errors import EvalError
 
 
-# Keep in step with the analyst table in the SKILL.md Analysts step.
-DEFAULT_ANALYSTS = ("claude-code/claude-opus-5-5", "codex/gpt-6.1-sol")
-
-
 class Verdict(StrEnum):
     VALID = "valid"
     INVALID = "invalid"
@@ -75,6 +71,7 @@ class MissingAnalyst:
 
 @dataclass(frozen=True)
 class Synthesis:
+    analysts: tuple[str, ...]
     recommendations: tuple[View, ...]
     analysts_missing: tuple[MissingAnalyst, ...]
 
@@ -108,7 +105,8 @@ def parse_synthesis(document: Any, scope: SampleScope, source: str) -> Synthesis
         for index, item in enumerate(_list(data, "analysts_missing", source))
         for where in [f"{source} analysts_missing[{index}]"]
     )
-    return Synthesis(recommendations=recommendations, analysts_missing=missing)
+    analysts = tuple(_analyst_name(item, f"{source} analysts[{index}]") for index, item in enumerate(_list(data, "analysts", source)))
+    return Synthesis(analysts=analysts, recommendations=recommendations, analysts_missing=missing)
 
 
 def _judgments(items: Sequence[Any], scope: SampleScope, source: str) -> dict[EntryKey, Judgment]:
@@ -169,6 +167,12 @@ def _text(data: Mapping[str, Any], key: str, where: str, *, allow_empty: bool = 
         raise EvalError(f"{where}: {key} must be a string")
     if not allow_empty and not value.strip():
         raise EvalError(f"{where}: {key} must not be empty")
+    return value
+
+
+def _analyst_name(value: Any, where: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise EvalError(f"{where}: analyst must be a non-empty harness/model string")
     return value
 
 

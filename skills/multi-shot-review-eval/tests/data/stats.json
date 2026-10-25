@@ -324,6 +324,7 @@
     }
   },
   "baseline": "a",
+  "configured_analysts": null,
   "contrast_key": "tags:a|b",
   "contrasts": {
     "b": {

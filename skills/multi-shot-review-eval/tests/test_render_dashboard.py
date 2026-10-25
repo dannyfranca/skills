@@ -9,7 +9,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any
 
-from eval_dir_fixture import analyst_document, load_entries, load_stats, synthesis_document, view, write_eval_dir
+from eval_dir_fixture import ANALYSTS, analyst_document, load_entries, load_stats, synthesis_document, view, write_eval_dir
 
 from render_dashboard import main
 
@@ -66,16 +66,20 @@ class RenderDashboardTests(unittest.TestCase):
             ("missing view", {"analysts": [self.analyst(views=[view("b", proposal="new_variant")])]}),
             ("unknown arm view", {"analysts": [self.analyst(views=[view("b"), view("z", proposal="new_variant")])]}),
             ("no analysts", {"analysts": []}),
-            ("synthesis proposal", {"synthesis": {"recommendations": [view("b", proposal="ship_it")], "analysts_missing": []}}),
-            ("synthesis empty", {"synthesis": {"recommendations": [], "analysts_missing": []}}),
+            ("synthesis proposal", {"synthesis": {"analysts": ANALYSTS, "recommendations": [view("b", proposal="ship_it")], "analysts_missing": []}}),
+            ("synthesis empty", {"synthesis": {"analysts": ANALYSTS, "recommendations": [], "analysts_missing": []}}),
             ("synthesis missing reason", {"synthesis": synthesis_document([{"analyst": "codex/gpt-6.1-sol"}])}),
             ("synthesis missing a loaded analyst", {"synthesis": synthesis_document([{"analyst": "codex/gpt-6.1-sol", "reason": "quota"}])}),
             ("analyst absent without a reason", {"analysts": [self.analyst()]}),
             ("substituted analyst", {"analysts": [self.analyst(), analyst_document("codex/gpt-5", self.entries)]}),
             ("unknown missing analyst", {"analysts": [self.analyst()], "synthesis": synthesis_document([{"analyst": "codex/gpt-6.1-sol", "reason": "quota"}, {"analyst": "codex/gpt-5", "reason": "quota"}])}),
-            ("synthesis without the compared arm", {"synthesis": {"recommendations": [view("b", proposal="new_variant")], "analysts_missing": []}}),
-            ("synthesis with two base proposals", {"synthesis": {"recommendations": [view("b"), view("b", proposal="drop")], "analysts_missing": []}}),
-            ("synthesis base proposal for the baseline", {"synthesis": {"recommendations": [view("b"), view("a")], "analysts_missing": []}}),
+            ("synthesis without analysts", {"synthesis": {"recommendations": [view("b")], "analysts_missing": []}}),
+            ("synthesis with one chosen analyst", {"analysts": [self.analyst()], "synthesis": synthesis_document(analysts=["claude-code/claude-opus-5-5"])}),
+            ("synthesis with a repeated analyst", {"synthesis": synthesis_document(analysts=[*ANALYSTS, ANALYSTS[0]])}),
+            ("synthesis with a blank analyst", {"synthesis": synthesis_document(analysts=[*ANALYSTS, " "])}),
+            ("synthesis without the compared arm", {"synthesis": {"analysts": ANALYSTS, "recommendations": [view("b", proposal="new_variant")], "analysts_missing": []}}),
+            ("synthesis with two base proposals", {"synthesis": {"analysts": ANALYSTS, "recommendations": [view("b"), view("b", proposal="drop")], "analysts_missing": []}}),
+            ("synthesis base proposal for the baseline", {"synthesis": {"analysts": ANALYSTS, "recommendations": [view("b"), view("a")], "analysts_missing": []}}),
         ]
         for name, kwargs in cases:
             with self.subTest(name), tempfile.TemporaryDirectory() as root:
@@ -83,6 +87,51 @@ class RenderDashboardTests(unittest.TestCase):
                 self.assertEqual(code, 2)
                 self.assertEqual(result, {})
                 self.assertTrue(err.startswith("error: "))
+
+    def test_any_analysts_named_in_the_synthesis_render(self) -> None:
+        chosen = ["claude-code/claude-future-9", "codex/gpt-9-sol"]
+        analysts = [analyst_document(name, self.entries) for name in chosen]
+        code, result, err = self.invoke(write_eval_dir(self.root, analysts=analysts, synthesis=synthesis_document(analysts=chosen)))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(result["agreement"][0]["analysts"], chosen)
+
+    def test_configured_analysts_reject_a_substituted_roster(self) -> None:
+        chosen = ["claude-code/claude-future-9", "codex/gpt-9-sol"]
+        stats = load_stats()
+        stats["configured_analysts"] = [{"analyst": name, "effort": None} for name in ANALYSTS]
+        eval_dir = write_eval_dir(
+            self.root,
+            analysts=[analyst_document(name, self.entries) for name in chosen],
+            synthesis=synthesis_document(analysts=chosen),
+            stats=stats,
+        )
+        code, result, err = self.invoke(eval_dir)
+        self.assertEqual(code, 2)
+        self.assertIn("configured analysts", err)
+
+    def test_configured_effort_rejects_an_analyst_at_another_effort(self) -> None:
+        stats = load_stats()
+        stats["configured_analysts"] = [{"analyst": name, "effort": "max"} for name in ANALYSTS]
+        code, result, err = self.invoke(write_eval_dir(self.root, stats=stats))
+        self.assertEqual(code, 2)
+        self.assertIn("not the configured max", err)
+
+    def test_run_time_pick_rejects_one_harness(self) -> None:
+        chosen = ["codex/gpt-x", "codex/gpt-y"]
+        eval_dir = write_eval_dir(
+            self.root,
+            analysts=[analyst_document(name, self.entries) for name in chosen],
+            synthesis=synthesis_document(analysts=chosen),
+        )
+        code, result, err = self.invoke(eval_dir)
+        self.assertEqual(code, 2)
+        self.assertIn("two different harnesses", err)
+
+    def test_configured_analysts_render(self) -> None:
+        stats = load_stats()
+        stats["configured_analysts"] = [{"analyst": name, "effort": None} for name in ANALYSTS]
+        code, result, err = self.invoke(write_eval_dir(self.root, stats=stats))
+        self.assertEqual(code, 0, err)
 
     def test_one_analyst_with_a_missing_reason_renders(self) -> None:
         missing = [{"analyst": "codex/gpt-6.1-sol", "reason": "quota exceeded"}]

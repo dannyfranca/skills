@@ -84,6 +84,8 @@ def _run(args: argparse.Namespace, now: datetime) -> dict[str, Any]:
     )
     context = StatsContext(FactsCache(prices), prices, ledger, sessions_by_id)
     stats = build_stats(plan, request, context)
+    # Saved with the stats so the renderer can tell a configured roster from a substituted one after a config change.
+    stats["configured_analysts"] = None if config.analysts is None else [spec.as_dict() for spec in config.analysts]
     if not args.allow_unpriced and (stats["prices"]["missing_models"] or stats["prices"]["stale_models"]):
         raise PricesNeeded({key: stats["prices"][key] for key in ("cache", "missing_models", "stale_models")})
     sample = draw_sample(
@@ -115,6 +117,7 @@ def _summary(eval_dir: Path, plan: ArmPlan, stats: dict[str, Any]) -> dict[str, 
         "worsening": stats["worsening"],
         "pooled_eval_ids": stats["pooled"]["eval_ids"],
         "second_round_offer": stats["second_round_offer"],
+        "configured_analysts": stats["configured_analysts"],
     }
 
 

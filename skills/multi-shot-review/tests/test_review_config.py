@@ -175,6 +175,11 @@ class ReviewConfigTests(unittest.TestCase):
         self.assertEqual((config.max_passes, config.shots, config.shot_passes), (2, 2, "always"))
         self.assertEqual(config.judge_profile, HarnessProfile(harness="claude-code"))
 
+    def test_eval_table_is_left_to_the_eval_skill(self) -> None:
+        self.write_config(self.root, 'max_passes = 2\n[[eval.analysts]]\nharness = "codex"\nmodel = "m"\n')
+
+        self.assertEqual(load_review_config(self.root, home=self.home).max_passes, 2)
+
     def test_rejects_unknown_non_string_empty_and_path_settings(self) -> None:
         invalid_configs = (
             "unknown = true\n",

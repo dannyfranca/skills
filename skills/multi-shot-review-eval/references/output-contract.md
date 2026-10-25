@@ -6,11 +6,11 @@ Use JSON with UTF-8 text. Use the lowercase values exactly as this file shows th
 
 ## Analyst file
 
-Path: `analysts/<analyst>.json`. `<analyst>` is the harness and model with `/` changed to `-`, for example `claude-code-claude-opus-5-5`.
+Path: `analysts/<analyst>.json`. `<analyst>` is the harness and model with `/` changed to `-`, for example `codex-gpt-x` for the analyst `codex/gpt-x`. Model names in this file are placeholders.
 
 ```json
 {
-  "analyst": "claude-code/claude-opus-5-5",
+  "analyst": "codex/gpt-x",
   "effort": "high",
   "judgments": [
     {
@@ -45,6 +45,7 @@ Path: `synthesis.json`.
 
 ```json
 {
+  "analysts": ["claude-code/claude-x", "codex/gpt-x"],
   "recommendations": [
     {
       "arm": "b",
@@ -54,13 +55,14 @@ Path: `synthesis.json`.
     }
   ],
   "analysts_missing": [
-    {"analyst": "codex/gpt-6.1-sol", "reason": "delegate_task and codex exec both failed: quota exceeded."}
+    {"analyst": "codex/gpt-x", "reason": "delegate_task and codex exec both failed: quota exceeded."}
   ]
 }
 ```
 
+- `analysts`: the `<harness>/<model>` name of each analyst that the eval chose (SKILL.md, Analysts). Give two or more names, each one time.
 - `recommendations`: the same rule as analyst `views`: one entry that is not `new_variant` for each arm that is not the baseline, plus optional `new_variant` entries. Each entry uses the analyst view fields.
-- `analysts_missing`: one entry for each default analyst that did not give an analyst file. An analyst with a file in `analysts/` is not in this list. Use an empty list when both ran. Each default analyst (SKILL.md, Analysts) has exactly one file or one entry here, and only default analysts have files.
+- `analysts_missing`: one entry for each chosen analyst that did not give an analyst file. An analyst with a file in `analysts/` is not in this list. Use an empty list when all ran. Each name in `analysts` has exactly one file or one entry here, and only those names have files.
 
 ## Renderer result
 

@@ -10,7 +10,7 @@ You run a deterministic stats pack, send it to two independent analysts, and syn
 
 Set `SKILL_DIR` to the absolute directory that contains this file. Run `python3 "$SKILL_DIR/scripts/eval_stats.py"`; use `--help` for flags. All files go to the eval directory `<review_root>/_evals/<eval-id>/`; [the output contract](references/output-contract.md) defines each file.
 
-Configs and skill files stay as they are. Model prices are in a machine cache outside the skill, and `prices.py set` is the only writer; `prices.py --help` gives its path.
+Configs and skill files stay as they are. This skill names no models: model choices and prices change faster than the skill. The analysts come from `[eval] analysts` in the user config or from a choice at run time. Model prices are in a machine cache outside the skill, and `prices.py set` is the only writer; `prices.py --help` gives its path.
 
 ## 1. Stats
 
@@ -24,30 +24,44 @@ Continue when `eval_stats.py` exits 0, `sample.json` exists, and the user has an
 
 ## 2. Analysts
 
-Read [the analyst brief](references/analyst-brief.md). The default analysts:
+Read [the analyst brief](references/analyst-brief.md). Choose the analysts:
 
-| analyst | provider | model | effort |
-| --- | --- | --- | --- |
-| `claude-code/claude-opus-5-5` | Claude Code | `claude-opus-5-5` | high |
-| `codex/gpt-6.1-sol` | Codex | `gpt-6.1-sol` | high |
+- `configured_analysts` in the `eval_stats.py` output is a list: use those analysts. Each entry gives the harness, the model, and the effort. `stats.json` keeps this list, and the dashboard rejects a synthesis with other analysts or an analyst file at another effort.
+- `configured_analysts` is `null`: choose two analysts now, from two different providers. For each provider, choose its newest flagship model that this machine can run. Find the models in the `orchestrator_capabilities` catalog, the CLI model list, or the provider release notes. Use current information for each run, because earlier evals can name older models. The dashboard rejects a run-time pick with one harness.
+- When an entry has no effort, use the highest effort that the route accepts.
 
-Start both analysts in parallel, each with the same brief. For each analyst, try these routes in order until one gives an analyst file that `agreement.py` accepts:
+To fix the analysts, the user adds this table to a `multi-shot-review.toml` in the config chain. The nearest file with `[eval] analysts` wins. Give two or more entries; `effort` is optional.
+
+```toml
+[[eval.analysts]]
+harness = "claude-code"
+model = "<model>"
+effort = "high"
+
+[[eval.analysts]]
+harness = "codex"
+model = "<model>"
+```
+
+The analyst name is `<harness>/<model>`, for example `claude-code/<model>` or `codex/<model>`. Tell the user which analysts you chose and why.
+
+Start all analysts in parallel, each with the same brief. For each analyst, try these routes in order until one gives an analyst file that `agreement.py` accepts:
 
 1. The native subagent tool, when it runs that provider and model.
 2. T3 `delegate_task` with that provider instance, model, and effort. Get the IDs from `orchestrator_capabilities`.
 3. The headless CLI, from the eval directory, with the brief on stdin:
-   - `claude -p --model claude-opus-5-5 --effort high --allowedTools "Read Grep Glob Bash(git -C * show *) Bash(git -C * log *)" > <answer-file>`
-   - `codex exec -m gpt-6.1-sol -c model_reasoning_effort=high -s read-only --skip-git-repo-check -o <answer-file> -`
+   - `claude -p --model <model> --effort <effort> --allowedTools "Read Grep Glob Bash(git -C * show *) Bash(git -C * log *)" > <answer-file>`
+   - `codex exec -m <model> -c model_reasoning_effort=<effort> -s read-only --skip-git-repo-check -o <answer-file> -`
 
 Save each answer as `analysts/<analyst>.json`. Run `python3 "$SKILL_DIR/scripts/agreement.py" <eval_dir>`. When it reports a contract error, send the error to that analyst and ask for a corrected answer.
 
-When all routes fail for one analyst, continue with the other analyst and record the failure in `synthesis.json` `analysts_missing`. When both fail, give the failures to the user and stop.
+When all routes fail for one analyst, continue with the other analysts and record the failure in `synthesis.json` `analysts_missing`. When all analysts fail, give the failures to the user and stop.
 
-Continue when `agreement.py` exits 0 and each default analyst has a file or an `analysts_missing` reason.
+Continue when `agreement.py` exits 0 and each chosen analyst has a file or an `analysts_missing` reason.
 
 ## 3. Synthesis
 
-Read `stats.json`, every analyst file, and the `agreement.py` result. Write `synthesis.json` with one recommendation per non-baseline arm and a `new_variant` recommendation for each variant idea that the data supports.
+Read `stats.json`, every analyst file, and the `agreement.py` result. Write `synthesis.json` with the chosen analysts, one recommendation per non-baseline arm and a `new_variant` recommendation for each variant idea that the data supports.
 
 - Each recommendation is a **proposal**: `promote`, `drop`, `keep_testing`, or `new_variant`. The test as a whole gets no verdict and no label.
 - Set `confidence` by reasoning over: the 95% CI against the margin band, the MDE against the margin, `sessions_needed`, the worsening flags, the cost differences, the imbalanced strata, the pooled result, the analyst agreement and kappa, and the sample accuracy per arm.

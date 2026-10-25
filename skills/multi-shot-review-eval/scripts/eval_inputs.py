@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from analyst_files import DEFAULT_ANALYSTS, AnalystFile, SampleScope, Synthesis, parse_analyst, parse_synthesis
+from analyst_files import AnalystFile, SampleScope, Synthesis, parse_analyst, parse_synthesis
 from eval_errors import EvalError
 
 
@@ -66,16 +66,37 @@ def load_synthesis(eval_dir: Path, inputs: AnalystInputs) -> Synthesis:
     synthesis = parse_synthesis(read_json(eval_dir / SYNTHESIS_FILE), inputs.scope, SYNTHESIS_FILE)
     loaded = {analyst.analyst for analyst in inputs.analysts}
     missing = [entry.analyst for entry in synthesis.analysts_missing]
-    # A dashboard looks complete only when every default analyst either answered or has a recorded failure.
+    chosen = synthesis.analysts
+    # A dashboard looks complete only when every chosen analyst either answered or has a recorded failure.
     problems = [
-        *(f"{name} is not a default analyst" for name in sorted((loaded | set(missing)) - set(DEFAULT_ANALYSTS))),
+        *(["analysts needs at least two names"] if len(set(chosen)) < 2 else []),
+        *_roster_problems(chosen, inputs),
+        *(f"{name} is in analysts more than once" for name in sorted({n for n in chosen if chosen.count(n) > 1})),
+        *(f"{name} is not in analysts" for name in sorted((loaded | set(missing)) - set(chosen))),
         *(f"{name} has a file and an analysts_missing entry" for name in sorted(loaded & set(missing))),
         *(f"{name} is in analysts_missing more than once" for name in sorted({n for n in missing if missing.count(n) > 1})),
-        *(f"{name} has no file and no analysts_missing entry" for name in DEFAULT_ANALYSTS if name not in loaded and name not in missing),
+        *(f"{name} has no file and no analysts_missing entry" for name in chosen if name not in loaded and name not in missing),
     ]
     if problems:
         raise EvalError(f"{SYNTHESIS_FILE}: " + "; ".join(problems))
     return synthesis
+
+
+def _roster_problems(chosen: tuple[str, ...], inputs: AnalystInputs) -> list[str]:
+    configured = inputs.stats["configured_analysts"]
+    if configured is None:
+        # A run-time pick must bring a second provider; two models from one harness give no independent opinion.
+        harnesses = {name.split("/", 1)[0] for name in chosen}
+        return ["analysts needs two different harnesses"] if len(set(chosen)) >= 2 and len(harnesses) < 2 else []
+    names = {spec["analyst"] for spec in configured}
+    if set(chosen) != names:
+        return [f"analysts must be the configured analysts {sorted(names)}"]
+    efforts = {spec["analyst"]: spec["effort"] for spec in configured if spec["effort"] is not None}
+    return [
+        f"{analyst.analyst} ran at effort {analyst.effort}, not the configured {efforts[analyst.analyst]}"
+        for analyst in inputs.analysts
+        if analyst.analyst in efforts and analyst.effort != efforts[analyst.analyst]
+    ]
 
 
 def read_json(path: Path) -> Any:

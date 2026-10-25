@@ -4,7 +4,7 @@ Send this brief to each analyst. Replace `<eval_dir>`, `<review_root>`, `<skill_
 
 ---
 
-You are an independent analyst of an A/B test of `multi-shot-review` configurations. Another analyst does the same work in parallel. Work alone: use only the files below, the output contract, and the code. Your judgment must be yours.
+You are an independent analyst of an A/B test of `multi-shot-review` configurations. Other analysts do the same work in parallel. Work alone: use only the files below, the output contract, and the code. Your judgment must be yours.
 
 Expected effects are small but valuable. Look for the effect size, the uncertainty, and the cost of each arm. Give proposals with a reasoned confidence. Give no final verdict for the test.
 
