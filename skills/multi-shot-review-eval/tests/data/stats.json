@@ -1,0 +1,2199 @@
+{
+  "adopted_gains": {
+    "adopted": [],
+    "compounded_rel_diff": 0,
+    "metric": "kept_p0_p2",
+    "total_diff": 0
+  },
+  "arms": {
+    "a": {
+      "finding_classes": {
+        "kept": 15,
+        "rejected": 10
+      },
+      "metrics": {
+        "busy_minutes": {
+          "ci95": [
+            3.0,
+            3.0
+          ],
+          "mean": 3.0,
+          "n": 5
+        },
+        "classifier_retries": {
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "n": 5
+        },
+        "duplicates_per_session": {
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "n": 5
+        },
+        "failure_rate": {
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "n": 5
+        },
+        "incomplete_rate": {
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "n": 5
+        },
+        "judge_runs": {
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "n": 5
+        },
+        "judged_slices": {
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "n": 5
+        },
+        "kept_p0_p2": {
+          "ci95": [
+            2.4,
+            3.6
+          ],
+          "mean": 3.0,
+          "n": 5
+        },
+        "kept_p0_p2_per_100_lines": {
+          "ci95": null,
+          "mean": null,
+          "n": 0
+        },
+        "pass1_kept_share": {
+          "ci95": [
+            1.0,
+            1.0
+          ],
+          "mean": 1.0,
+          "n": 5
+        },
+        "rejected_share": {
+          "ci95": [
+            0.4,
+            0.4
+          ],
+          "mean": 0.4,
+          "n": 5
+        },
+        "slices_past_cap": {
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "n": 5
+        },
+        "tokens": {
+          "ci95": [
+            1200.0,
+            1200.0
+          ],
+          "mean": 1200.0,
+          "n": 5
+        },
+        "untriaged_per_session": {
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "n": 5
+        },
+        "usd": {
+          "ci95": [
+            0.10200000000000001,
+            0.10200000000000001
+          ],
+          "mean": 0.10200000000000001,
+          "n": 5
+        },
+        "wall_minutes": {
+          "ci95": [
+            5.0,
+            5.0
+          ],
+          "mean": 5.0,
+          "n": 5
+        },
+        "waves": {
+          "ci95": [
+            1.0,
+            1.0
+          ],
+          "mean": 1.0,
+          "n": 5
+        }
+      },
+      "n_completed": 5,
+      "n_incomplete": 0,
+      "sessions": [
+        "owner/repo/20261001-0002-00000002",
+        "owner/repo/20261001-0004-00000004",
+        "owner/repo/20261001-0006-00000006",
+        "owner/repo/20261001-0008-00000008",
+        "owner/repo/20261001-0010-0000000a"
+      ],
+      "sessions_missing_findings": 0,
+      "sessions_with_diff_size": 0,
+      "usage_coverage": {
+        "logs_priced_from_table": 5,
+        "sessions_with_logs": 5,
+        "sessions_with_tokens": 5,
+        "sessions_with_usd": 5
+      }
+    },
+    "b": {
+      "finding_classes": {
+        "kept": 25,
+        "rejected": 10
+      },
+      "metrics": {
+        "busy_minutes": {
+          "ci95": [
+            3.0,
+            3.0
+          ],
+          "mean": 3.0,
+          "n": 5
+        },
+        "classifier_retries": {
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "n": 5
+        },
+        "duplicates_per_session": {
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "n": 5
+        },
+        "failure_rate": {
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "n": 5
+        },
+        "incomplete_rate": {
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "n": 5
+        },
+        "judge_runs": {
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "n": 5
+        },
+        "judged_slices": {
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "n": 5
+        },
+        "kept_p0_p2": {
+          "ci95": [
+            4.4,
+            5.6
+          ],
+          "mean": 5.0,
+          "n": 5
+        },
+        "kept_p0_p2_per_100_lines": {
+          "ci95": null,
+          "mean": null,
+          "n": 0
+        },
+        "pass1_kept_share": {
+          "ci95": [
+            1.0,
+            1.0
+          ],
+          "mean": 1.0,
+          "n": 5
+        },
+        "rejected_share": {
+          "ci95": [
+            0.2857142857142857,
+            0.2857142857142857
+          ],
+          "mean": 0.2857142857142857,
+          "n": 5
+        },
+        "slices_past_cap": {
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "n": 5
+        },
+        "tokens": {
+          "ci95": [
+            1200.0,
+            1200.0
+          ],
+          "mean": 1200.0,
+          "n": 5
+        },
+        "untriaged_per_session": {
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "n": 5
+        },
+        "usd": {
+          "ci95": [
+            0.10200000000000001,
+            0.10200000000000001
+          ],
+          "mean": 0.10200000000000001,
+          "n": 5
+        },
+        "wall_minutes": {
+          "ci95": [
+            5.2,
+            6.4
+          ],
+          "mean": 5.8,
+          "n": 5
+        },
+        "waves": {
+          "ci95": [
+            1.0,
+            1.0
+          ],
+          "mean": 1.0,
+          "n": 5
+        }
+      },
+      "n_completed": 5,
+      "n_incomplete": 0,
+      "sessions": [
+        "owner/repo/20261001-0001-00000001",
+        "owner/repo/20261001-0003-00000003",
+        "owner/repo/20261001-0005-00000005",
+        "owner/repo/20261001-0007-00000007",
+        "owner/repo/20261001-0009-00000009"
+      ],
+      "sessions_missing_findings": 0,
+      "sessions_with_diff_size": 0,
+      "usage_coverage": {
+        "logs_priced_from_table": 5,
+        "sessions_with_logs": 5,
+        "sessions_with_tokens": 5,
+        "sessions_with_usd": 5
+      }
+    }
+  },
+  "baseline": "a",
+  "configured_analysts": null,
+  "contrast_key": "tags:a|b",
+  "contrasts": {
+    "b": {
+      "busy_minutes": {
+        "baseline_mean": 3.0,
+        "ci90": [
+          0.0,
+          0.0
+        ],
+        "ci95": [
+          0.0,
+          0.0
+        ],
+        "diff": 0.0,
+        "equivalence": "inside",
+        "margin_abs": 0.30000000000000004,
+        "mde": 0.0,
+        "n_baseline": 5,
+        "n_treatment": 5,
+        "p_worse": 0.0,
+        "rel_diff": 0.0,
+        "se": 0.0,
+        "sessions_needed": 2,
+        "treatment_mean": 3.0,
+        "worsening": false
+      },
+      "classifier_retries": {
+        "baseline_mean": 0.0,
+        "ci90": [
+          0.0,
+          0.0
+        ],
+        "ci95": [
+          0.0,
+          0.0
+        ],
+        "diff": 0.0,
+        "equivalence": "undetermined",
+        "margin_abs": 0.0,
+        "mde": 0.0,
+        "n_baseline": 5,
+        "n_treatment": 5,
+        "p_worse": 0.0,
+        "rel_diff": null,
+        "se": 0.0,
+        "sessions_needed": null,
+        "treatment_mean": 0.0,
+        "worsening": false
+      },
+      "duplicates_per_session": {
+        "baseline_mean": 0.0,
+        "ci90": [
+          0.0,
+          0.0
+        ],
+        "ci95": [
+          0.0,
+          0.0
+        ],
+        "diff": 0.0,
+        "equivalence": "undetermined",
+        "margin_abs": 0.0,
+        "mde": 0.0,
+        "n_baseline": 5,
+        "n_treatment": 5,
+        "p_worse": null,
+        "rel_diff": null,
+        "se": 0.0,
+        "sessions_needed": null,
+        "treatment_mean": 0.0,
+        "worsening": false
+      },
+      "failure_rate": {
+        "baseline_mean": 0.0,
+        "ci90": [
+          0.0,
+          0.0
+        ],
+        "ci95": [
+          0.0,
+          0.0
+        ],
+        "diff": 0.0,
+        "equivalence": "inside",
+        "margin_abs": 0.02,
+        "mde": 0.0,
+        "n_baseline": 5,
+        "n_treatment": 5,
+        "p_worse": 0.0,
+        "rel_diff": null,
+        "se": 0.0,
+        "sessions_needed": 2,
+        "treatment_mean": 0.0,
+        "worsening": false
+      },
+      "incomplete_rate": {
+        "baseline_mean": 0.0,
+        "ci90": [
+          0.0,
+          0.0
+        ],
+        "ci95": [
+          0.0,
+          0.0
+        ],
+        "diff": 0.0,
+        "equivalence": "inside",
+        "margin_abs": 0.02,
+        "mde": 0.0,
+        "n_baseline": 5,
+        "n_treatment": 5,
+        "p_worse": 0.0,
+        "rel_diff": null,
+        "se": 0.0,
+        "sessions_needed": 2,
+        "treatment_mean": 0.0,
+        "worsening": false
+      },
+      "judge_runs": {
+        "baseline_mean": 0.0,
+        "ci90": [
+          0.0,
+          0.0
+        ],
+        "ci95": [
+          0.0,
+          0.0
+        ],
+        "diff": 0.0,
+        "equivalence": "undetermined",
+        "margin_abs": 0.0,
+        "mde": 0.0,
+        "n_baseline": 5,
+        "n_treatment": 5,
+        "p_worse": null,
+        "rel_diff": null,
+        "se": 0.0,
+        "sessions_needed": null,
+        "treatment_mean": 0.0,
+        "worsening": false
+      },
+      "judged_slices": {
+        "baseline_mean": 0.0,
+        "ci90": [
+          0.0,
+          0.0
+        ],
+        "ci95": [
+          0.0,
+          0.0
+        ],
+        "diff": 0.0,
+        "equivalence": "undetermined",
+        "margin_abs": 0.0,
+        "mde": 0.0,
+        "n_baseline": 5,
+        "n_treatment": 5,
+        "p_worse": null,
+        "rel_diff": null,
+        "se": 0.0,
+        "sessions_needed": null,
+        "treatment_mean": 0.0,
+        "worsening": false
+      },
+      "kept_p0_p2": {
+        "baseline_mean": 3.0,
+        "ci90": [
+          1.1,
+          2.9
+        ],
+        "ci95": [
+          0.9,
+          3.1
+        ],
+        "diff": 2.0,
+        "equivalence": "outside",
+        "margin_abs": 0.09,
+        "mde": 1.55,
+        "n_baseline": 5,
+        "n_treatment": 5,
+        "p_worse": 0.0,
+        "rel_diff": 0.6666666666666666,
+        "se": 0.56,
+        "sessions_needed": 2,
+        "treatment_mean": 5.0,
+        "worsening": false
+      },
+      "kept_p0_p2_per_100_lines": {
+        "baseline_mean": null,
+        "ci90": null,
+        "ci95": null,
+        "diff": null,
+        "equivalence": "undetermined",
+        "margin_abs": null,
+        "mde": null,
+        "n_baseline": 0,
+        "n_treatment": 0,
+        "p_worse": null,
+        "rel_diff": null,
+        "se": null,
+        "sessions_needed": null,
+        "treatment_mean": null,
+        "worsening": false
+      },
+      "pass1_kept_share": {
+        "baseline_mean": 1.0,
+        "ci90": [
+          0.0,
+          0.0
+        ],
+        "ci95": [
+          0.0,
+          0.0
+        ],
+        "diff": 0.0,
+        "equivalence": "inside",
+        "margin_abs": 0.03,
+        "mde": 0.0,
+        "n_baseline": 5,
+        "n_treatment": 5,
+        "p_worse": 0.0,
+        "rel_diff": 0.0,
+        "se": 0.0,
+        "sessions_needed": 2,
+        "treatment_mean": 1.0,
+        "worsening": false
+      },
+      "rejected_share": {
+        "baseline_mean": 0.4,
+        "ci90": [
+          -0.19,
+          -0.04
+        ],
+        "ci95": [
+          -0.21,
+          -0.02
+        ],
+        "diff": -0.11428571428571432,
+        "equivalence": "outside",
+        "margin_abs": 0.02,
+        "mde": 0.0,
+        "n_baseline": 5,
+        "n_treatment": 5,
+        "p_worse": 0.0,
+        "rel_diff": -0.2857142857142858,
+        "se": 0.05,
+        "sessions_needed": 2,
+        "treatment_mean": 0.2857142857142857,
+        "worsening": false
+      },
+      "slices_past_cap": {
+        "baseline_mean": 0.0,
+        "ci90": [
+          0.0,
+          0.0
+        ],
+        "ci95": [
+          0.0,
+          0.0
+        ],
+        "diff": 0.0,
+        "equivalence": "undetermined",
+        "margin_abs": 0.0,
+        "mde": 0.0,
+        "n_baseline": 5,
+        "n_treatment": 5,
+        "p_worse": 0.0,
+        "rel_diff": null,
+        "se": 0.0,
+        "sessions_needed": null,
+        "treatment_mean": 0.0,
+        "worsening": false
+      },
+      "tokens": {
+        "baseline_mean": 1200.0,
+        "ci90": [
+          0.0,
+          0.0
+        ],
+        "ci95": [
+          0.0,
+          0.0
+        ],
+        "diff": 0.0,
+        "equivalence": "inside",
+        "margin_abs": 120.0,
+        "mde": 0.0,
+        "n_baseline": 5,
+        "n_treatment": 5,
+        "p_worse": 0.0,
+        "rel_diff": 0.0,
+        "se": 0.0,
+        "sessions_needed": 2,
+        "treatment_mean": 1200.0,
+        "worsening": false
+      },
+      "untriaged_per_session": {
+        "baseline_mean": 0.0,
+        "ci90": [
+          0.0,
+          0.0
+        ],
+        "ci95": [
+          0.0,
+          0.0
+        ],
+        "diff": 0.0,
+        "equivalence": "undetermined",
+        "margin_abs": 0.0,
+        "mde": 0.0,
+        "n_baseline": 5,
+        "n_treatment": 5,
+        "p_worse": 0.0,
+        "rel_diff": null,
+        "se": 0.0,
+        "sessions_needed": null,
+        "treatment_mean": 0.0,
+        "worsening": false
+      },
+      "usd": {
+        "baseline_mean": 0.10200000000000001,
+        "ci90": [
+          0.0,
+          0.0
+        ],
+        "ci95": [
+          0.0,
+          0.0
+        ],
+        "diff": 0.0,
+        "equivalence": "inside",
+        "margin_abs": 0.0102,
+        "mde": 0.0,
+        "n_baseline": 5,
+        "n_treatment": 5,
+        "p_worse": 0.0,
+        "rel_diff": 0.0,
+        "se": 0.0,
+        "sessions_needed": 2,
+        "treatment_mean": 0.10200000000000001,
+        "worsening": false
+      },
+      "wall_minutes": {
+        "baseline_mean": 5.0,
+        "ci90": [
+          0.2,
+          1.4
+        ],
+        "ci95": [
+          0.1,
+          1.5
+        ],
+        "diff": 0.8,
+        "equivalence": "outside",
+        "margin_abs": 0.5,
+        "mde": 0.98,
+        "n_baseline": 5,
+        "n_treatment": 5,
+        "p_worse": 0.98,
+        "rel_diff": 0.16,
+        "se": 0.35,
+        "sessions_needed": 2,
+        "treatment_mean": 5.8,
+        "worsening": true
+      },
+      "waves": {
+        "baseline_mean": 1.0,
+        "ci90": [
+          0.0,
+          0.0
+        ],
+        "ci95": [
+          0.0,
+          0.0
+        ],
+        "diff": 0.0,
+        "equivalence": "inside",
+        "margin_abs": 0.1,
+        "mde": 0.0,
+        "n_baseline": 5,
+        "n_treatment": 5,
+        "p_worse": 0.0,
+        "rel_diff": 0.0,
+        "se": 0.0,
+        "sessions_needed": 2,
+        "treatment_mean": 1.0,
+        "worsening": false
+      }
+    }
+  },
+  "created_at": "2026-10-25T12:00:00Z",
+  "eval_id": "20261025-1200-a-vs-b",
+  "inputs": {
+    "argv": [
+      "--tags",
+      "a,b",
+      "--seed",
+      "11",
+      "--prices",
+      "/home/user/.cache/multi-shot-review-eval/prices.toml"
+    ],
+    "resamples": 2000,
+    "seed": 11
+  },
+  "metric_specs": [
+    {
+      "direction": "higher",
+      "margin": {
+        "kind": "relative",
+        "value": 0.03
+      },
+      "name": "kept_p0_p2",
+      "primary": true
+    },
+    {
+      "direction": "higher",
+      "margin": {
+        "kind": "relative",
+        "value": 0.03
+      },
+      "name": "kept_p0_p2_per_100_lines",
+      "primary": false
+    },
+    {
+      "direction": "higher",
+      "margin": {
+        "kind": "relative",
+        "value": 0.03
+      },
+      "name": "pass1_kept_share",
+      "primary": false
+    },
+    {
+      "direction": "lower",
+      "margin": {
+        "kind": "absolute",
+        "value": 0.02
+      },
+      "name": "rejected_share",
+      "primary": false
+    },
+    {
+      "direction": "lower",
+      "margin": {
+        "kind": "relative",
+        "value": 0.1
+      },
+      "name": "untriaged_per_session",
+      "primary": false
+    },
+    {
+      "direction": "neutral",
+      "margin": {
+        "kind": "relative",
+        "value": 0.1
+      },
+      "name": "duplicates_per_session",
+      "primary": false
+    },
+    {
+      "direction": "lower",
+      "margin": {
+        "kind": "relative",
+        "value": 0.1
+      },
+      "name": "waves",
+      "primary": false
+    },
+    {
+      "direction": "lower",
+      "margin": {
+        "kind": "relative",
+        "value": 0.1
+      },
+      "name": "slices_past_cap",
+      "primary": false
+    },
+    {
+      "direction": "neutral",
+      "margin": {
+        "kind": "relative",
+        "value": 0.1
+      },
+      "name": "judged_slices",
+      "primary": false
+    },
+    {
+      "direction": "neutral",
+      "margin": {
+        "kind": "relative",
+        "value": 0.1
+      },
+      "name": "judge_runs",
+      "primary": false
+    },
+    {
+      "direction": "lower",
+      "margin": {
+        "kind": "relative",
+        "value": 0.1
+      },
+      "name": "wall_minutes",
+      "primary": false
+    },
+    {
+      "direction": "lower",
+      "margin": {
+        "kind": "relative",
+        "value": 0.1
+      },
+      "name": "busy_minutes",
+      "primary": false
+    },
+    {
+      "direction": "lower",
+      "margin": {
+        "kind": "relative",
+        "value": 0.1
+      },
+      "name": "tokens",
+      "primary": false
+    },
+    {
+      "direction": "lower",
+      "margin": {
+        "kind": "relative",
+        "value": 0.1
+      },
+      "name": "usd",
+      "primary": false
+    },
+    {
+      "direction": "lower",
+      "margin": {
+        "kind": "absolute",
+        "value": 0.02
+      },
+      "name": "failure_rate",
+      "primary": false
+    },
+    {
+      "direction": "lower",
+      "margin": {
+        "kind": "relative",
+        "value": 0.1
+      },
+      "name": "classifier_retries",
+      "primary": false
+    },
+    {
+      "direction": "lower",
+      "margin": {
+        "kind": "absolute",
+        "value": 0.02
+      },
+      "name": "incomplete_rate",
+      "primary": false
+    }
+  ],
+  "mode": "tags",
+  "pooled": {
+    "contrasts": {
+      "b": {
+        "busy_minutes": {
+          "baseline_mean": 3.0,
+          "ci90": [
+            0.0,
+            0.0
+          ],
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "diff": 0.0,
+          "equivalence": "inside",
+          "margin_abs": 0.30000000000000004,
+          "mde": 0.0,
+          "n_baseline": 5,
+          "n_treatment": 5,
+          "p_worse": 0.0,
+          "rel_diff": 0.0,
+          "se": 0.0,
+          "sessions_needed": 2,
+          "treatment_mean": 3.0,
+          "worsening": false
+        },
+        "classifier_retries": {
+          "baseline_mean": 0.0,
+          "ci90": [
+            0.0,
+            0.0
+          ],
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "diff": 0.0,
+          "equivalence": "undetermined",
+          "margin_abs": 0.0,
+          "mde": 0.0,
+          "n_baseline": 5,
+          "n_treatment": 5,
+          "p_worse": 0.0,
+          "rel_diff": null,
+          "se": 0.0,
+          "sessions_needed": null,
+          "treatment_mean": 0.0,
+          "worsening": false
+        },
+        "duplicates_per_session": {
+          "baseline_mean": 0.0,
+          "ci90": [
+            0.0,
+            0.0
+          ],
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "diff": 0.0,
+          "equivalence": "undetermined",
+          "margin_abs": 0.0,
+          "mde": 0.0,
+          "n_baseline": 5,
+          "n_treatment": 5,
+          "p_worse": null,
+          "rel_diff": null,
+          "se": 0.0,
+          "sessions_needed": null,
+          "treatment_mean": 0.0,
+          "worsening": false
+        },
+        "failure_rate": {
+          "baseline_mean": 0.0,
+          "ci90": [
+            0.0,
+            0.0
+          ],
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "diff": 0.0,
+          "equivalence": "inside",
+          "margin_abs": 0.02,
+          "mde": 0.0,
+          "n_baseline": 5,
+          "n_treatment": 5,
+          "p_worse": 0.0,
+          "rel_diff": null,
+          "se": 0.0,
+          "sessions_needed": 2,
+          "treatment_mean": 0.0,
+          "worsening": false
+        },
+        "incomplete_rate": {
+          "baseline_mean": 0.0,
+          "ci90": [
+            0.0,
+            0.0
+          ],
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "diff": 0.0,
+          "equivalence": "inside",
+          "margin_abs": 0.02,
+          "mde": 0.0,
+          "n_baseline": 5,
+          "n_treatment": 5,
+          "p_worse": 0.0,
+          "rel_diff": null,
+          "se": 0.0,
+          "sessions_needed": 2,
+          "treatment_mean": 0.0,
+          "worsening": false
+        },
+        "judge_runs": {
+          "baseline_mean": 0.0,
+          "ci90": [
+            0.0,
+            0.0
+          ],
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "diff": 0.0,
+          "equivalence": "undetermined",
+          "margin_abs": 0.0,
+          "mde": 0.0,
+          "n_baseline": 5,
+          "n_treatment": 5,
+          "p_worse": null,
+          "rel_diff": null,
+          "se": 0.0,
+          "sessions_needed": null,
+          "treatment_mean": 0.0,
+          "worsening": false
+        },
+        "judged_slices": {
+          "baseline_mean": 0.0,
+          "ci90": [
+            0.0,
+            0.0
+          ],
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "diff": 0.0,
+          "equivalence": "undetermined",
+          "margin_abs": 0.0,
+          "mde": 0.0,
+          "n_baseline": 5,
+          "n_treatment": 5,
+          "p_worse": null,
+          "rel_diff": null,
+          "se": 0.0,
+          "sessions_needed": null,
+          "treatment_mean": 0.0,
+          "worsening": false
+        },
+        "kept_p0_p2": {
+          "baseline_mean": 3.0,
+          "ci90": [
+            2.0,
+            2.0
+          ],
+          "ci95": [
+            2.0,
+            2.0
+          ],
+          "diff": 2.0,
+          "equivalence": "outside",
+          "margin_abs": 0.09,
+          "mde": 0.0,
+          "n_baseline": 5,
+          "n_treatment": 5,
+          "p_worse": 0.0,
+          "rel_diff": 0.6666666666666666,
+          "se": 0.0,
+          "sessions_needed": 2,
+          "treatment_mean": 5.0,
+          "worsening": false
+        },
+        "kept_p0_p2_per_100_lines": {
+          "baseline_mean": null,
+          "ci90": null,
+          "ci95": null,
+          "diff": null,
+          "equivalence": "undetermined",
+          "margin_abs": null,
+          "mde": null,
+          "n_baseline": 0,
+          "n_treatment": 0,
+          "p_worse": null,
+          "rel_diff": null,
+          "se": null,
+          "sessions_needed": null,
+          "treatment_mean": null,
+          "worsening": false
+        },
+        "pass1_kept_share": {
+          "baseline_mean": 1.0,
+          "ci90": [
+            0.0,
+            0.0
+          ],
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "diff": 0.0,
+          "equivalence": "inside",
+          "margin_abs": 0.03,
+          "mde": 0.0,
+          "n_baseline": 5,
+          "n_treatment": 5,
+          "p_worse": 0.0,
+          "rel_diff": 0.0,
+          "se": 0.0,
+          "sessions_needed": 2,
+          "treatment_mean": 1.0,
+          "worsening": false
+        },
+        "rejected_share": {
+          "baseline_mean": 0.4,
+          "ci90": [
+            -0.11428571428571432,
+            -0.11428571428571432
+          ],
+          "ci95": [
+            -0.11428571428571432,
+            -0.11428571428571432
+          ],
+          "diff": -0.11428571428571432,
+          "equivalence": "outside",
+          "margin_abs": 0.02,
+          "mde": 0.0,
+          "n_baseline": 5,
+          "n_treatment": 5,
+          "p_worse": 0.0,
+          "rel_diff": -0.2857142857142858,
+          "se": 0.0,
+          "sessions_needed": 2,
+          "treatment_mean": 0.2857142857142857,
+          "worsening": false
+        },
+        "slices_past_cap": {
+          "baseline_mean": 0.0,
+          "ci90": [
+            0.0,
+            0.0
+          ],
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "diff": 0.0,
+          "equivalence": "undetermined",
+          "margin_abs": 0.0,
+          "mde": 0.0,
+          "n_baseline": 5,
+          "n_treatment": 5,
+          "p_worse": 0.0,
+          "rel_diff": null,
+          "se": 0.0,
+          "sessions_needed": null,
+          "treatment_mean": 0.0,
+          "worsening": false
+        },
+        "tokens": {
+          "baseline_mean": 1200.0,
+          "ci90": [
+            0.0,
+            0.0
+          ],
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "diff": 0.0,
+          "equivalence": "inside",
+          "margin_abs": 120.0,
+          "mde": 0.0,
+          "n_baseline": 5,
+          "n_treatment": 5,
+          "p_worse": 0.0,
+          "rel_diff": 0.0,
+          "se": 0.0,
+          "sessions_needed": 2,
+          "treatment_mean": 1200.0,
+          "worsening": false
+        },
+        "untriaged_per_session": {
+          "baseline_mean": 0.0,
+          "ci90": [
+            0.0,
+            0.0
+          ],
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "diff": 0.0,
+          "equivalence": "undetermined",
+          "margin_abs": 0.0,
+          "mde": 0.0,
+          "n_baseline": 5,
+          "n_treatment": 5,
+          "p_worse": 0.0,
+          "rel_diff": null,
+          "se": 0.0,
+          "sessions_needed": null,
+          "treatment_mean": 0.0,
+          "worsening": false
+        },
+        "usd": {
+          "baseline_mean": 0.10200000000000001,
+          "ci90": [
+            0.0,
+            0.0
+          ],
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "diff": 0.0,
+          "equivalence": "inside",
+          "margin_abs": 0.0102,
+          "mde": 0.0,
+          "n_baseline": 5,
+          "n_treatment": 5,
+          "p_worse": 0.0,
+          "rel_diff": 0.0,
+          "se": 0.0,
+          "sessions_needed": 2,
+          "treatment_mean": 0.10200000000000001,
+          "worsening": false
+        },
+        "wall_minutes": {
+          "baseline_mean": 5.0,
+          "ci90": [
+            0.0,
+            0.0
+          ],
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "diff": 0.0,
+          "equivalence": "inside",
+          "margin_abs": 0.5,
+          "mde": 0.0,
+          "n_baseline": 5,
+          "n_treatment": 5,
+          "p_worse": 0.0,
+          "rel_diff": 0.0,
+          "se": 0.0,
+          "sessions_needed": 2,
+          "treatment_mean": 5.0,
+          "worsening": false
+        },
+        "waves": {
+          "baseline_mean": 1.0,
+          "ci90": [
+            0.0,
+            0.0
+          ],
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "diff": 0.0,
+          "equivalence": "inside",
+          "margin_abs": 0.1,
+          "mde": 0.0,
+          "n_baseline": 5,
+          "n_treatment": 5,
+          "p_worse": 0.0,
+          "rel_diff": 0.0,
+          "se": 0.0,
+          "sessions_needed": 2,
+          "treatment_mean": 1.0,
+          "worsening": false
+        }
+      }
+    },
+    "eval_ids": [],
+    "n": {
+      "a": 5,
+      "b": 5
+    }
+  },
+  "prices": {
+    "assumptions": [
+      "Codex logs report only a total token count; USD prices that total at the model input rate, so it overstates cached input and understates output."
+    ],
+    "cache": "/home/user/.cache/multi-shot-review-eval/prices.toml",
+    "missing_models": [],
+    "models": {
+      "model-c": {
+        "cached_input": 0.2,
+        "fetched_at": "2026-10-20",
+        "input": 2.0,
+        "output": 10.0,
+        "source": "https://example.test/pricing"
+      }
+    },
+    "stale_models": []
+  },
+  "primary_metric": "kept_p0_p2",
+  "second_round_offer": {
+    "b": {
+      "ci_overlap": false,
+      "kept_share_gap": 0.11428571428571432,
+      "offer": false
+    }
+  },
+  "session_rows": {
+    "a": [
+      {
+        "completed": true,
+        "created_at": "2026-10-01T10:00:00Z",
+        "diff_size": null,
+        "findings_complete": true,
+        "id": "owner/repo/20261001-0002-00000002",
+        "metrics": {
+          "busy_minutes": [
+            3.0,
+            1
+          ],
+          "classifier_retries": [
+            0,
+            1
+          ],
+          "duplicates_per_session": [
+            0,
+            1
+          ],
+          "failure_rate": [
+            0,
+            1
+          ],
+          "incomplete_rate": [
+            0,
+            1
+          ],
+          "judge_runs": [
+            0,
+            1
+          ],
+          "judged_slices": [
+            0,
+            1
+          ],
+          "kept_p0_p2": [
+            2,
+            1
+          ],
+          "pass1_kept_share": [
+            3,
+            3
+          ],
+          "rejected_share": [
+            2,
+            5
+          ],
+          "slices_past_cap": [
+            0,
+            1
+          ],
+          "tokens": [
+            1200,
+            1
+          ],
+          "untriaged_per_session": [
+            0,
+            1
+          ],
+          "usd": [
+            0.10200000000000001,
+            1
+          ],
+          "wall_minutes": [
+            5.0,
+            1
+          ],
+          "waves": [
+            1,
+            1
+          ]
+        },
+        "repository": "owner/repo"
+      },
+      {
+        "completed": true,
+        "created_at": "2026-10-02T11:00:00Z",
+        "diff_size": null,
+        "findings_complete": true,
+        "id": "owner/repo/20261001-0004-00000004",
+        "metrics": {
+          "busy_minutes": [
+            3.0,
+            1
+          ],
+          "classifier_retries": [
+            0,
+            1
+          ],
+          "duplicates_per_session": [
+            0,
+            1
+          ],
+          "failure_rate": [
+            0,
+            1
+          ],
+          "incomplete_rate": [
+            0,
+            1
+          ],
+          "judge_runs": [
+            0,
+            1
+          ],
+          "judged_slices": [
+            0,
+            1
+          ],
+          "kept_p0_p2": [
+            3,
+            1
+          ],
+          "pass1_kept_share": [
+            3,
+            3
+          ],
+          "rejected_share": [
+            2,
+            5
+          ],
+          "slices_past_cap": [
+            0,
+            1
+          ],
+          "tokens": [
+            1200,
+            1
+          ],
+          "untriaged_per_session": [
+            0,
+            1
+          ],
+          "usd": [
+            0.10200000000000001,
+            1
+          ],
+          "wall_minutes": [
+            5.0,
+            1
+          ],
+          "waves": [
+            1,
+            1
+          ]
+        },
+        "repository": "owner/repo"
+      },
+      {
+        "completed": true,
+        "created_at": "2026-10-03T12:00:00Z",
+        "diff_size": null,
+        "findings_complete": true,
+        "id": "owner/repo/20261001-0006-00000006",
+        "metrics": {
+          "busy_minutes": [
+            3.0,
+            1
+          ],
+          "classifier_retries": [
+            0,
+            1
+          ],
+          "duplicates_per_session": [
+            0,
+            1
+          ],
+          "failure_rate": [
+            0,
+            1
+          ],
+          "incomplete_rate": [
+            0,
+            1
+          ],
+          "judge_runs": [
+            0,
+            1
+          ],
+          "judged_slices": [
+            0,
+            1
+          ],
+          "kept_p0_p2": [
+            4,
+            1
+          ],
+          "pass1_kept_share": [
+            3,
+            3
+          ],
+          "rejected_share": [
+            2,
+            5
+          ],
+          "slices_past_cap": [
+            0,
+            1
+          ],
+          "tokens": [
+            1200,
+            1
+          ],
+          "untriaged_per_session": [
+            0,
+            1
+          ],
+          "usd": [
+            0.10200000000000001,
+            1
+          ],
+          "wall_minutes": [
+            5.0,
+            1
+          ],
+          "waves": [
+            1,
+            1
+          ]
+        },
+        "repository": "owner/repo"
+      },
+      {
+        "completed": true,
+        "created_at": "2026-10-01T13:00:00Z",
+        "diff_size": null,
+        "findings_complete": true,
+        "id": "owner/repo/20261001-0008-00000008",
+        "metrics": {
+          "busy_minutes": [
+            3.0,
+            1
+          ],
+          "classifier_retries": [
+            0,
+            1
+          ],
+          "duplicates_per_session": [
+            0,
+            1
+          ],
+          "failure_rate": [
+            0,
+            1
+          ],
+          "incomplete_rate": [
+            0,
+            1
+          ],
+          "judge_runs": [
+            0,
+            1
+          ],
+          "judged_slices": [
+            0,
+            1
+          ],
+          "kept_p0_p2": [
+            3,
+            1
+          ],
+          "pass1_kept_share": [
+            3,
+            3
+          ],
+          "rejected_share": [
+            2,
+            5
+          ],
+          "slices_past_cap": [
+            0,
+            1
+          ],
+          "tokens": [
+            1200,
+            1
+          ],
+          "untriaged_per_session": [
+            0,
+            1
+          ],
+          "usd": [
+            0.10200000000000001,
+            1
+          ],
+          "wall_minutes": [
+            5.0,
+            1
+          ],
+          "waves": [
+            1,
+            1
+          ]
+        },
+        "repository": "owner/other"
+      },
+      {
+        "completed": true,
+        "created_at": "2026-10-02T14:00:00Z",
+        "diff_size": null,
+        "findings_complete": true,
+        "id": "owner/repo/20261001-0010-0000000a",
+        "metrics": {
+          "busy_minutes": [
+            3.0,
+            1
+          ],
+          "classifier_retries": [
+            0,
+            1
+          ],
+          "duplicates_per_session": [
+            0,
+            1
+          ],
+          "failure_rate": [
+            0,
+            1
+          ],
+          "incomplete_rate": [
+            0,
+            1
+          ],
+          "judge_runs": [
+            0,
+            1
+          ],
+          "judged_slices": [
+            0,
+            1
+          ],
+          "kept_p0_p2": [
+            3,
+            1
+          ],
+          "pass1_kept_share": [
+            3,
+            3
+          ],
+          "rejected_share": [
+            2,
+            5
+          ],
+          "slices_past_cap": [
+            0,
+            1
+          ],
+          "tokens": [
+            1200,
+            1
+          ],
+          "untriaged_per_session": [
+            0,
+            1
+          ],
+          "usd": [
+            0.10200000000000001,
+            1
+          ],
+          "wall_minutes": [
+            5.0,
+            1
+          ],
+          "waves": [
+            1,
+            1
+          ]
+        },
+        "repository": "owner/other"
+      }
+    ],
+    "b": [
+      {
+        "completed": true,
+        "created_at": "2026-10-01T10:00:00Z",
+        "diff_size": null,
+        "findings_complete": true,
+        "id": "owner/repo/20261001-0001-00000001",
+        "metrics": {
+          "busy_minutes": [
+            3.0,
+            1
+          ],
+          "classifier_retries": [
+            0,
+            1
+          ],
+          "duplicates_per_session": [
+            0,
+            1
+          ],
+          "failure_rate": [
+            0,
+            1
+          ],
+          "incomplete_rate": [
+            0,
+            1
+          ],
+          "judge_runs": [
+            0,
+            1
+          ],
+          "judged_slices": [
+            0,
+            1
+          ],
+          "kept_p0_p2": [
+            4,
+            1
+          ],
+          "pass1_kept_share": [
+            5,
+            5
+          ],
+          "rejected_share": [
+            2,
+            7
+          ],
+          "slices_past_cap": [
+            0,
+            1
+          ],
+          "tokens": [
+            1200,
+            1
+          ],
+          "untriaged_per_session": [
+            0,
+            1
+          ],
+          "usd": [
+            0.10200000000000001,
+            1
+          ],
+          "wall_minutes": [
+            5.0,
+            1
+          ],
+          "waves": [
+            1,
+            1
+          ]
+        },
+        "repository": "owner/repo"
+      },
+      {
+        "completed": true,
+        "created_at": "2026-10-02T11:00:00Z",
+        "diff_size": null,
+        "findings_complete": true,
+        "id": "owner/repo/20261001-0003-00000003",
+        "metrics": {
+          "busy_minutes": [
+            3.0,
+            1
+          ],
+          "classifier_retries": [
+            0,
+            1
+          ],
+          "duplicates_per_session": [
+            0,
+            1
+          ],
+          "failure_rate": [
+            0,
+            1
+          ],
+          "incomplete_rate": [
+            0,
+            1
+          ],
+          "judge_runs": [
+            0,
+            1
+          ],
+          "judged_slices": [
+            0,
+            1
+          ],
+          "kept_p0_p2": [
+            5,
+            1
+          ],
+          "pass1_kept_share": [
+            5,
+            5
+          ],
+          "rejected_share": [
+            2,
+            7
+          ],
+          "slices_past_cap": [
+            0,
+            1
+          ],
+          "tokens": [
+            1200,
+            1
+          ],
+          "untriaged_per_session": [
+            0,
+            1
+          ],
+          "usd": [
+            0.10200000000000001,
+            1
+          ],
+          "wall_minutes": [
+            5.4,
+            1
+          ],
+          "waves": [
+            1,
+            1
+          ]
+        },
+        "repository": "owner/repo"
+      },
+      {
+        "completed": true,
+        "created_at": "2026-10-03T12:00:00Z",
+        "diff_size": null,
+        "findings_complete": true,
+        "id": "owner/repo/20261001-0005-00000005",
+        "metrics": {
+          "busy_minutes": [
+            3.0,
+            1
+          ],
+          "classifier_retries": [
+            0,
+            1
+          ],
+          "duplicates_per_session": [
+            0,
+            1
+          ],
+          "failure_rate": [
+            0,
+            1
+          ],
+          "incomplete_rate": [
+            0,
+            1
+          ],
+          "judge_runs": [
+            0,
+            1
+          ],
+          "judged_slices": [
+            0,
+            1
+          ],
+          "kept_p0_p2": [
+            6,
+            1
+          ],
+          "pass1_kept_share": [
+            5,
+            5
+          ],
+          "rejected_share": [
+            2,
+            7
+          ],
+          "slices_past_cap": [
+            0,
+            1
+          ],
+          "tokens": [
+            1200,
+            1
+          ],
+          "untriaged_per_session": [
+            0,
+            1
+          ],
+          "usd": [
+            0.10200000000000001,
+            1
+          ],
+          "wall_minutes": [
+            5.8,
+            1
+          ],
+          "waves": [
+            1,
+            1
+          ]
+        },
+        "repository": "owner/repo"
+      },
+      {
+        "completed": true,
+        "created_at": "2026-10-01T13:00:00Z",
+        "diff_size": null,
+        "findings_complete": true,
+        "id": "owner/repo/20261001-0007-00000007",
+        "metrics": {
+          "busy_minutes": [
+            3.0,
+            1
+          ],
+          "classifier_retries": [
+            0,
+            1
+          ],
+          "duplicates_per_session": [
+            0,
+            1
+          ],
+          "failure_rate": [
+            0,
+            1
+          ],
+          "incomplete_rate": [
+            0,
+            1
+          ],
+          "judge_runs": [
+            0,
+            1
+          ],
+          "judged_slices": [
+            0,
+            1
+          ],
+          "kept_p0_p2": [
+            5,
+            1
+          ],
+          "pass1_kept_share": [
+            5,
+            5
+          ],
+          "rejected_share": [
+            2,
+            7
+          ],
+          "slices_past_cap": [
+            0,
+            1
+          ],
+          "tokens": [
+            1200,
+            1
+          ],
+          "untriaged_per_session": [
+            0,
+            1
+          ],
+          "usd": [
+            0.10200000000000001,
+            1
+          ],
+          "wall_minutes": [
+            5.0,
+            1
+          ],
+          "waves": [
+            1,
+            1
+          ]
+        },
+        "repository": "owner/other"
+      },
+      {
+        "completed": true,
+        "created_at": "2026-10-02T14:00:00Z",
+        "diff_size": null,
+        "findings_complete": true,
+        "id": "owner/repo/20261001-0009-00000009",
+        "metrics": {
+          "busy_minutes": [
+            3.0,
+            1
+          ],
+          "classifier_retries": [
+            0,
+            1
+          ],
+          "duplicates_per_session": [
+            0,
+            1
+          ],
+          "failure_rate": [
+            0,
+            1
+          ],
+          "incomplete_rate": [
+            0,
+            1
+          ],
+          "judge_runs": [
+            0,
+            1
+          ],
+          "judged_slices": [
+            0,
+            1
+          ],
+          "kept_p0_p2": [
+            5,
+            1
+          ],
+          "pass1_kept_share": [
+            5,
+            5
+          ],
+          "rejected_share": [
+            2,
+            7
+          ],
+          "slices_past_cap": [
+            0,
+            1
+          ],
+          "tokens": [
+            1200,
+            1
+          ],
+          "untriaged_per_session": [
+            0,
+            1
+          ],
+          "usd": [
+            0.10200000000000001,
+            1
+          ],
+          "wall_minutes": [
+            5.4,
+            1
+          ],
+          "waves": [
+            1,
+            1
+          ]
+        },
+        "repository": "owner/solo"
+      }
+    ]
+  },
+  "strata": {
+    "diff_size": [
+      {
+        "counts": {
+          "a": 5,
+          "b": 5
+        },
+        "imbalanced": false,
+        "primary": {
+          "diff": {
+            "b": 2.0
+          },
+          "means": {
+            "a": 3.0,
+            "b": 5.0
+          },
+          "n": {
+            "a": 5,
+            "b": 5
+          }
+        },
+        "shares": {
+          "a": 1.0,
+          "b": 1.0
+        },
+        "value": "unknown"
+      }
+    ],
+    "harness_model": [
+      {
+        "counts": {
+          "a": 5,
+          "b": 5
+        },
+        "imbalanced": false,
+        "primary": {
+          "diff": {
+            "b": 2.0
+          },
+          "means": {
+            "a": 3.0,
+            "b": 5.0
+          },
+          "n": {
+            "a": 5,
+            "b": 5
+          }
+        },
+        "shares": {
+          "a": 1.0,
+          "b": 1.0
+        },
+        "value": "codex/model-c"
+      }
+    ],
+    "repository": [
+      {
+        "counts": {
+          "a": 2,
+          "b": 1
+        },
+        "imbalanced": false,
+        "primary": {
+          "diff": {
+            "b": 1.5
+          },
+          "means": {
+            "a": 3.5,
+            "b": 5.0
+          },
+          "n": {
+            "a": 2,
+            "b": 1
+          }
+        },
+        "shares": {
+          "a": 0.4,
+          "b": 0.2
+        },
+        "value": "owner/other"
+      },
+      {
+        "counts": {
+          "a": 3,
+          "b": 3
+        },
+        "imbalanced": false,
+        "primary": {
+          "diff": {
+            "b": 2.3333333333333335
+          },
+          "means": {
+            "a": 2.6666666666666665,
+            "b": 5.0
+          },
+          "n": {
+            "a": 3,
+            "b": 3
+          }
+        },
+        "shares": {
+          "a": 0.6,
+          "b": 0.6
+        },
+        "value": "owner/repo"
+      },
+      {
+        "counts": {
+          "a": 0,
+          "b": 1
+        },
+        "imbalanced": true,
+        "primary": {
+          "diff": {
+            "b": null
+          },
+          "means": {
+            "a": null,
+            "b": 5.0
+          },
+          "n": {
+            "a": 0,
+            "b": 1
+          }
+        },
+        "shares": {
+          "a": 0.0,
+          "b": 0.2
+        },
+        "value": "owner/solo"
+      }
+    ]
+  },
+  "window": {
+    "end": "2026-10-03T14:00:00Z",
+    "start": "2026-10-01T10:00:00Z"
+  },
+  "worsening": [
+    {
+      "arm": "b",
+      "metric": "wall_minutes",
+      "p_worse": 0.98
+    }
+  ]
+}

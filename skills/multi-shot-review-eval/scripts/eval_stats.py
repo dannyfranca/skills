@@ -73,16 +73,19 @@ def _run(args: argparse.Namespace, now: datetime) -> dict[str, Any]:
         return draw_second_round(eval_dir, sessions_by_id, kept=args.sample_kept, seed=args.seed)
     plan = plan_arms(sessions, config.active_tags, _arm_request(args))
     eval_dir = _new_eval_dir(evals, now, plan)
+    prices = load_price_table(Path(args.prices).expanduser() if args.prices else default_cache_path())
     request = StatsRequest(
         eval_id=eval_dir.name,
         created_at=format_timestamp(now),
         seed=args.seed,
+        argv=_reproduction_argv(args, review_root, plan, prices.path),
         specs=apply_margin_overrides(METRICS, args.margin),
         today=now.date(),
     )
-    prices = load_price_table(Path(args.prices).expanduser() if args.prices else default_cache_path())
     context = StatsContext(FactsCache(prices), prices, ledger, sessions_by_id)
     stats = build_stats(plan, request, context)
+    # Saved with the stats so the renderer can tell a configured roster from a substituted one after a config change.
+    stats["configured_analysts"] = None if config.analysts is None else [spec.as_dict() for spec in config.analysts]
     if not args.allow_unpriced and (stats["prices"]["missing_models"] or stats["prices"]["stale_models"]):
         raise PricesNeeded({key: stats["prices"][key] for key in ("cache", "missing_models", "stale_models")})
     sample = draw_sample(
@@ -114,6 +117,7 @@ def _summary(eval_dir: Path, plan: ArmPlan, stats: dict[str, Any]) -> dict[str, 
         "worsening": stats["worsening"],
         "pooled_eval_ids": stats["pooled"]["eval_ids"],
         "second_round_offer": stats["second_round_offer"],
+        "configured_analysts": stats["configured_analysts"],
     }
 
 
@@ -141,6 +145,27 @@ def _arm_request(args: argparse.Namespace) -> ArmRequest:
         repo=args.repo,
         cutoff=args.cutoff,
     )
+
+
+def _reproduction_argv(args: argparse.Namespace, review_root: Path, plan: ArmPlan, prices: Path) -> tuple[str, ...]:
+    """Pin what the config chain and the window search resolved, so a later config or session change keeps the same arms."""
+
+    argv = ["--review-root", str(review_root)]
+    if plan.mode == PlanMode.CUTOFF:
+        argv += ["--cutoff", args.cutoff]
+        argv += ["--tags", args.tags] if args.tags else []
+        argv += ["--since", args.since] if args.since else []
+        argv += ["--until", args.until] if args.until else []
+    else:
+        argv += ["--tags", ",".join(arm.name for arm in plan.arms)]
+        argv += ["--since", format_timestamp(plan.window.start), "--until", format_timestamp(plan.window.end)]
+    argv += ["--repo", args.repo] if args.repo else []
+    for margin in args.margin:
+        argv += ["--margin", margin]
+    argv += ["--sample-kept", str(args.sample_kept), "--sample-rejected", str(args.sample_rejected), "--seed", str(args.seed)]
+    argv += ["--prices", str(prices)]
+    argv += ["--allow-unpriced"] if args.allow_unpriced else []
+    return tuple(argv)
 
 
 def _moment(value: str | None, flag: str) -> datetime | None:

@@ -26,6 +26,7 @@ class StatsRequest:
     eval_id: str
     created_at: str
     seed: int
+    argv: tuple[str, ...]
     specs: tuple[MetricSpec, ...]
     today: date
 
@@ -47,7 +48,7 @@ def build_stats(plan: ArmPlan, request: StatsRequest, context: StatsContext) -> 
     stats = {
         "eval_id": request.eval_id,
         "created_at": request.created_at,
-        "inputs": {"seed": request.seed, "resamples": RESAMPLES},
+        "inputs": {"seed": request.seed, "resamples": RESAMPLES, "argv": list(request.argv)},
         "mode": plan.mode.value,
         "contrast_key": plan.contrast_key,
         "window": _window(plan),

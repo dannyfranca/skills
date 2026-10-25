@@ -77,7 +77,7 @@ def run(
 def slice_(
     *runs: dict[str, Any],
     harness: str = "codex",
-    model: str = "gpt-6-sol",
+    model: str = "model-c",
     judgements: int = 0,
     judged: tuple[tuple[int, str], ...] = (),
     removed: bool = False,
@@ -176,7 +176,7 @@ def write_session(
                 "id": f"c{index}",
                 "status": status,
                 "harness": "codex",
-                "model": "gpt-6.1-sol",
+                "model": "model-b.1",
                 "started_at": at(created),
                 "ended_at": at(created + 1),
             }
@@ -200,7 +200,7 @@ def write_logs(
             os.utime(path, (modified.timestamp(), modified.timestamp()))
 
 
-def claude_stdout(cost: float = 0.5, model: str = "claude-opus-5-5") -> str:
+def claude_stdout(cost: float = 0.5, model: str = "model-a") -> str:
     return json.dumps(
         {
             "type": "result",
@@ -219,7 +219,7 @@ def claude_stdout(cost: float = 0.5, model: str = "claude-opus-5-5") -> str:
     )
 
 
-def codex_stderr(tokens: str = "85,542", model: str = "gpt-6-sol") -> str:
+def codex_stderr(tokens: str = "85,542", model: str = "model-c") -> str:
     return (
         "OpenAI Codex v0.163.0\n--------\nworkdir: /tmp\nmodel: "
         f"{model}\nprovider: openai\n--------\nuser\nreview\n" + "noise\n" * 50
