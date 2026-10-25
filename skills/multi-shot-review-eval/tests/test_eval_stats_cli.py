@@ -63,30 +63,30 @@ class EvalStatsCliTests(unittest.TestCase):
         cache = Path(self.tmp.name) / "none.toml"
         code, out = self.invoke("--seed", "11", prices=cache)
         self.assertEqual(code, 3)
-        self.assertEqual(out["prices_needed"], {"cache": str(cache), "missing_models": ["gpt-6-sol"], "stale_models": []})
+        self.assertEqual(out["prices_needed"], {"cache": str(cache), "missing_models": ["model-c"], "stale_models": []})
         self.assertFalse((self.reviews / "_evals").exists())
 
     def test_stale_price_stops_before_writing(self) -> None:
         code, out = self.invoke("--seed", "11", now=datetime(2026, 12, 1, tzinfo=timezone.utc))
         self.assertEqual(code, 3)
-        self.assertEqual(out["prices_needed"]["stale_models"], ["gpt-6-sol"])
+        self.assertEqual(out["prices_needed"]["stale_models"], ["model-c"])
         self.assertFalse((self.reviews / "_evals").exists())
 
     def test_pooled_sessions_need_prices(self) -> None:
         code, _ = self.invoke("--seed", "11", "--until", "2026-10-01T00:55:00Z")
         self.assertEqual(code, 0)
         for index, directory in enumerate(self.sessions[:6]):
-            write_logs(directory, f"r{index}-1-core", stderr=codex_stderr("1,000", model="gpt-7-earlier"))
+            write_logs(directory, f"r{index}-1-core", stderr=codex_stderr("1,000", model="model-old"))
         code, out = self.invoke("--seed", "11", "--since", "2026-10-01T00:58:00Z")
         self.assertEqual(code, 3)
-        self.assertEqual(out["prices_needed"]["missing_models"], ["gpt-7-earlier"])
+        self.assertEqual(out["prices_needed"]["missing_models"], ["model-old"])
 
     def test_allow_unpriced_writes_the_gap(self) -> None:
         code, out = self.invoke("--seed", "11", "--allow-unpriced", prices=Path(self.tmp.name) / "none.toml")
         self.assertEqual(code, 0)
         stats = json.loads((Path(out["eval_dir"]) / "stats.json").read_text())
         self.assertEqual(stats["inputs"]["argv"][-3:], ["--prices", str(Path(self.tmp.name) / "none.toml"), "--allow-unpriced"])
-        self.assertEqual(stats["prices"]["missing_models"], ["gpt-6-sol"])
+        self.assertEqual(stats["prices"]["missing_models"], ["model-c"])
         self.assertEqual(stats["prices"]["models"], {})
 
     def test_missing_invocation_logs_leave_usd_uncovered(self) -> None:
@@ -133,7 +133,7 @@ class EvalStatsCliTests(unittest.TestCase):
         self.assertEqual(stratum["n"], {"a": 5, "b": 5})
         self.assertAlmostEqual(stratum["diff"]["b"], 2.0)
         self.assertTrue(stats["prices"]["assumptions"])
-        self.assertEqual(stats["prices"]["models"]["gpt-6-sol"]["fetched_at"], "2026-10-20")
+        self.assertEqual(stats["prices"]["models"]["model-c"]["fetched_at"], "2026-10-20")
         self.assertEqual(stats["prices"]["stale_models"], [])
         self.assertEqual(stats["pooled"]["eval_ids"], [])
         rows = stats["session_rows"]["b"]

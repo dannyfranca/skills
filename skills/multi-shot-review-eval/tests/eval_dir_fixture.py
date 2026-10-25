@@ -50,7 +50,7 @@ def view(arm: str, proposal: str = "keep_testing", confidence: str = "medium") -
     return {"arm": arm, "proposal": proposal, "confidence": confidence, "reasoning": "kept P0-P2 +2.0 per session, CI [0.9, 3.1]."}
 
 
-ANALYSTS = ["claude-code/claude-opus-5-5", "codex/gpt-6.1-sol"]
+ANALYSTS = ["claude-code/model-a", "codex/model-b.1"]
 
 
 def synthesis_document(missing: list[dict[str, str]] | None = None, analysts: list[Any] | None = None) -> dict[str, Any]:
@@ -69,7 +69,7 @@ def write_eval_dir(
     shutil.copy(DATA / "sample.json", eval_dir / "sample.json")
     (eval_dir / "stats.json").write_text(json.dumps(stats if stats is not None else load_stats()))
     entries = load_entries()
-    for document in analysts if analysts is not None else [analyst_document("claude-code/claude-opus-5-5", entries), analyst_document("codex/gpt-6.1-sol", entries)]:
+    for document in analysts if analysts is not None else [analyst_document("claude-code/model-a", entries), analyst_document("codex/model-b.1", entries)]:
         (eval_dir / "analysts" / f"{document['analyst'].replace('/', '-')}.json").write_text(json.dumps(document))
     (eval_dir / "synthesis.json").write_text(json.dumps(synthesis if synthesis is not None else synthesis_document()))
     return eval_dir

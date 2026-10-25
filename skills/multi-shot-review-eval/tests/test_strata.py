@@ -23,12 +23,12 @@ class StrataTests(unittest.TestCase):
 
     def sessions(self):
         specs = [
-            ("a", "owner/one", "codex", "gpt-6-sol"),
-            ("a", "owner/one", "codex", "gpt-6-sol"),
-            ("a", "owner/two", "codex", "gpt-6-sol"),
-            ("b", "owner/one", "claude-code", "claude-opus-5-5"),
-            ("b", "owner/one", "codex", "gpt-6-sol"),
-            ("b", "owner/one", "codex", "gpt-6-sol"),
+            ("a", "owner/one", "codex", "model-c"),
+            ("a", "owner/one", "codex", "model-c"),
+            ("a", "owner/two", "codex", "model-c"),
+            ("b", "owner/one", "claude-code", "model-a"),
+            ("b", "owner/one", "codex", "model-c"),
+            ("b", "owner/one", "codex", "model-c"),
         ]
         for index, (variant, repo, harness, model) in enumerate(specs):
             write_session(
@@ -55,8 +55,8 @@ class StrataTests(unittest.TestCase):
         self.assertTrue(repository["owner/one"].imbalanced)
 
         models = {row.value: row for row in strata[Dimension.HARNESS_MODEL]}
-        self.assertEqual(models["codex/gpt-6-sol"].counts, {"a": 3, "b": 2})
-        self.assertEqual(models["claude-code/claude-opus-5-5"].counts, {"a": 0, "b": 1})
+        self.assertEqual(models["codex/model-c"].counts, {"a": 3, "b": 2})
+        self.assertEqual(models["claude-code/model-a"].counts, {"a": 0, "b": 1})
 
         terciles = {row.value: row for row in strata[Dimension.DIFF_SIZE]}
         self.assertEqual(sum(row.counts["a"] + row.counts["b"] for row in terciles.values()), 6)
@@ -95,22 +95,22 @@ class StrataTests(unittest.TestCase):
             self.root,
             "20261001-0000-aaaaaaaa",
             slices={
-                "core": slice_(run("r1", 1), run("r2", 2), run("r3", 3), model="gpt-6-astra"),
-                "gone": slice_(run("r4", 1), harness="claude-code", model="claude-opus-5-5", removed=True),
+                "core": slice_(run("r1", 1), run("r2", 2), run("r3", 3), model="model-d"),
+                "gone": slice_(run("r4", 1), harness="claude-code", model="model-a", removed=True),
             },
         )
         state = json.loads((directory / "_state.json").read_text())
         runs = state["slices"]["core"]["runs"]
         runs[0]["model"] = None
         runs[1]["model"] = None
-        runs[2]["model"] = "gpt-6-luna"
+        runs[2]["model"] = "model-e"
         (directory / "_state.json").write_text(json.dumps(state))
-        write_logs(directory, "r1-1-core", stderr=codex_stderr(model="gpt-6-sol"))
+        write_logs(directory, "r1-1-core", stderr=codex_stderr(model="model-c"))
         session = load_sessions(self.root)[0]
         strata = stratify({"a": [session], "b": []}, {}, {})
         values = {row.value for row in strata[Dimension.HARNESS_MODEL]}
         self.assertEqual(
-            values, {"claude-code/claude-opus-5-5+codex/default+codex/gpt-6-luna+codex/gpt-6-sol"}
+            values, {"claude-code/model-a+codex/default+codex/model-c+codex/model-e"}
         )
 
 if __name__ == "__main__":

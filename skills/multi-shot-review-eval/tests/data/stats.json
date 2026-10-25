@@ -1288,7 +1288,7 @@
     "cache": "/home/user/.cache/multi-shot-review-eval/prices.toml",
     "missing_models": [],
     "models": {
-      "gpt-6-sol": {
+      "model-c": {
         "cached_input": 0.2,
         "fetched_at": "2026-10-20",
         "input": 2.0,
@@ -2104,7 +2104,7 @@
           "a": 1.0,
           "b": 1.0
         },
-        "value": "codex/gpt-6-sol"
+        "value": "codex/model-c"
       }
     ],
     "repository": [

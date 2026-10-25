@@ -35,7 +35,7 @@ class RenderDashboardTests(unittest.TestCase):
         return Path(result["dashboard"]).read_text()
 
     def analyst(self, **kwargs: Any) -> dict[str, Any]:
-        return analyst_document("claude-code/claude-opus-5-5", self.entries, **kwargs)
+        return analyst_document("claude-code/model-a", self.entries, **kwargs)
 
     def test_result_follows_contract(self) -> None:
         code, result, _ = self.invoke(write_eval_dir(self.root))
@@ -68,13 +68,13 @@ class RenderDashboardTests(unittest.TestCase):
             ("no analysts", {"analysts": []}),
             ("synthesis proposal", {"synthesis": {"analysts": ANALYSTS, "recommendations": [view("b", proposal="ship_it")], "analysts_missing": []}}),
             ("synthesis empty", {"synthesis": {"analysts": ANALYSTS, "recommendations": [], "analysts_missing": []}}),
-            ("synthesis missing reason", {"synthesis": synthesis_document([{"analyst": "codex/gpt-6.1-sol"}])}),
-            ("synthesis missing a loaded analyst", {"synthesis": synthesis_document([{"analyst": "codex/gpt-6.1-sol", "reason": "quota"}])}),
+            ("synthesis missing reason", {"synthesis": synthesis_document([{"analyst": "codex/model-b.1"}])}),
+            ("synthesis missing a loaded analyst", {"synthesis": synthesis_document([{"analyst": "codex/model-b.1", "reason": "quota"}])}),
             ("analyst absent without a reason", {"analysts": [self.analyst()]}),
-            ("substituted analyst", {"analysts": [self.analyst(), analyst_document("codex/gpt-5", self.entries)]}),
-            ("unknown missing analyst", {"analysts": [self.analyst()], "synthesis": synthesis_document([{"analyst": "codex/gpt-6.1-sol", "reason": "quota"}, {"analyst": "codex/gpt-5", "reason": "quota"}])}),
+            ("substituted analyst", {"analysts": [self.analyst(), analyst_document("codex/model-substitute", self.entries)]}),
+            ("unknown missing analyst", {"analysts": [self.analyst()], "synthesis": synthesis_document([{"analyst": "codex/model-b.1", "reason": "quota"}, {"analyst": "codex/model-substitute", "reason": "quota"}])}),
             ("synthesis without analysts", {"synthesis": {"recommendations": [view("b")], "analysts_missing": []}}),
-            ("synthesis with one chosen analyst", {"analysts": [self.analyst()], "synthesis": synthesis_document(analysts=["claude-code/claude-opus-5-5"])}),
+            ("synthesis with one chosen analyst", {"analysts": [self.analyst()], "synthesis": synthesis_document(analysts=["claude-code/model-a"])}),
             ("synthesis with a repeated analyst", {"synthesis": synthesis_document(analysts=[*ANALYSTS, ANALYSTS[0]])}),
             ("synthesis with a blank analyst", {"synthesis": synthesis_document(analysts=[*ANALYSTS, " "])}),
             ("synthesis without the compared arm", {"synthesis": {"analysts": ANALYSTS, "recommendations": [view("b", proposal="new_variant")], "analysts_missing": []}}),
@@ -89,14 +89,14 @@ class RenderDashboardTests(unittest.TestCase):
                 self.assertTrue(err.startswith("error: "))
 
     def test_any_analysts_named_in_the_synthesis_render(self) -> None:
-        chosen = ["claude-code/claude-future-9", "codex/gpt-9-sol"]
+        chosen = ["claude-code/model-future-a", "codex/model-future-b"]
         analysts = [analyst_document(name, self.entries) for name in chosen]
         code, result, err = self.invoke(write_eval_dir(self.root, analysts=analysts, synthesis=synthesis_document(analysts=chosen)))
         self.assertEqual(code, 0, err)
         self.assertEqual(result["agreement"][0]["analysts"], chosen)
 
     def test_configured_analysts_reject_a_substituted_roster(self) -> None:
-        chosen = ["claude-code/claude-future-9", "codex/gpt-9-sol"]
+        chosen = ["claude-code/model-future-a", "codex/model-future-b"]
         stats = load_stats()
         stats["configured_analysts"] = [{"analyst": name, "effort": None} for name in ANALYSTS]
         eval_dir = write_eval_dir(
@@ -117,7 +117,7 @@ class RenderDashboardTests(unittest.TestCase):
         self.assertIn("not the configured max", err)
 
     def test_run_time_pick_rejects_one_harness(self) -> None:
-        chosen = ["codex/gpt-x", "codex/gpt-y"]
+        chosen = ["codex/model-x", "codex/model-y"]
         eval_dir = write_eval_dir(
             self.root,
             analysts=[analyst_document(name, self.entries) for name in chosen],
@@ -134,7 +134,7 @@ class RenderDashboardTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
 
     def test_one_analyst_with_a_missing_reason_renders(self) -> None:
-        missing = [{"analyst": "codex/gpt-6.1-sol", "reason": "quota exceeded"}]
+        missing = [{"analyst": "codex/model-b.1", "reason": "quota exceeded"}]
         code, result, err = self.invoke(write_eval_dir(self.root, analysts=[self.analyst()], synthesis=synthesis_document(missing)))
         self.assertEqual(code, 0, err)
         self.assertEqual(result["agreement"], [])
@@ -142,12 +142,12 @@ class RenderDashboardTests(unittest.TestCase):
 
     def test_arm_without_sampled_findings_keeps_an_accuracy_row(self) -> None:
         entries = [entry for entry in self.entries if entry["arm"] != "b"]
-        analysts = [analyst_document(name, entries) for name in ("claude-code/claude-opus-5-5", "codex/gpt-6.1-sol")]
+        analysts = [analyst_document(name, entries) for name in ("claude-code/model-a", "codex/model-b.1")]
         eval_dir = write_eval_dir(self.root, analysts=analysts)
         (eval_dir / "sample.json").write_text(json.dumps({"entries": entries, "judgeability_notes": {}}))
         code, result, err = self.invoke(eval_dir)
         self.assertEqual(code, 0, err)
-        row = result["sample_accuracy"]["b"]["codex/gpt-6.1-sol"]
+        row = result["sample_accuracy"]["b"]["codex/model-b.1"]
         self.assertEqual(row, {"kept_valid": None, "kept_n": 0, "rejected_invalid": None, "rejected_n": 0})
 
     def test_sections_in_order(self) -> None:
@@ -177,11 +177,11 @@ class RenderDashboardTests(unittest.TestCase):
 
     def test_header_reports_arms_and_prices(self) -> None:
         stats = load_stats()
-        stats["prices"].update(stale_models=["gpt-6-sol"], missing_models=["gpt-9"])
+        stats["prices"].update(stale_models=["model-c"], missing_models=["model-unpriced"])
         page = self.render(stats=stats)
         self.assertIn("baseline", page)
-        self.assertIn("older than 30 days: gpt-6-sol", page)
-        self.assertIn("gpt-9", page)
+        self.assertIn("older than 30 days: model-c", page)
+        self.assertIn("model-unpriced", page)
         self.assertIn("from https://example.test/pricing on 2026-10-20", page)
 
     def test_forest_plot(self) -> None:
@@ -221,18 +221,18 @@ class RenderDashboardTests(unittest.TestCase):
         self.assertIn("98.0%", row.group(0))
 
     def test_recommendations_label_and_missing_analysts(self) -> None:
-        missing = [{"analyst": "codex/gpt-6.1-sol", "reason": "quota exceeded"}]
+        missing = [{"analyst": "codex/model-b.1", "reason": "quota exceeded"}]
         page = self.render(analysts=[self.analyst()], synthesis=synthesis_document(missing))
         self.assertIn("Reasoning, not a verdict", page)
         self.assertIn("analysts-missing", page)
-        self.assertIn("codex/gpt-6.1-sol: quota exceeded", page)
+        self.assertIn("codex/model-b.1: quota exceeded", page)
         self.assertIn("agreement needs two", page)
 
     def test_sample_panel_shows_every_entry_and_verdict(self) -> None:
         page = self.render()
         self.assertEqual(page.count('<article class="finding'), len(self.entries))
         self.assertEqual(page.count("<details>"), len(self.entries))
-        self.assertEqual(page.count("<b>codex/gpt-6.1-sol</b>"), len(self.entries))
+        self.assertEqual(page.count("<b>codex/model-b.1</b>"), len(self.entries))
 
     def test_round_two_entries_render(self) -> None:
         eval_dir = write_eval_dir(self.root)
@@ -252,7 +252,7 @@ class RenderDashboardTests(unittest.TestCase):
     def test_reproduction_footer(self) -> None:
         page = self.render()
         footer = page[page.index('id="reproduction"'):]
-        for value in ("20261025-1200-a-vs-b", "2000", "tags:a|b", "2026-10-25T12:00:00Z", "eval_stats.py --tags a,b --seed 11 --prices /home/user/.cache/multi-shot-review-eval/prices.toml", "analysts/codex-gpt-6.1-sol.json", "synthesis.json"):
+        for value in ("20261025-1200-a-vs-b", "2000", "tags:a|b", "2026-10-25T12:00:00Z", "eval_stats.py --tags a,b --seed 11 --prices /home/user/.cache/multi-shot-review-eval/prices.toml", "analysts/codex-model-b.1.json", "synthesis.json"):
             with self.subTest(value):
                 self.assertIn(value, footer)
 

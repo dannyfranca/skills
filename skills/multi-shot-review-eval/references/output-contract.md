@@ -6,11 +6,11 @@ Use JSON with UTF-8 text. Use the lowercase values exactly as this file shows th
 
 ## Analyst file
 
-Path: `analysts/<analyst>.json`. `<analyst>` is the harness and model with `/` changed to `-`, for example `codex-gpt-x` for the analyst `codex/gpt-x`. Model names in this file are placeholders.
+Path: `analysts/<analyst>.json`. `<analyst>` is the harness and model with `/` changed to `-`, for example `codex-model-x` for the analyst `codex/model-x`. Model names in this file are placeholders.
 
 ```json
 {
-  "analyst": "codex/gpt-x",
+  "analyst": "codex/model-x",
   "effort": "high",
   "judgments": [
     {
@@ -45,7 +45,7 @@ Path: `synthesis.json`.
 
 ```json
 {
-  "analysts": ["claude-code/claude-x", "codex/gpt-x"],
+  "analysts": ["claude-code/model-y", "codex/model-x"],
   "recommendations": [
     {
       "arm": "b",
@@ -55,7 +55,7 @@ Path: `synthesis.json`.
     }
   ],
   "analysts_missing": [
-    {"analyst": "codex/gpt-x", "reason": "delegate_task and codex exec both failed: quota exceeded."}
+    {"analyst": "codex/model-x", "reason": "delegate_task and codex exec both failed: quota exceeded."}
   ]
 }
 ```

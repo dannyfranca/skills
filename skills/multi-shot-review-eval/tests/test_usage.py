@@ -18,7 +18,7 @@ from usage import UsdSource, parse_log_pair, session_usage
 TABLE = PriceTable(
     path=Path("unused.toml"),
     models={
-        "gpt-6-sol": ModelPrice(
+        "model-c": ModelPrice(
             input=2.0, cached_input=0.2, output=10.0, source="https://example.test", fetched_at=date(2026, 10, 1)
         )
     },
@@ -39,19 +39,19 @@ class PriceTableTests(unittest.TestCase):
 
     def test_fixture_cache_loads(self) -> None:
         table = load_price_table(PRICES)
-        self.assertEqual(table.models["gpt-6-sol"].fetched_at, date(2026, 10, 20))
+        self.assertEqual(table.models["model-c"].fetched_at, date(2026, 10, 20))
 
     def test_missing_cache_is_empty(self) -> None:
         self.assertEqual(load_price_table(self.path).models, {})
 
     def test_set_writes_and_refreshes_one_model(self) -> None:
         rates = ["--input", "2", "--cached-input", "0.2", "--output", "10", "--source", "https://a.test"]
-        self.assertEqual(self.set_price("gpt-6.1-sol", *rates, today=date(2026, 9, 1)), 0)
+        self.assertEqual(self.set_price("model-b.1", *rates, today=date(2026, 9, 1)), 0)
         self.assertEqual(self.set_price("claude-x", *rates, "--cache-write", "2.5"), 0)
-        self.assertEqual(self.set_price("gpt-6.1-sol", "--input", "3", *rates[2:]), 0)
+        self.assertEqual(self.set_price("model-b.1", "--input", "3", *rates[2:]), 0)
         table = load_price_table(self.path)
-        self.assertEqual(table.models["gpt-6.1-sol"].input, 3.0)
-        self.assertEqual(table.models["gpt-6.1-sol"].fetched_at, date(2026, 10, 25))
+        self.assertEqual(table.models["model-b.1"].input, 3.0)
+        self.assertEqual(table.models["model-b.1"].fetched_at, date(2026, 10, 25))
         self.assertEqual(table.models["claude-x"].cache_write, 2.5)
         self.assertEqual(table.models["claude-x"].source, "https://a.test")
 
@@ -92,12 +92,12 @@ class PriceTableTests(unittest.TestCase):
                     load_price_table(self.path)
 
     def test_total_only_tokens_use_input_rate(self) -> None:
-        self.assertAlmostEqual(TABLE.total_tokens_usd("gpt-6-sol", 1_000_000), 2.0)
+        self.assertAlmostEqual(TABLE.total_tokens_usd("model-c", 1_000_000), 2.0)
         self.assertIsNone(TABLE.total_tokens_usd("unknown", 10))
 
     def test_staleness_is_per_model(self) -> None:
-        self.assertEqual(TABLE.stale_models(["gpt-6-sol", "unknown"], date(2026, 10, 31)), [])
-        self.assertEqual(TABLE.stale_models(["gpt-6-sol", "unknown"], date(2026, 11, 1)), ["gpt-6-sol"])
+        self.assertEqual(TABLE.stale_models(["model-c", "unknown"], date(2026, 10, 31)), [])
+        self.assertEqual(TABLE.stale_models(["model-c", "unknown"], date(2026, 11, 1)), ["model-c"])
 
 
 class ParseLogTests(unittest.TestCase):
@@ -116,7 +116,7 @@ class ParseLogTests(unittest.TestCase):
         write_logs(self.dir, "judge", stdout=claude_stdout(0.25))
         usage = parse_log_pair(*self.pair("judge"), TABLE)
         self.assertEqual(usage.harness, "claude-code")
-        self.assertEqual(usage.model, "claude-opus-5-5")
+        self.assertEqual(usage.model, "model-a")
         self.assertEqual(usage.tokens, 200)
         self.assertAlmostEqual(usage.usd, 0.25)
         self.assertEqual(usage.usd_source, UsdSource.LOG)
@@ -125,13 +125,13 @@ class ParseLogTests(unittest.TestCase):
         write_logs(self.dir, "run", stdout='{"findings": []}', stderr=codex_stderr("1,000,000"))
         usage = parse_log_pair(*self.pair("run"), TABLE)
         self.assertEqual(usage.harness, "codex")
-        self.assertEqual(usage.model, "gpt-6-sol")
+        self.assertEqual(usage.model, "model-c")
         self.assertEqual(usage.tokens, 1_000_000)
         self.assertAlmostEqual(usage.usd, 2.0)
         self.assertEqual(usage.usd_source, UsdSource.PRICE_TABLE)
 
     def test_codex_without_price_keeps_tokens(self) -> None:
-        write_logs(self.dir, "run", stderr=codex_stderr("12", model="gpt-9"))
+        write_logs(self.dir, "run", stderr=codex_stderr("12", model="model-unpriced"))
         usage = parse_log_pair(*self.pair("run"), TABLE)
         self.assertEqual(usage.tokens, 12)
         self.assertIsNone(usage.usd)
@@ -152,7 +152,7 @@ class ParseLogTests(unittest.TestCase):
         self.assertEqual(usage.tokens, 300)
         self.assertFalse(usage.tokens_complete)
         self.assertEqual(usage.usd_from_price_table, 1)
-        self.assertEqual(usage.priced_models, {"gpt-6-sol"})
+        self.assertEqual(usage.priced_models, {"model-c"})
 
     def test_missing_logs_make_coverage_incomplete(self) -> None:
         write_logs(self.dir, "a", stdout=claude_stdout(0.5))
