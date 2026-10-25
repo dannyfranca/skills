@@ -10,7 +10,7 @@ from typing import Any
 
 SKILL = Path(__file__).resolve().parents[1]
 SCRIPTS = SKILL / "scripts"
-PRICES = SKILL / "references" / "prices.toml"
+PRICES = SKILL / "tests" / "data" / "prices.toml"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 

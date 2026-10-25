@@ -41,6 +41,7 @@ class SessionUsage:
     usd: float
     usd_from_price_table: int = 0
     unpriced_models: frozenset[str] = frozenset()
+    priced_models: frozenset[str] = frozenset()
     expected_logs: int = 0
 
     @property
@@ -92,6 +93,7 @@ def session_usage(session_dir: Path, prices: PriceTable, *, expected_logs: int =
         usd=sum(log.usd or 0.0 for log in logs),
         usd_from_price_table=sum(log.usd_source == UsdSource.PRICE_TABLE for log in logs),
         unpriced_models=frozenset(log.model for log in logs if log.model and log.tokens is not None and log.usd is None),
+        priced_models=frozenset(log.model for log in logs if log.model and log.usd_source == UsdSource.PRICE_TABLE),
         expected_logs=expected_logs,
     )
 

@@ -15,7 +15,7 @@ from eval_config import load_eval_config
 from eval_errors import EvalError
 from ledger import Decision, Ledger
 from metrics import METRICS, apply_margin_overrides, primary_metric
-from prices import load_price_table
+from prices import default_cache_path, load_price_table
 from sampling import SampleQuota, draw_sample
 from second_round import SAMPLE_FILE, draw_second_round, sample_document
 from session_facts import FactsCache
@@ -27,7 +27,15 @@ from timestamps import format_timestamp, parse_timestamp
 DEFAULT_SEED = 20261025
 EVALS_DIR = "_evals"
 LEDGER_FILE = "ledger.jsonl"
-PRICES_PATH = Path(__file__).resolve().parent.parent / "references" / "prices.toml"
+PRICES_NEEDED_EXIT = 3
+
+
+class PricesNeeded(Exception):
+    """USD metrics need a researched price for each model, so the run stops before it writes an eval."""
+
+    def __init__(self, prices: dict[str, Any]) -> None:
+        super().__init__("prices needed")
+        self.prices = prices
 
 
 def main(argv: list[str] | None = None, *, now: datetime | None = None) -> int:
@@ -38,6 +46,9 @@ def main(argv: list[str] | None = None, *, now: datetime | None = None) -> int:
     except EvalError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
+    except PricesNeeded as needed:
+        print(json.dumps({"prices_needed": needed.prices}, indent=2))
+        return PRICES_NEEDED_EXIT
     print(json.dumps(summary, indent=2))
     return 0
 
@@ -69,9 +80,11 @@ def _run(args: argparse.Namespace, now: datetime) -> dict[str, Any]:
         specs=apply_margin_overrides(METRICS, args.margin),
         today=now.date(),
     )
-    prices = load_price_table(PRICES_PATH)
+    prices = load_price_table(Path(args.prices).expanduser() if args.prices else default_cache_path())
     context = StatsContext(FactsCache(prices), prices, ledger, sessions_by_id)
     stats = build_stats(plan, request, context)
+    if not args.allow_unpriced and (stats["prices"]["missing_models"] or stats["prices"]["stale_models"]):
+        raise PricesNeeded({key: stats["prices"][key] for key in ("cache", "missing_models", "stale_models")})
     sample = draw_sample(
         {arm.name: arm.completed for arm in plan.arms},
         quota=SampleQuota(kept=args.sample_kept, rejected=args.sample_rejected),
@@ -164,6 +177,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--sample-rejected", type=int, default=10)
     parser.add_argument("--second-round", metavar="EVAL_ID", help="draw an extra kept-only sample for an eval")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    parser.add_argument("--prices", help=f"price cache file; default: {default_cache_path()}")
+    parser.add_argument(
+        "--allow-unpriced", action="store_true", help="write the eval when research found no price for a missing or stale model"
+    )
     parser.add_argument("--record-decision", nargs=2, metavar=("EVAL_ID", "DECISION"), help="adopt|reject|continue")
     return parser
 

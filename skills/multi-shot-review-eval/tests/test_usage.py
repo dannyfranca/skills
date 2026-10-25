@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import io
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import date
 from pathlib import Path
 
@@ -9,39 +11,93 @@ from eval_errors import EvalError
 from fixtures import PRICES, claude_stdout, codex_stderr, write_logs
 
 from prices import ModelPrice, PriceTable, load_price_table
+from prices import main as prices_main
 from usage import UsdSource, parse_log_pair, session_usage
 
 
 TABLE = PriceTable(
-    updated=date(2026, 10, 1),
-    models={"gpt-6-sol": ModelPrice(input=2.0, cached_input=0.2, output=10.0)},
+    path=Path("unused.toml"),
+    models={
+        "gpt-6-sol": ModelPrice(
+            input=2.0, cached_input=0.2, output=10.0, source="https://example.test", fetched_at=date(2026, 10, 1)
+        )
+    },
 )
 
 
 class PriceTableTests(unittest.TestCase):
-    def test_bundled_table_loads_and_covers_seed_models(self) -> None:
-        table = load_price_table(PRICES)
-        for model in ("gpt-6-sol", "gpt-6.1-sol", "claude-opus-5-5"):
-            self.assertIn(model, table.models)
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "cache" / "prices.toml"
 
-    def test_invalid_rates_fail_to_load(self) -> None:
-        for field, rate in (("input", "nan"), ("output", "inf"), ("cached_input", "-0.5"), ("cache_write", "-inf")):
-            with self.subTest(field=field, rate=rate), tempfile.TemporaryDirectory() as tmp:
-                rates = {"input": "1.0", "cached_input": "0.1", "output": "5.0", field: rate}
-                path = Path(tmp) / "prices.toml"
-                path.write_text(
-                    'updated = 2026-10-01\n[models."m"]\n' + "".join(f"{key} = {value}\n" for key, value in rates.items())
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def set_price(self, *args: str, today: date = date(2026, 10, 25)) -> int:
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            return prices_main(["--cache", str(self.path), "set", *args], today=today)
+
+    def test_fixture_cache_loads(self) -> None:
+        table = load_price_table(PRICES)
+        self.assertEqual(table.models["gpt-6-sol"].fetched_at, date(2026, 10, 20))
+
+    def test_missing_cache_is_empty(self) -> None:
+        self.assertEqual(load_price_table(self.path).models, {})
+
+    def test_set_writes_and_refreshes_one_model(self) -> None:
+        rates = ["--input", "2", "--cached-input", "0.2", "--output", "10", "--source", "https://a.test"]
+        self.assertEqual(self.set_price("gpt-6.1-sol", *rates, today=date(2026, 9, 1)), 0)
+        self.assertEqual(self.set_price("claude-x", *rates, "--cache-write", "2.5"), 0)
+        self.assertEqual(self.set_price("gpt-6.1-sol", "--input", "3", *rates[2:]), 0)
+        table = load_price_table(self.path)
+        self.assertEqual(table.models["gpt-6.1-sol"].input, 3.0)
+        self.assertEqual(table.models["gpt-6.1-sol"].fetched_at, date(2026, 10, 25))
+        self.assertEqual(table.models["claude-x"].cache_write, 2.5)
+        self.assertEqual(table.models["claude-x"].source, "https://a.test")
+
+    def test_set_rejects_invalid_rates(self) -> None:
+        for field, rate in (("--input", "nan"), ("--output", "inf"), ("--cached-input", "-0.5"), ("--cache-write", "-1")):
+            with self.subTest(field=field):
+                rates = {"--input": "1", "--cached-input": "0.1", "--output": "5", field: rate}
+                args = [item for pair in rates.items() for item in pair]
+                self.assertEqual(self.set_price("m", *args, "--source", "https://a.test"), 2)
+                self.assertFalse(self.path.exists())
+
+    def test_entry_needs_source_and_date(self) -> None:
+        self.path.parent.mkdir(parents=True)
+        for extra in (
+            'fetched_at = 2026-10-01\n',
+            'source = "https://a.test"\n',
+            'source = "https://a.test"\nfetched_at = 2026-10-01T00:00:00Z\n',
+        ):
+            with self.subTest(extra=extra):
+                self.path.write_text('[models."m"]\ninput = 1.0\ncached_input = 0.1\noutput = 5.0\n' + extra)
+                with self.assertRaises(EvalError):
+                    load_price_table(self.path)
+
+    def test_set_reports_unwritable_cache(self) -> None:
+        self.path.parent.write_text("a file, not a directory")
+        args = ["--input", "1", "--cached-input", "0.1", "--output", "5", "--source", "https://a.test"]
+        self.assertEqual(self.set_price("m", *args), 2)
+
+    def test_cache_rates_must_be_numbers(self) -> None:
+        self.path.parent.mkdir(parents=True)
+        for rate in ("true", '"1.5"', "1" + "0" * 400):
+            with self.subTest(rate=rate):
+                self.path.write_text(
+                    f'[models."m"]\ninput = {rate}\ncached_input = 0.1\noutput = 5.0\n'
+                    'source = "https://a.test"\nfetched_at = 2026-10-01\n'
                 )
                 with self.assertRaises(EvalError):
-                    load_price_table(path)
+                    load_price_table(self.path)
 
     def test_total_only_tokens_use_input_rate(self) -> None:
         self.assertAlmostEqual(TABLE.total_tokens_usd("gpt-6-sol", 1_000_000), 2.0)
         self.assertIsNone(TABLE.total_tokens_usd("unknown", 10))
 
-    def test_staleness(self) -> None:
-        self.assertFalse(TABLE.is_stale(date(2026, 10, 31)))
-        self.assertTrue(TABLE.is_stale(date(2026, 11, 1)))
+    def test_staleness_is_per_model(self) -> None:
+        self.assertEqual(TABLE.stale_models(["gpt-6-sol", "unknown"], date(2026, 10, 31)), [])
+        self.assertEqual(TABLE.stale_models(["gpt-6-sol", "unknown"], date(2026, 11, 1)), ["gpt-6-sol"])
 
 
 class ParseLogTests(unittest.TestCase):
@@ -96,6 +152,7 @@ class ParseLogTests(unittest.TestCase):
         self.assertEqual(usage.tokens, 300)
         self.assertFalse(usage.tokens_complete)
         self.assertEqual(usage.usd_from_price_table, 1)
+        self.assertEqual(usage.priced_models, {"gpt-6-sol"})
 
     def test_missing_logs_make_coverage_incomplete(self) -> None:
         write_logs(self.dir, "a", stdout=claude_stdout(0.5))

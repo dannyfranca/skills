@@ -8,7 +8,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fixtures import claude_stdout, codex_stderr, finding, run, slice_, write_logs, write_session
+from fixtures import PRICES, claude_stdout, codex_stderr, finding, run, slice_, write_logs, write_session
 
 from eval_stats import main
 
@@ -31,6 +31,7 @@ class EvalStatsCliTests(unittest.TestCase):
         self.reviews = base / "reviews"
         self.config = base / "msr.toml"
         self.config.write_text("[variants]\ndefault = 0\na = 1\nb = 1\n[variant.a]\n[variant.b]\n")
+        self.sessions: list[Path] = []
         for index in range(12):
             variant = "a" if index % 2 == 0 else "b"
             kept = 3 if variant == "a" else 5
@@ -44,17 +45,48 @@ class EvalStatsCliTests(unittest.TestCase):
                 slices={"core": slice_(run(f"r{index}", findings=findings, start=index * 10 + 1))},
                 history_end=index * 10 + 5,
             )
+            self.sessions.append(directory)
             write_logs(directory, f"r{index}-1-core", stderr=codex_stderr("1,000"))
             write_logs(directory, f"judge-{index}", stdout=claude_stdout(0.1))
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def invoke(self, *args: str) -> tuple[int, dict]:
+    def invoke(self, *args: str, prices: Path = PRICES, now: datetime = NOW) -> tuple[int, dict]:
         out = io.StringIO()
+        base = ["--review-root", str(self.reviews), "--config", str(self.config), "--prices", str(prices)]
         with redirect_stdout(out), redirect_stderr(io.StringIO()):
-            code = main(["--review-root", str(self.reviews), "--config", str(self.config), *args], now=NOW)
+            code = main([*base, *args], now=now)
         return code, json.loads(out.getvalue()) if out.getvalue() else {}
+
+    def test_missing_price_stops_before_writing(self) -> None:
+        cache = Path(self.tmp.name) / "none.toml"
+        code, out = self.invoke("--seed", "11", prices=cache)
+        self.assertEqual(code, 3)
+        self.assertEqual(out["prices_needed"], {"cache": str(cache), "missing_models": ["gpt-6-sol"], "stale_models": []})
+        self.assertFalse((self.reviews / "_evals").exists())
+
+    def test_stale_price_stops_before_writing(self) -> None:
+        code, out = self.invoke("--seed", "11", now=datetime(2026, 12, 1, tzinfo=timezone.utc))
+        self.assertEqual(code, 3)
+        self.assertEqual(out["prices_needed"]["stale_models"], ["gpt-6-sol"])
+        self.assertFalse((self.reviews / "_evals").exists())
+
+    def test_pooled_sessions_need_prices(self) -> None:
+        code, _ = self.invoke("--seed", "11", "--until", "2026-10-01T00:55:00Z")
+        self.assertEqual(code, 0)
+        for index, directory in enumerate(self.sessions[:6]):
+            write_logs(directory, f"r{index}-1-core", stderr=codex_stderr("1,000", model="gpt-7-earlier"))
+        code, out = self.invoke("--seed", "11", "--since", "2026-10-01T00:58:00Z")
+        self.assertEqual(code, 3)
+        self.assertEqual(out["prices_needed"]["missing_models"], ["gpt-7-earlier"])
+
+    def test_allow_unpriced_writes_the_gap(self) -> None:
+        code, out = self.invoke("--seed", "11", "--allow-unpriced", prices=Path(self.tmp.name) / "none.toml")
+        self.assertEqual(code, 0)
+        stats = json.loads((Path(out["eval_dir"]) / "stats.json").read_text())
+        self.assertEqual(stats["prices"]["missing_models"], ["gpt-6-sol"])
+        self.assertEqual(stats["prices"]["models"], {})
 
     def test_missing_invocation_logs_leave_usd_uncovered(self) -> None:
         for log in self.reviews.glob("*/*/*/_logs/judge-*"):
@@ -86,6 +118,8 @@ class EvalStatsCliTests(unittest.TestCase):
         self.assertEqual(stratum["n"], {"a": 5, "b": 5})
         self.assertAlmostEqual(stratum["diff"]["b"], 2.0)
         self.assertTrue(stats["prices"]["assumptions"])
+        self.assertEqual(stats["prices"]["models"]["gpt-6-sol"]["fetched_at"], "2026-10-20")
+        self.assertEqual(stats["prices"]["stale_models"], [])
         self.assertEqual(stats["pooled"]["eval_ids"], [])
         rows = stats["session_rows"]["b"]
         self.assertEqual(len(rows), 5)

@@ -64,7 +64,8 @@ def build_stats(plan: ArmPlan, request: StatsRequest, context: StatsContext) -> 
         },
         "pooled": _pooled(plan, request, context),
         "adopted_gains": context.ledger.adopted_gains(primary),
-        "prices": _prices(arm_facts, context.prices, request.today),
+        # After "pooled", so the cache also holds the earlier sessions that the pooled contrasts price.
+        "prices": _prices(context.facts.collected(), context.prices, request.today),
     }
     stats["second_round_offer"] = second_round_offer(stats)
     return stats
@@ -186,12 +187,14 @@ def _pooled(plan: ArmPlan, request: StatsRequest, context: StatsContext) -> dict
     }
 
 
-def _prices(arm_facts: Mapping[str, Sequence[SessionFacts]], prices: PriceTable, today: date) -> dict[str, Any]:
-    missing = sorted({model for facts in arm_facts.values() for f in facts if f.usage for model in f.usage.unpriced_models})
+def _prices(facts: Sequence[SessionFacts], prices: PriceTable, today: date) -> dict[str, Any]:
+    usages = [f.usage for f in facts if f.usage]
+    priced = sorted({model for usage in usages for model in usage.priced_models})
     return {
-        "updated": prices.updated.isoformat(),
-        "stale": prices.is_stale(today),
-        "missing_models": missing,
+        "cache": str(prices.path),
+        "models": {model: prices.models[model].record() for model in priced},
+        "missing_models": sorted({model for usage in usages for model in usage.unpriced_models}),
+        "stale_models": prices.stale_models(priced, today),
         "assumptions": [TOTAL_TOKENS_ASSUMPTION],
     }
 

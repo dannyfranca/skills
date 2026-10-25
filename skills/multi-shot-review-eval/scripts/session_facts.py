@@ -33,6 +33,9 @@ class FactsCache:
             self._facts[session.id] = self._collect(session)
         return self._facts[session.id]
 
+    def collected(self) -> list[SessionFacts]:
+        return list(self._facts.values())
+
     def _collect(self, session: Session) -> SessionFacts:
         if not session.completed:
             return SessionFacts(
