@@ -93,8 +93,8 @@ independent repeat of every slice or a changed target.
 
 ### Barrier
 
-Fix validated findings and add focused regression tests where they materially reduce risk. Ignore
-one rejected finding by ID with an immutable reason:
+Fix validated findings within the task scope and add focused regression tests where they materially
+reduce risk. Push back on the rest: ignore one rejected finding by ID with an immutable reason:
 
 ```bash
 python3 "$SKILL_DIR/scripts/ignore_finding.py" \
