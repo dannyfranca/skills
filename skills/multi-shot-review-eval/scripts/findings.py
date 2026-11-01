@@ -19,6 +19,7 @@ class FindingClass(StrEnum):
 
 # P0 counts with P1 and P2 so that a variant cannot gain by downgrading severity; a P0 is never worth less than a P1.
 QUALITY_SEVERITIES = frozenset({"P0", "P1", "P2"})
+DEFAULT_LANE = "default"
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,8 @@ class Finding:
     location: str
     report_path: str | None
     finding_class: FindingClass
+    lane: str = DEFAULT_LANE
+    grouped_into: str | None = None
 
 
 def classify(raw: dict[str, Any]) -> FindingClass:
@@ -74,6 +77,10 @@ def load_findings(session: Session) -> SessionFindings:
     return SessionFindings(findings=tuple(findings), missing_runs=tuple(missing))
 
 
+def run_lanes(session: Session) -> set[str]:
+    return {_lane(run) for slice_state in session.slices.values() for run in slice_state.get("runs") or []}
+
+
 def session_findings(session: Session) -> Iterator[Finding]:
     yield from load_findings(session).findings
 
@@ -97,7 +104,30 @@ def _finding(
         location=_location(raw.get("location")),
         report_path=run.get("output_file"),
         finding_class=finding_class,
+        lane=_lane(run),
+        grouped_into=_grouped_into(raw),
     )
+
+
+def _lane(run: dict[str, Any]) -> str:
+    """Runs written before reviewer lanes carry no label; their review profile names the one lane they ran in."""
+
+    if run.get("lane"):
+        return str(run["lane"])
+    harness, model, reasoning = run.get("harness"), run.get("model"), run.get("reasoning")
+    if not harness:
+        return DEFAULT_LANE
+    if reasoning:
+        return f"{harness}:{model or ''}:{reasoning}"
+    return f"{harness}:{model}" if model else str(harness)
+
+
+def _grouped_into(raw: dict[str, Any]) -> str | None:
+    # A parent dedupe can join reports from different passes, so only same-wave automatic groups share lane credit.
+    resolution = raw.get("resolution") or {}
+    if resolution.get("kind") == "duplicate" and resolution.get("auto") and resolution.get("finding_id"):
+        return str(resolution["finding_id"])
+    return None
 
 
 def _run_findings(session: Session, run: dict[str, Any]) -> list[dict[str, Any]] | None:
