@@ -177,7 +177,7 @@ class RenderDashboardTests(unittest.TestCase):
 
     def test_sections_in_order(self) -> None:
         page = self.render()
-        markers = ["<header>", 'id="recommendations"', 'id="forest"', 'id="trend"', 'id="strata"', 'id="worsening"', 'id="finding-sample"', 'id="analysts"', 'id="reproduction"']
+        markers = ["<header>", 'id="recommendations"', 'id="forest"', 'id="trend"', 'id="strata"', 'id="lanes"', 'id="worsening"', 'id="finding-sample"', 'id="analysts"', 'id="reproduction"']
         positions = [page.index(marker) for marker in markers]
         self.assertEqual(positions, sorted(positions))
 
@@ -238,6 +238,20 @@ class RenderDashboardTests(unittest.TestCase):
         self.assertIsNotNone(row)
         self.assertIn("owner/solo", row.group(0))
         self.assertEqual(page.count('<tr class="imbalanced">'), 1)
+
+    def test_lanes_list_each_arm_lane(self) -> None:
+        page = self.render()
+        lanes = page[page.index('id="lanes"') : page.index('id="worsening"')]
+        self.assertIn("<td>a</td><td>codex:model-c</td><td>12</td><td>9</td><td>3</td><td>8</td><td>40.0%</td>", lanes)
+        self.assertIn("claude-code:model-a", lanes)
+        self.assertNotIn("<td>b</td>", lanes)
+
+    def test_stats_without_lanes_render(self) -> None:
+        stats = load_stats()
+        for summary in stats["arms"].values():
+            summary.pop("lanes", None)
+        page = self.render(stats=stats)
+        self.assertIn("No lane data.", page)
 
     def test_worsening_listed(self) -> None:
         page = self.render()

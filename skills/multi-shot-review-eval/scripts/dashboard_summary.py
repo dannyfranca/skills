@@ -85,6 +85,35 @@ def strata(stats: Mapping[str, Any]) -> str:
     return section("strata", "Strata", "".join(parts))
 
 
+def lanes(stats: Mapping[str, Any]) -> str:
+    rows = [
+        [
+            text(arm),
+            text(lane),
+            number(counts["kept"]),
+            number(counts["unique"]),
+            number(counts["shared"]),
+            number(counts["rejected"]),
+            share(counts["rejection_rate"]),
+        ]
+        for arm, summary in stats["arms"].items()
+        # Evals written before lane metrics have no lanes; their dashboards still render.
+        for lane, counts in (summary.get("lanes") or {}).items()
+    ]
+    if not rows:
+        return section("lanes", "Reviewer lanes", "<p>No lane data.</p>")
+    note = (
+        "<p>Completed sessions with all findings. A duplicate group counts one time for each lane that reported it."
+        " Unique: only this lane reported the kept finding. Shared: other lanes reported it too."
+        " Rejection rate: rejected / (kept + rejected).</p>"
+    )
+    return section(
+        "lanes",
+        "Reviewer lanes",
+        note + table(["arm", "lane", "kept", "unique", "shared", "rejected", "rejection rate"], rows),
+    )
+
+
 def worsening(stats: Mapping[str, Any]) -> str:
     flags = stats["worsening"]
     if flags:
