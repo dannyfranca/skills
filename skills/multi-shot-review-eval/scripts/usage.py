@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,8 @@ HEAD_BYTES = 4096
 TAIL_BYTES = 8192
 CODEX_MODEL_RE = re.compile(r"^model: (\S+)$", re.MULTILINE)
 CODEX_TOKENS_RE = re.compile(r"tokens used\s*\n\s*([\d,]+)")
+NAMED_KINDS = ("classifier", "judge", "dedupe")
+RUN_KIND = "run"
 
 
 class UsdSource(StrEnum):
@@ -33,6 +36,19 @@ class LogUsage:
 
 
 @dataclass(frozen=True)
+class ExpectedLogs:
+    """The log pairs that a session's children wrote.
+
+    Each kind is checked on its own, so a surplus log of one kind cannot stand in for a missing log of another.
+    """
+
+    run_ids: frozenset[str] = frozenset()
+    classifiers: int = 0
+    judges: int = 0
+    dedupes: int = 0
+
+
+@dataclass(frozen=True)
 class SessionUsage:
     logs: int
     logs_with_tokens: int
@@ -42,7 +58,9 @@ class SessionUsage:
     usd_from_price_table: int = 0
     unpriced_models: frozenset[str] = frozenset()
     priced_models: frozenset[str] = frozenset()
-    expected_logs: int = 0
+    missing_logs: int = 0
+    by_run: Mapping[str, LogUsage] = field(default_factory=dict)
+    dedupe: tuple[LogUsage, ...] = ()
 
     @property
     def tokens_complete(self) -> bool:
@@ -54,7 +72,7 @@ class SessionUsage:
 
     @property
     def _all_logs_present(self) -> bool:
-        return self.logs > 0 and self.logs >= self.expected_logs
+        return self.logs > 0 and self.missing_logs == 0
 
 
 def parse_log_pair(stdout: Path, stderr: Path, prices: PriceTable) -> LogUsage:
@@ -80,11 +98,21 @@ def parse_log_pair(stdout: Path, stderr: Path, prices: PriceTable) -> LogUsage:
     )
 
 
-def session_usage(session_dir: Path, prices: PriceTable, *, expected_logs: int = 0) -> SessionUsage:
-    logs = [
-        parse_log_pair(stdout, stdout.with_name(stdout.name.removesuffix(".stdout.log") + ".stderr.log"), prices)
-        for stdout in sorted((session_dir / "_logs").glob("*.stdout.log"))
-    ]
+def session_usage(session_dir: Path, prices: PriceTable, *, expected: ExpectedLogs = ExpectedLogs()) -> SessionUsage:
+    by_kind: dict[str, list[tuple[str, LogUsage]]] = {kind: [] for kind in (*NAMED_KINDS, RUN_KIND)}
+    for stdout in sorted((session_dir / "_logs").glob("*.stdout.log")):
+        stem = stdout.name.removesuffix(".stdout.log")
+        usage = parse_log_pair(stdout, stdout.with_name(f"{stem}.stderr.log"), prices)
+        by_kind[_log_kind(stem)].append((stem, usage))
+    # Run logs are named `<run id>-<pass>-<slice>`, and run ids hold no dash.
+    by_run = {stem.split("-", 1)[0]: usage for stem, usage in by_kind[RUN_KIND]}
+    missing = (
+        len(expected.run_ids - by_run.keys())
+        + max(0, expected.classifiers - len(by_kind["classifier"]))
+        + max(0, expected.judges - len(by_kind["judge"]))
+        + max(0, expected.dedupes - len(by_kind["dedupe"]))
+    )
+    logs = [usage for items in by_kind.values() for _stem, usage in items]
     return SessionUsage(
         logs=len(logs),
         logs_with_tokens=sum(log.tokens is not None for log in logs),
@@ -94,8 +122,14 @@ def session_usage(session_dir: Path, prices: PriceTable, *, expected_logs: int =
         usd_from_price_table=sum(log.usd_source == UsdSource.PRICE_TABLE for log in logs),
         unpriced_models=frozenset(log.model for log in logs if log.model and log.tokens is not None and log.usd is None),
         priced_models=frozenset(log.model for log in logs if log.model and log.usd_source == UsdSource.PRICE_TABLE),
-        expected_logs=expected_logs,
+        missing_logs=missing,
+        by_run=by_run,
+        dedupe=tuple(usage for _stem, usage in by_kind["dedupe"]),
     )
+
+
+def _log_kind(stem: str) -> str:
+    return next((kind for kind in NAMED_KINDS if stem.startswith(f"{kind}-")), RUN_KIND)
 
 
 def log_model(stdout: Path, stderr: Path) -> str | None:

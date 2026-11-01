@@ -8,14 +8,15 @@ from typing import Any
 
 from arms import ArmPlan
 from contrast_stats import arm_summary, contrast
-from lane_metrics import merge_lane_counts
 from ledger import EvalRecord, Ledger
 from metrics import MetricSpec, Ratio, primary_metric
 from prices import TOTAL_TOKENS_ASSUMPTION, PriceTable
 from second_round import second_round_offer
 from session_facts import FactsCache, SessionFacts
 from session_store import Session
+from setting_metrics import DedupeCounts, JudgeCounts, ShotYield
 from strata import stratify
+from tally import merge_tallies
 from timestamps import format_timestamp
 
 
@@ -126,6 +127,8 @@ def _values(facts: Sequence[SessionFacts], metric: str) -> list:
 def _arm_section(name: str, facts: Sequence[SessionFacts], request: StatsRequest) -> dict[str, Any]:
     completed = [f for f in facts if f.session.completed]
     usages = [f.usage for f in completed if f.usage is not None]
+    # Setting tallies read findings, so they cover the same sessions as the quality metrics.
+    measured = [f for f in completed if f.findings_complete]
     classes: Counter[str] = Counter()
     for f in completed:
         classes.update(f.finding_classes)
@@ -142,7 +145,11 @@ def _arm_section(name: str, facts: Sequence[SessionFacts], request: StatsRequest
         "sessions_with_diff_size": sum(f.diff_size is not None for f in completed),
         "sessions_missing_findings": sum(not f.findings_complete for f in completed),
         "finding_classes": dict(sorted(classes.items())),
-        "lanes": {lane: counts.as_dict() for lane, counts in merge_lane_counts(f.lanes for f in completed).items()},
+        "lanes": {lane: counts.as_dict() for lane, counts in merge_tallies(f.lanes for f in measured).items()},
+        "shots": sum((f.shots for f in measured), ShotYield()).as_dict(),
+        "dedupe": asdict(sum((f.dedupe for f in measured), DedupeCounts())),
+        "judge": sum((f.judge for f in measured), JudgeCounts()).as_dict(),
+        "severity": {severity: asdict(counts) for severity, counts in merge_tallies(f.severity for f in measured).items()},
         "metrics": {
             spec.name: asdict(
                 arm_summary(_values(facts, spec.name), seed=request.seed, resamples=RESAMPLES, key=f"arm:{name}:{spec.name}")

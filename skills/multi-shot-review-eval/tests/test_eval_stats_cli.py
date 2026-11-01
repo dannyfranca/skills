@@ -37,17 +37,28 @@ class EvalStatsCliTests(unittest.TestCase):
             kept = 3 if variant == "a" else 5
             findings = [finding(f"k{index}-{n}", "P1" if n % 2 else "P2") for n in range(kept)]
             findings += [finding(f"x{index}-{n}", outcome="rejected") for n in range(2)]
+            runs = [run(f"r{index}", findings=findings, start=index * 10 + 1)]
+            judged: tuple[tuple[int, str], ...] = ()
+            if index == 2:
+                # P3 keeps the primary metric unchanged while the extra shot and the judge get real values.
+                runs.append({**run(f"s{index}", 2, findings=[finding(f"e{index}", "P3")], start=index * 10 + 3), "shot": 2})
+                judged = ((1, "continue"),)
             directory = write_session(
                 self.reviews,
                 f"20261001-{index:04d}-{index:08x}",
                 variant=variant,
                 created=index * 10,
-                slices={"core": slice_(run(f"r{index}", findings=findings, start=index * 10 + 1))},
+                slices={"core": slice_(*runs, judged=judged)},
                 history_end=index * 10 + 5,
+                events=[{"event": "dedupe_completed", "at": "2026-10-01T00:00:00Z", "duplicates": 2}] if index == 2 else None,
             )
             self.sessions.append(directory)
             write_logs(directory, f"r{index}-1-core", stderr=codex_stderr("1,000"))
-            write_logs(directory, f"judge-{index}", stdout=claude_stdout(0.1))
+            write_logs(directory, f"classifier-{index}", stdout=claude_stdout(0.1))
+            if index == 2:
+                write_logs(directory, "dedupe-20261001T000000Z-1-core-abc123", stdout=claude_stdout(0.05))
+                write_logs(directory, f"s{index}-2-core", stderr=codex_stderr("1,000"))
+                write_logs(directory, f"judge-{index}", stdout=claude_stdout(0.05))
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -90,7 +101,7 @@ class EvalStatsCliTests(unittest.TestCase):
         self.assertEqual(stats["prices"]["models"], {})
 
     def test_missing_invocation_logs_leave_usd_uncovered(self) -> None:
-        for log in self.reviews.glob("*/*/*/_logs/judge-*"):
+        for log in self.reviews.glob("*/*/*/_logs/classifier-*"):
             log.unlink()
         _, summary = self.invoke("--seed", "11")
         stats = json.loads((Path(summary["eval_dir"]) / "stats.json").read_text())
@@ -143,13 +154,32 @@ class EvalStatsCliTests(unittest.TestCase):
         self.assertEqual(stats["arms"]["b"]["sessions_missing_findings"], 0)
         self.assertEqual(
             stats["arms"]["a"]["lanes"],
-            {"codex:model-c": {"kept": 15, "unique": 15, "shared": 0, "rejected": 10, "rejection_rate": 0.4}},
+            {
+                "codex:model-c": {
+                    "kept": 16,
+                    "unique": 16,
+                    "shared": 0,
+                    "rejected": 10,
+                    "rejection_rate": 10 / 26,
+                    "tokens": 6000,
+                    "usd": 0.012,
+                    "kept_per_usd": 16 / 0.012,
+                    "unique_per_usd": 16 / 0.012,
+                }
+            },
         )
+        self.assertEqual(stats["arms"]["a"]["shots"], {"by_shot": {"1": {"runs": 5, "kept": 15, "rejected": 10}, "2": {"runs": 1, "kept": 1, "rejected": 0}}, "extra_only_kept": 1})
+        self.assertEqual(stats["arms"]["a"]["dedupe"], {"runs": 1, "failed": 0, "merged": 2, "tokens": 200, "usd": 0.05})
+        self.assertEqual(stats["arms"]["a"]["judge"], {"continue": 1, "stop": 0, "continue_with_kept": 1, "kept_after_continue": 1})
+        self.assertEqual(stats["arms"]["a"]["severity"]["P1"], {"kept": 5, "rejected": 0})
+        self.assertEqual(stats["arms"]["a"]["severity"]["P3"], {"kept": 1, "rejected": 0})
+        self.assertIn("kept_p0_p2_per_usd", stats["arms"]["a"]["metrics"])
+        self.assertIn("diff", stats["contrasts"]["b"]["kept_p0_p2_per_usd"])
         self.assertEqual(summary["second_round_offer"], stats["second_round_offer"])
         self.assertIn("offer", stats["second_round_offer"]["b"])
 
         sample = json.loads((eval_dir / "sample.json").read_text())
-        self.assertEqual(len([e for e in sample["entries"] if e["arm"] == "a" and e["finding_class"] == "kept"]), 15)
+        self.assertEqual(len([e for e in sample["entries"] if e["arm"] == "a" and e["finding_class"] == "kept"]), 16)
         self.assertEqual(len([e for e in sample["entries"] if e["finding_class"] == "rejected"]), 20)
         self.assertIn("approximate", sample["judgeability_notes"])
 

@@ -12,7 +12,7 @@ from fixtures import PRICES, claude_stdout, codex_stderr, write_logs
 
 from prices import ModelPrice, PriceTable, load_price_table
 from prices import main as prices_main
-from usage import UsdSource, parse_log_pair, session_usage
+from usage import ExpectedLogs, UsdSource, parse_log_pair, session_usage
 
 
 TABLE = PriceTable(
@@ -155,12 +155,31 @@ class ParseLogTests(unittest.TestCase):
         self.assertEqual(usage.priced_models, {"model-c"})
 
     def test_missing_logs_make_coverage_incomplete(self) -> None:
-        write_logs(self.dir, "a", stdout=claude_stdout(0.5))
-        self.assertTrue(session_usage(self.dir, TABLE, expected_logs=1).usd_complete)
-        usage = session_usage(self.dir, TABLE, expected_logs=2)
-        self.assertEqual(usage.expected_logs, 2)
+        write_logs(self.dir, "r1-1-core", stdout=claude_stdout(0.5))
+        self.assertTrue(session_usage(self.dir, TABLE, expected=ExpectedLogs(run_ids=frozenset({"r1"}))).usd_complete)
+        usage = session_usage(self.dir, TABLE, expected=ExpectedLogs(run_ids=frozenset({"r1"}), judges=1))
+        self.assertEqual(usage.missing_logs, 1)
         self.assertFalse(usage.tokens_complete)
         self.assertFalse(usage.usd_complete)
+
+    def test_dedupe_log_does_not_hide_missing_run_log(self) -> None:
+        write_logs(self.dir, "r1-1-core", stdout=claude_stdout(0.5))
+        write_logs(self.dir, "dedupe-20261001T000000Z-1-core-abc123", stdout=claude_stdout(0.1))
+        usage = session_usage(self.dir, TABLE, expected=ExpectedLogs(run_ids=frozenset({"r1", "r2"})))
+        self.assertEqual(usage.logs, 2)
+        self.assertEqual(usage.missing_logs, 1)
+        self.assertFalse(usage.tokens_complete)
+        self.assertFalse(usage.usd_complete)
+
+    def test_logs_are_split_by_kind(self) -> None:
+        write_logs(self.dir, "r1-1-core", stdout=claude_stdout(0.5))
+        write_logs(self.dir, "dedupe-20261001T000000Z-1-core-abc123", stdout=claude_stdout(0.1))
+        write_logs(self.dir, "classifier-c1", stdout=claude_stdout(0.2))
+        usage = session_usage(self.dir, TABLE, expected=ExpectedLogs(run_ids=frozenset({"r1"}), classifiers=1, dedupes=1))
+        self.assertEqual(set(usage.by_run), {"r1"})
+        self.assertEqual(usage.by_run["r1"].usd, 0.5)
+        self.assertEqual([log.usd for log in usage.dedupe], [0.1])
+        self.assertTrue(usage.usd_complete)
 
     def test_session_without_logs_has_no_coverage(self) -> None:
         usage = session_usage(self.dir, TABLE)

@@ -37,6 +37,7 @@ class Finding:
     finding_class: FindingClass
     lane: str = DEFAULT_LANE
     grouped_into: str | None = None
+    shot: int = 1
 
 
 def classify(raw: dict[str, Any]) -> FindingClass:
@@ -77,8 +78,9 @@ def load_findings(session: Session) -> SessionFindings:
     return SessionFindings(findings=tuple(findings), missing_runs=tuple(missing))
 
 
-def run_lanes(session: Session) -> set[str]:
-    return {_lane(run) for slice_state in session.slices.values() for run in slice_state.get("runs") or []}
+def session_runs(session: Session) -> Iterator[dict[str, Any]]:
+    for slice_state in session.slices.values():
+        yield from slice_state.get("runs") or []
 
 
 def session_findings(session: Session) -> Iterator[Finding]:
@@ -104,12 +106,13 @@ def _finding(
         location=_location(raw.get("location")),
         report_path=run.get("output_file"),
         finding_class=finding_class,
-        lane=_lane(run),
+        lane=run_lane(run),
         grouped_into=_grouped_into(raw),
+        shot=int(run.get("shot") or 1),
     )
 
 
-def _lane(run: dict[str, Any]) -> str:
+def run_lane(run: dict[str, Any]) -> str:
     """Runs written before reviewer lanes carry no label; their review profile names the one lane they ran in."""
 
     if run.get("lane"):
