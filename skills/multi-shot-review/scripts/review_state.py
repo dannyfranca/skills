@@ -16,7 +16,8 @@ import sys
 import tempfile
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import Counter
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, as_completed, wait
 from contextlib import AbstractContextManager
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
@@ -30,11 +31,14 @@ from target_size import measure_target_size
 if TYPE_CHECKING:
     from review_config import ReviewConfig, ReviewerLane
 from review_result import (
+    DEDUPE_SCHEMA_PATH,
     JUDGE_SCHEMA_PATH,
+    MODEL_DUPLICATE,
     RESULT_SCHEMA_VERSION,
     RESULT_SCHEMA_PATH,
     ReviewResultError,
     assign_finding_ids,
+    parse_dedupe_groups,
     parse_judge_verdict,
     parse_review_result,
     render_review_failure_markdown,
@@ -719,6 +723,19 @@ class JudgeExecution:
     definition_version: int = 1
     verdict: str | None = None
     reason: str | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class DedupeExecution:
+    slice_name: str
+    pass_number: int
+    definition_version: int
+    output_file: Path
+    stdout_log: Path
+    stderr_log: Path
+    returncode: int | None
+    groups: list[list[str]] | None = None
     error: str | None = None
 
 
@@ -2041,12 +2058,12 @@ class ReviewState:
             self._refresh_completed()
             return True
         item_snapshot = copy.deepcopy(item)
-        demoted_siblings: list[dict[str, Any]] = []
+        touched_siblings: list[dict[str, Any]] = []
         if status == "findings":
             findings = assign_finding_ids(findings or [], used_ids=self._finding_ids())
             if not findings:
                 raise ReviewStateError("finding run must contain at least one finding")
-            demoted_siblings = self._mark_auto_duplicates(slice_name, item, run, findings)
+            touched_siblings = self._mark_auto_duplicates(slice_name, item, run, findings)
         elif status == "no_findings":
             findings = []
         elif status not in {"failed", "timeout"}:
@@ -2067,14 +2084,8 @@ class ReviewState:
                     run["classification"] = "auto_duplicates"
                     self._archive_and_render_run(slice_name, run)
                 else:
-                    self._render_run_findings(run)
-                for sibling in demoted_siblings:
-                    if self._all_findings_terminal(sibling):
-                        sibling["status"] = "ignored"
-                        sibling["classification"] = "auto_duplicates"
-                        self._archive_and_render_run(slice_name, sibling)
-                    else:
-                        self._render_run_findings(sibling)
+                    self._render_run_findings(slice_name, run)
+                self._render_auto_duplicate_runs(slice_name, touched_siblings)
                 self._supersede_prior_findings(slice_name, item, run)
             except (OSError, UnicodeError) as exc:
                 item.clear()
@@ -2143,6 +2154,15 @@ class ReviewState:
     def _run_lane_label(item: dict[str, Any], run: dict[str, Any]) -> str:
         return run.get("lane") or _slice_lanes(item)[0]["label"]
 
+    def _render_auto_duplicate_runs(self, slice_name: str, runs: list[dict[str, Any]]) -> None:
+        for run in runs:
+            if self._all_findings_terminal(run):
+                run["status"] = "ignored"
+                run["classification"] = "auto_duplicates"
+                self._archive_and_render_run(slice_name, run)
+            else:
+                self._render_run_findings(slice_name, run)
+
     def _mark_auto_duplicates(
         self,
         slice_name: str,
@@ -2150,7 +2170,7 @@ class ReviewState:
         run: dict[str, Any],
         findings: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        """Mark same-wave duplicates; return sibling runs whose findings were demoted."""
+        """Mark same-wave duplicates; return sibling runs that hold a demoted or kept copy."""
 
         sibling_open = [
             (sibling, finding)
@@ -2162,7 +2182,7 @@ class ReviewState:
         if not sibling_open:
             return []
         marked_at = now_iso()
-        demoted_siblings: list[dict[str, Any]] = []
+        touched_siblings: list[dict[str, Any]] = []
         for finding in findings:
             match = next(
                 (
@@ -2179,10 +2199,11 @@ class ReviewState:
             # so shot completion order must not decide whether a P0/P1 survives.
             if finding["severity"] < candidate["severity"]:
                 duplicate_run, duplicate, canonical = sibling, candidate, finding
-                if sibling not in demoted_siblings:
-                    demoted_siblings.append(sibling)
             else:
                 duplicate_run, duplicate, canonical = run, finding, candidate
+            # The kept copy shows the lanes that also reported it, so its run renders again too.
+            if sibling not in touched_siblings:
+                touched_siblings.append(sibling)
             duplicate["status"] = "ignored"
             duplicate["resolution"] = {
                 "kind": "duplicate",
@@ -2200,7 +2221,7 @@ class ReviewState:
                     "at": marked_at,
                 }
             )
-        return demoted_siblings
+        return touched_siblings
 
     def _finding_ids(self) -> set[str]:
         return {finding["id"] for finding in self._session_findings()}
@@ -2330,7 +2351,7 @@ class ReviewState:
                 run["classification"] = "ignored_findings"
                 self._archive_and_render_run(name, run)
             else:
-                self._render_run_findings(run)
+                self._render_run_findings(name, run)
             item["complete"] = self._review_settled(item) or self._stopped_by_judge(item)
             if item["complete"]:
                 item["last_error"] = None
@@ -2372,7 +2393,7 @@ class ReviewState:
                 run["classification"] = "ignored_findings"
                 self._archive_and_render_run(name, run)
             else:
-                self._render_run_findings(run)
+                self._render_run_findings(name, run)
             item["complete"] = self._review_settled(item) or self._stopped_by_judge(item)
             if item["complete"]:
                 item["last_error"] = None
@@ -2405,21 +2426,183 @@ class ReviewState:
         findings = run.get("findings") or []
         return bool(findings) and all(finding.get("status") == "ignored" for finding in findings)
 
-    def _render_run_findings(self, run: dict[str, Any]) -> None:
-        self._write_artifact(
-            Path(run["output_file"]),
-            render_review_markdown(
-                run.get("findings") or [],
-                variant=self.data["session"]["variant"],
-                harness=run["harness"],
-                harness_source=run["harness_source"],
-                model=run.get("model"),
-                model_source=run["model_source"],
-                reasoning=run.get("reasoning"),
-                reasoning_source=run["reasoning_source"],
-                lane=run.get("lane"),
-            ),
+    def _render_run_findings(self, slice_name: str, run: dict[str, Any]) -> None:
+        self._write_artifact(Path(run["output_file"]), self._render_run(slice_name, run))
+
+    def _render_run(self, slice_name: str, run: dict[str, Any]) -> str:
+        return render_review_markdown(
+            run.get("findings") or [],
+            variant=self.data["session"]["variant"],
+            harness=run["harness"],
+            harness_source=run["harness_source"],
+            model=run.get("model"),
+            model_source=run["model_source"],
+            reasoning=run.get("reasoning"),
+            reasoning_source=run["reasoning_source"],
+            lane=run.get("lane"),
+            reported_by=self._grouped_lanes(slice_name),
         )
+
+    def _grouped_lanes(self, slice_name: str) -> dict[str, list[str]]:
+        """Map each kept finding to the lanes of the same-wave reports grouped into it."""
+
+        item = self.data["slices"][slice_name]
+        labels: dict[str, str] = {}
+        canonical_of: dict[str, str] = {}
+        for run in item["runs"]:
+            label = self._run_lane_label(item, run)
+            for finding in run.get("findings") or self._load_findings_archive(slice_name, run):
+                labels[finding["id"]] = label
+                resolution = finding.get("resolution") or {}
+                # A parent dedupe can join reports from different passes, so only same-wave
+                # automatic groups attribute lanes.
+                if resolution.get("kind") == "duplicate" and resolution.get("auto"):
+                    canonical_of[finding["id"]] = resolution["finding_id"]
+        grouped: dict[str, list[str]] = {}
+        for finding_id in canonical_of:
+            # A later shot can demote an earlier kept copy, so groups chain to their last kept copy.
+            root, seen = finding_id, {finding_id}
+            while root in canonical_of and canonical_of[root] not in seen:
+                root = canonical_of[root]
+                seen.add(root)
+            lanes = grouped.setdefault(root, [])
+            if labels[finding_id] not in lanes:
+                lanes.append(labels[finding_id])
+        return grouped
+
+    def reported_by(self, slice_name: str, run: dict[str, Any], ids: list[str]) -> dict[str, list[str]]:
+        """Lane labels of every report grouped into each listed kept finding of the run."""
+
+        own = self._run_lane_label(self.data["slices"][slice_name], run)
+        grouped = self._grouped_lanes(slice_name)
+        return {
+            finding_id: [own, *(label for label in grouped[finding_id] if label != own)]
+            for finding_id in ids
+            if finding_id in grouped
+        }
+
+    def dedupe_input(self, slice_name: str, pass_number: int) -> dict[str, Any] | None:
+        """Candidate findings for the dedupe model once every run of the wave has reported."""
+
+        item = self.data["slices"][slice_name]
+        if item.get("removed"):
+            return None
+        runs = list(
+            _latest_lane_shot_runs(_slice_lanes(item), self._wave_runs(item, pass_number)).values()
+        )
+        if any(run.get("status") in {"running", "failed", "timeout"} for run in runs):
+            return None
+        open_findings = [
+            (run, finding)
+            for run in runs
+            for finding in (run.get("findings") or [])
+            if finding.get("status") == "open"
+        ]
+        candidates = [
+            {
+                "id": finding["id"],
+                "run": run["id"],
+                "location": finding["location"],
+                "title": finding["title"],
+                "content": finding["content"],
+            }
+            for run, finding in open_findings
+            if any(
+                other_run is not run
+                and other["location"]["path"] == finding["location"]["path"]
+                for other_run, other in open_findings
+            )
+        ]
+        if not candidates:
+            return None
+        return {
+            "name": slice_name,
+            "cwd": item["cwd"],
+            "pass": pass_number,
+            "definition_version": int(item.get("definition_version", 1)),
+            "candidates": candidates,
+        }
+
+    def apply_dedupe(
+        self,
+        slice_name: str,
+        *,
+        pass_number: int,
+        definition_version: int,
+        groups: list[list[str]],
+        profile: ResolvedProfile,
+    ) -> int:
+        """Mark each group as duplicates of its highest-severity open finding; return the count."""
+
+        item = self.data["slices"][slice_name]
+        if item.get("removed") or item.get("definition_version", 1) != definition_version:
+            return 0
+        wave = {
+            finding["id"]: (order, run, finding)
+            for order, (run, finding) in enumerate(
+                (run, finding)
+                for run in self._wave_runs(item, pass_number)
+                for finding in (run.get("findings") or [])
+            )
+            if finding.get("status") == "open"
+        }
+        item_snapshot = copy.deepcopy(item)
+        marked_at = now_iso()
+        events: list[dict[str, Any]] = []
+        touched: list[dict[str, Any]] = []
+        for group in groups:
+            # The parent can resolve a finding while the dedupe child runs; it keeps that outcome.
+            members = sorted(
+                (wave[finding_id] for finding_id in group if finding_id in wave),
+                key=lambda member: (member[2]["severity"], member[0]),
+            )
+            if len({id(run) for _order, run, _finding in members}) < 2:
+                continue
+            _order, _canonical_run, canonical = members[0]
+            for _order, run, finding in members[1:]:
+                finding["status"] = "ignored"
+                finding["resolution"] = {
+                    "kind": "duplicate",
+                    "finding_id": canonical["id"],
+                    "at": marked_at,
+                    "auto": MODEL_DUPLICATE,
+                }
+                events.append(
+                    {
+                        "event": "model_duplicate",
+                        "slice": slice_name,
+                        "run_id": run["id"],
+                        "finding_id": finding["id"],
+                        "canonical_id": canonical["id"],
+                        "at": marked_at,
+                    }
+                )
+            for _order, run, _finding in members:
+                if run not in touched:
+                    touched.append(run)
+        try:
+            self._render_auto_duplicate_runs(slice_name, touched)
+        except (OSError, UnicodeError):
+            item.clear()
+            item.update(item_snapshot)
+            self._rollback_artifacts()
+            raise
+        self.data["history"].extend(events)
+        self.data["history"].append(
+            {
+                "event": "dedupe_completed",
+                "slice": slice_name,
+                "pass": pass_number,
+                "duplicates": len(events),
+                "harness": profile.harness,
+                "model": profile.model,
+                "reasoning": profile.reasoning,
+                "at": marked_at,
+            }
+        )
+        self._settle_wave(item, pass_number)
+        self._refresh_completed()
+        return len(events)
 
     def _archive_run_findings(self, slice_name: str, run: dict[str, Any]) -> None:
         findings = run.get("findings")
@@ -2450,17 +2633,7 @@ class ReviewState:
     def _archive_and_render_run(self, slice_name: str, run: dict[str, Any]) -> None:
         active_findings = copy.deepcopy(run.get("findings"))
         previous_archive = run.get("findings_archive")
-        rendered = render_review_markdown(
-            run.get("findings") or [],
-            variant=self.data["session"]["variant"],
-            harness=run["harness"],
-            harness_source=run["harness_source"],
-            model=run.get("model"),
-            model_source=run["model_source"],
-            reasoning=run.get("reasoning"),
-            reasoning_source=run["reasoning_source"],
-            lane=run.get("lane"),
-        )
+        rendered = self._render_run(slice_name, run)
         self._archive_run_findings(slice_name, run)
         archive_path = Path(run["findings_archive"])
         try:
@@ -2991,6 +3164,113 @@ def run_judge(
     )
 
 
+def build_dedupe_command(
+    dedupe_data: dict[str, Any],
+    *,
+    output_file: Path,
+    profile: ResolvedProfile,
+) -> tuple[list[str], str | None]:
+    candidates = json.dumps(
+        [
+            {key: candidate[key] for key in ("id", "run", "location", "title", "content")}
+            for candidate in dedupe_data["candidates"]
+        ],
+        indent=2,
+    )
+    # Severity and task context stay out of the prompt: the model only groups, it never judges.
+    prompt = (
+        f"You group duplicate review findings for slice `{dedupe_data['name']}`. Independent "
+        "reviewers reported these findings in the same review wave. The `run` field names the "
+        "reviewer run that reported each finding.\n\n"
+        f"Findings:\n{candidates}\n\n"
+        "Rules:\n"
+        "- Group findings only when they report the same problem at the same place, so that "
+        "one fix resolves all of them.\n"
+        "- Put each finding in one group at most.\n"
+        "- Never put two findings from the same run in one group.\n"
+        "- Do not judge whether a finding is correct. Do not change or rank severity.\n"
+        "- Do not read or modify files. Judge only from the findings above.\n"
+        "- When no findings are duplicates, return an empty `groups` array.\n\n"
+        f"Return only one JSON object matching {DEDUPE_SCHEMA_PATH}.\n"
+        "Do not wrap the JSON in Markdown fences or add prose outside it.\n"
+    )
+    invocation = get_harness(profile.harness).dedupe_invocation(
+        prompt=prompt,
+        output_file=output_file,
+        profile=profile,
+    )
+    return invocation.command, invocation.input_text
+
+
+def run_dedupe(
+    review_dir: Path,
+    dedupe_data: dict[str, Any],
+    *,
+    profile: ResolvedProfile,
+    command_runner: Runner,
+    child_timeout_seconds: float | None = None,
+) -> DedupeExecution:
+    slice_name = str(dedupe_data["name"])
+    pass_number = int(dedupe_data["pass"])
+    definition_version = int(dedupe_data["definition_version"])
+    safe_slice = re.sub(r"[^a-zA-Z0-9._-]+", "-", slice_name)
+    stem = f"{filename_timestamp()}-{pass_number}-{safe_slice}-{secrets.token_hex(3)}"
+    log_dir = review_dir / "_logs"
+    stdout_log = log_dir / f"dedupe-{stem}.stdout.log"
+    stderr_log = log_dir / f"dedupe-{stem}.stderr.log"
+    output_file = review_dir / "dedupe" / f"{stem}.json"
+    runner_data = {
+        **json.loads(json.dumps(dedupe_data)),
+        "_stdout_log": str(stdout_log),
+        "_stderr_log": str(stderr_log),
+        "_child_timeout_seconds": child_timeout_seconds,
+        "_dedupe": True,
+    }
+    cmd, input_text = build_dedupe_command(runner_data, output_file=output_file, profile=profile)
+
+    def result(returncode: int | None, *, groups=None, error=None) -> DedupeExecution:
+        if error is not None:
+            _append_runner_error(stderr_log, error)
+        return DedupeExecution(
+            slice_name=slice_name,
+            pass_number=pass_number,
+            definition_version=definition_version,
+            output_file=output_file,
+            stdout_log=stdout_log,
+            stderr_log=stderr_log,
+            returncode=returncode,
+            groups=groups,
+            error=error,
+        )
+
+    try:
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        proc = command_runner(cmd, Path(runner_data["cwd"]), input_text, output_file, runner_data)
+        _write_completed_process_logs(proc, stdout_log, stderr_log)
+    except subprocess.TimeoutExpired as exc:
+        proc = subprocess.CompletedProcess(cmd, 124, exc.stdout or "", exc.stderr or "")
+        _write_completed_process_logs(proc, stdout_log, stderr_log)
+        return result(124, error=f"dedupe command timed out after {exc.timeout} seconds")
+    except OSError as exc:
+        _write_completed_process_logs(
+            subprocess.CompletedProcess(cmd, 1, "", str(exc)), stdout_log, stderr_log
+        )
+        return result(1, error=f"dedupe command failed to launch: {exc}")
+    if proc.returncode != 0:
+        return result(proc.returncode, error=f"dedupe command exited with code {proc.returncode}")
+    try:
+        get_harness(profile.harness).materialize_review_result(
+            stdout_log=stdout_log, output_file=output_file
+        )
+        groups = parse_dedupe_groups(
+            output_file.read_text(encoding="utf-8"),
+            {candidate["id"]: candidate["run"] for candidate in dedupe_data["candidates"]},
+        )
+    except (HarnessError, ReviewResultError, OSError, UnicodeError) as exc:
+        return result(proc.returncode, error=f"dedupe groups are unusable: {exc}")
+    return result(proc.returncode, groups=groups)
+
+
 def _append_runner_error(stderr_log: Path, error: str) -> None:
     try:
         with stderr_log.open("a", encoding="utf-8") as fh:
@@ -3196,16 +3476,22 @@ def _open_finding_ids(run: dict[str, Any]) -> list[str]:
 def _out_record(
     state: ReviewState, slice_name: str, run: dict[str, Any], *, final: bool = False
 ) -> dict[str, Any]:
-    return {
+    ids = _open_finding_ids(run) if final else state._finding_ids_for_run(slice_name, run)
+    record = {
         "f": _relative_path(Path(run["output_file"])),
         "final": final,
-        "ids": _open_finding_ids(run) if final else state._finding_ids_for_run(slice_name, run),
+        "ids": ids,
         "p": int(run["pass"]),
         "ln": state._run_lane_label(state.data["slices"][slice_name], run),
         "s": slice_name,
         "sh": int(run.get("shot", 1)),
         "st": run.get("classification") or "done",
     }
+    # One run can keep several grouped findings, so lanes are listed per kept finding.
+    reported_by = state.reported_by(slice_name, run, ids)
+    if reported_by:
+        record["by"] = reported_by
+    return record
 
 
 def _wave_out_records(
@@ -3216,20 +3502,22 @@ def _wave_out_records(
         run = next(
             run for run in state.data["slices"][slice_name]["runs"] if run.get("id") == run_id
         )
-        if run.get("status") == "ignored" and run.get("classification") == "auto_duplicates":
+        if run.get("status") != "ignored" or run.get("classification") == "auto_duplicates":
             records.append(_out_record(state, slice_name, run))
-        elif run.get("status") != "ignored":
-            records.append({
-                "f": _relative_path(Path(run["output_file"])),
-                "final": False,
-                "ids": [finding["id"] for finding in (run.get("findings") or [])],
-                "ln": state._run_lane_label(state.data["slices"][slice_name], run),
-                "p": int(run["pass"]),
-                "s": slice_name,
-                "sh": int(run.get("shot", 1)),
-                "st": run.get("classification") or "done",
-            })
     return records
+
+
+def _dedupe_error_record(execution: DedupeExecution) -> dict[str, Any]:
+    return {
+        "code": execution.returncode,
+        "f": _relative_path(execution.output_file),
+        "msg": execution.error or "dedupe failed",
+        "p": execution.pass_number,
+        "s": execution.slice_name,
+        "st": "dedupe_failed",
+        "stderr": _relative_path(execution.stderr_log),
+        "stdout": _relative_path(execution.stdout_log),
+    }
 
 
 def _judge_error_record(execution: JudgeExecution) -> dict[str, Any]:
@@ -3372,6 +3660,137 @@ def await_reviews(
         stdout.write(compact_summary_json(summary, pretty=pretty_json) + "\n")
         stdout.flush()
     return (0 if ok else 2), summary
+
+
+def _finish_review(
+    review_dir: Path,
+    execution: ReviewExecution,
+    *,
+    err_records: list[dict[str, Any]],
+    completed_runs: list[tuple[str, str]],
+    progress_stream: Any | None,
+) -> None:
+    reservation = execution.reservation
+    proc = execution.proc
+    if execution.launch_error is not None:
+        exc = execution.launch_error
+        append_error(
+            review_dir,
+            f"failed to launch review for {reservation.slice_name}",
+            f"Slice: {reservation.slice_name}\nOutput: {reservation.output_file}\nError: {exc}",
+        )
+        status, classification, findings, error = (
+            "failed",
+            None,
+            None,
+            f"review command failed to launch: {exc}",
+        )
+    else:
+        status, classification, findings, error = evaluate_completed_process(
+            review_dir,
+            reservation,
+            proc,
+            stdout_log=execution.stdout_log,
+            stderr_log=execution.stderr_log,
+            timed_out=execution.timed_out,
+        )
+    with ReviewState.locked(review_dir) as state:
+        completion_applied = state.complete_run(
+            run_id=reservation.run_id,
+            slice_name=reservation.slice_name,
+            status=status,
+            exit_code=proc.returncode,
+            classification=classification,
+            findings=findings,
+            error=error,
+        )
+        persisted_run = next(
+            run
+            for run in state.data["slices"][reservation.slice_name]["runs"]
+            if run.get("id") == reservation.run_id
+        )
+        persisted_status = str(persisted_run.get("status"))
+        state.save()
+    display_status = persisted_status if completion_applied else "skipped-late-completion"
+    if progress_stream is not None:
+        lanes = _slice_lanes(reservation.slice_data)
+        lane_index = int(reservation.slice_data["lane_index"])
+        shot = int(reservation.slice_data.get("shot", 1))
+        shot_label = f" shot {shot}" if lanes[lane_index - 1]["shots"] > 1 else ""
+        if len(lanes) > 1:
+            shot_label = f" lane {lane_index}{shot_label}"
+        print(
+            f"{reservation.slice_name}: pass {reservation.pass_number}{shot_label} {display_status} -> {reservation.output_file}",
+            file=progress_stream,
+            flush=True,
+        )
+    if persisted_status in {"failed", "timeout"}:
+        err_record: dict[str, Any] = {
+            "code": proc.returncode,
+            "f": _relative_path(reservation.output_file),
+            "msg": persisted_run.get("error") or error or display_status,
+            "p": reservation.pass_number,
+            "s": reservation.slice_name,
+            "st": "timeout" if persisted_status == "timeout" else "failed",
+            "stderr": _relative_path(execution.stderr_log),
+            "stdout": _relative_path(execution.stdout_log),
+        }
+        err_records.append(err_record)
+    else:
+        completed_runs.append((reservation.slice_name, reservation.run_id))
+
+
+def _finish_dedupe(
+    review_dir: Path,
+    execution: DedupeExecution,
+    *,
+    profile: ResolvedProfile,
+    err_records: list[dict[str, Any]],
+    progress_stream: Any | None,
+) -> None:
+    error = execution.error
+    duplicates = 0
+    with ReviewState.locked(review_dir) as state:
+        if execution.groups is not None:
+            try:
+                duplicates = state.apply_dedupe(
+                    execution.slice_name,
+                    pass_number=execution.pass_number,
+                    definition_version=execution.definition_version,
+                    groups=execution.groups,
+                    profile=profile,
+                )
+            except (OSError, UnicodeError) as exc:
+                error = f"could not apply dedupe groups: {exc}"
+        if error is not None:
+            state.data["history"].append(
+                {
+                    "event": "dedupe_failed",
+                    "slice": execution.slice_name,
+                    "pass": execution.pass_number,
+                    "error": error,
+                    "harness": profile.harness,
+                    "model": profile.model,
+                    "reasoning": profile.reasoning,
+                    "at": now_iso(),
+                }
+            )
+        state.save()
+    if error is not None:
+        execution = replace(execution, error=error)
+        append_error(
+            review_dir,
+            f"dedupe failed for {execution.slice_name}",
+            f"Slice: {execution.slice_name}\nOutput: {execution.output_file}\nError: {error}",
+        )
+        err_records.append(_dedupe_error_record(execution))
+    if progress_stream is not None:
+        display = f"dedupe failed ({error})" if error else f"dedupe marked {duplicates} duplicates"
+        print(
+            f"{execution.slice_name}: pass {execution.pass_number} {display}",
+            file=progress_stream,
+            flush=True,
+        )
 
 
 def run_reviews(
@@ -3545,82 +3964,57 @@ def run_reviews(
 
     # A judge phase can run long, so auto reads the free memory again for the reviewer wave.
     child_limit = review_config.resolve_max_parallel(configured_limit)
+    dedupe_profile = (
+        resolve_profile(config.dedupe_profile, override_source="slice-override")
+        if config.dedupe_enabled
+        else None
+    )
+    outstanding = Counter(reservation.slice_name for reservation in reservations)
     with _ChildPool(max_workers=min(len(reservations), child_limit)) as executor:
-        futures = [
+        pending: set[Future[Any]] = {
             executor.submit(run_reserved_review, reservation, command_runner, child_timeout_seconds)
             for reservation in reservations
-        ]
-        for future in as_completed(futures):
-            execution = future.result()
-            reservation = execution.reservation
-            proc = execution.proc
-            if execution.launch_error is not None:
-                exc = execution.launch_error
-                append_error(
+        }
+        while pending:
+            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                execution = future.result()
+                if isinstance(execution, DedupeExecution):
+                    _finish_dedupe(
+                        review_dir,
+                        execution,
+                        profile=dedupe_profile,
+                        err_records=err_records,
+                        progress_stream=progress_stream if stream_progress else None,
+                    )
+                    continue
+                reservation = execution.reservation
+                _finish_review(
                     review_dir,
-                    f"failed to launch review for {reservation.slice_name}",
-                    f"Slice: {reservation.slice_name}\nOutput: {reservation.output_file}\nError: {exc}",
+                    execution,
+                    err_records=err_records,
+                    completed_runs=completed_runs,
+                    progress_stream=progress_stream if stream_progress else None,
                 )
-                status, classification, findings, error = (
-                    "failed",
-                    None,
-                    None,
-                    f"review command failed to launch: {exc}",
-                )
-            else:
-                status, classification, findings, error = evaluate_completed_process(
-                    review_dir,
-                    reservation,
-                    proc,
-                    stdout_log=execution.stdout_log,
-                    stderr_log=execution.stderr_log,
-                    timed_out=execution.timed_out,
-                )
-            with ReviewState.locked(review_dir) as state:
-                completion_applied = state.complete_run(
-                    run_id=reservation.run_id,
-                    slice_name=reservation.slice_name,
-                    status=status,
-                    exit_code=proc.returncode,
-                    classification=classification,
-                    findings=findings,
-                    error=error,
-                )
-                persisted_run = next(
-                    run
-                    for run in state.data["slices"][reservation.slice_name]["runs"]
-                    if run.get("id") == reservation.run_id
-                )
-                persisted_status = str(persisted_run.get("status"))
-                state.save()
-                remaining = _remaining_count(state)
-            display_status = persisted_status if completion_applied else "skipped-late-completion"
-            if stream_progress:
-                lanes = _slice_lanes(reservation.slice_data)
-                lane_index = int(reservation.slice_data["lane_index"])
-                shot = int(reservation.slice_data.get("shot", 1))
-                shot_label = f" shot {shot}" if lanes[lane_index - 1]["shots"] > 1 else ""
-                if len(lanes) > 1:
-                    shot_label = f" lane {lane_index}{shot_label}"
-                print(
-                    f"{reservation.slice_name}: pass {reservation.pass_number}{shot_label} {display_status} -> {reservation.output_file}",
-                    file=progress_stream,
-                    flush=True,
-                )
-            if persisted_status in {"failed", "timeout"}:
-                err_record: dict[str, Any] = {
-                    "code": proc.returncode,
-                    "f": _relative_path(reservation.output_file),
-                    "msg": persisted_run.get("error") or error or display_status,
-                    "p": reservation.pass_number,
-                    "s": reservation.slice_name,
-                    "st": "timeout" if persisted_status == "timeout" else "failed",
-                    "stderr": _relative_path(execution.stderr_log),
-                    "stdout": _relative_path(execution.stdout_log),
-                }
-                err_records.append(err_record)
-            else:
-                completed_runs.append((reservation.slice_name, reservation.run_id))
+                outstanding[reservation.slice_name] -= 1
+                if dedupe_profile is None or outstanding[reservation.slice_name]:
+                    continue
+                with ReviewState.locked(review_dir) as state:
+                    dedupe_data = state.dedupe_input(
+                        reservation.slice_name, reservation.pass_number
+                    )
+                if dedupe_data is not None:
+                    # The dedupe child shares the pool, so it counts against max_parallel.
+                    pending.add(
+                        executor.submit(
+                            run_dedupe,
+                            review_dir,
+                            dedupe_data,
+                            profile=dedupe_profile,
+                            command_runner=command_runner,
+                            child_timeout_seconds=child_timeout_seconds,
+                        )
+                    )
 
     ok = not err_records
     with ReviewState.locked(review_dir) as state:

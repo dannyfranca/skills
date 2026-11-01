@@ -1361,11 +1361,11 @@ class RunnerTests(unittest.TestCase):
             first_child_started.set()
             return probe(cmd, cwd, input_text, output_file, slice_data)
 
-        def interrupt_while_the_first_child_runs(futures):
+        def interrupt_while_the_first_child_runs(futures, return_when):
             first_child_started.wait(5)
             raise KeyboardInterrupt
 
-        with mock.patch("review_state.as_completed", interrupt_while_the_first_child_runs), \
+        with mock.patch("review_state.wait", interrupt_while_the_first_child_runs), \
                 self.assertRaises(KeyboardInterrupt):
             self.run_reviews(command_runner=started, stdout=io.StringIO(), max_parallel=1)
 
@@ -3910,10 +3910,12 @@ class CliTests(unittest.TestCase):
             "#!/usr/bin/env python3\n"
             "import json, os, sys\n"
             "out = sys.argv[sys.argv.index('-o') + 1]\n"
-            "judge = sys.argv[sys.argv.index('--output-schema') + 1].endswith('judge-verdict.schema.json')\n"
+            "schema = sys.argv[sys.argv.index('--output-schema') + 1]\n"
             "open(os.environ['CALLS_LOG'], 'a', encoding='utf-8').write(json.dumps(sys.argv[1:-1]) + '\\n')\n"
-            "if judge:\n"
+            "if schema.endswith('judge-verdict.schema.json'):\n"
             "    result = {'schema_version': 1, 'verdict': 'stop', 'reason': 'Only P2 findings remain.'}\n"
+            "elif schema.endswith('dedupe-groups.schema.json'):\n"
+            "    result = {'schema_version': 1, 'groups': []}\n"
             "else:\n"
             "    finding = {'severity': 'P2', 'title': f'Naming {os.getpid()}', 'content': 'Rename it.',\n"
             "               'location': {'path': 'src/api.py', 'start_line': 1, 'end_line': 1}}\n"
@@ -3955,6 +3957,11 @@ class CliTests(unittest.TestCase):
         ]
         self.assertEqual(len(judge_calls), 1)
         self.assertEqual(judge_calls[0][judge_calls[0].index("-m") + 1], "judge-model")
+        dedupe_calls = [
+            call for call in map(json.loads, calls_log.read_text(encoding="utf-8").splitlines())
+            if call[call.index("--output-schema") + 1].endswith("dedupe-groups.schema.json")
+        ]
+        self.assertEqual(len(dedupe_calls), 1)
 
     def test_run_reviews_cli_no_stdout_summary_file_and_stream_progress_flags(self) -> None:
         fake_bin = Path(self.tmp.name) / "barrier-bin"
@@ -4379,7 +4386,10 @@ class ShotsAndJudgeTests(unittest.TestCase):
     def run_reviews(
         self, runner, *, max_passes: int = 3, config: ReviewConfig | None = None
     ) -> tuple[int, dict]:
-        _pin_session_config(self.review_dir, config or ReviewConfig(max_passes=max_passes))
+        # Shot tests assert the deterministic grouping alone; dedupe tests pass their own config.
+        _pin_session_config(
+            self.review_dir, config or ReviewConfig(max_passes=max_passes, deduper=False)
+        )
         return run_reviews(self.review_dir, command_runner=runner, stdout=io.StringIO())
 
     def runs(self, name: str = "api") -> list[dict]:
@@ -4563,10 +4573,11 @@ class ShotsAndJudgeTests(unittest.TestCase):
     def test_summary_reports_a_sibling_demoted_by_a_later_shot(self) -> None:
         self.add_slice("api", shots=2)
 
-        def by_shot(futures):
-            return sorted(futures, key=lambda future: future.result().reservation.slice_data["shot"])
+        def by_shot(futures, return_when):
+            first = min(futures, key=lambda future: future.result().reservation.slice_data["shot"])
+            return {first}, futures - {first}
 
-        with mock.patch.object(review_state_module, "as_completed", by_shot):
+        with mock.patch.object(review_state_module, "wait", by_shot):
             _, summary = self.run_reviews(_per_shot({
                 1: [_finding(title="Race in cache init", severity="P2")],
                 2: [_finding(title="Race in cache init path", severity="P1")],
@@ -5605,6 +5616,243 @@ class ReviewerLaneTests(unittest.TestCase):
         self.assertEqual(sorted(path.name[-9:] for path in self.review_dir.glob("*-1-api-shot*.md")),
                          ["-shot1.md", "-shot2.md"])
         self.assertEqual({run["lane"] for run in self.runs()}, {"codex"})
+
+
+def _lane_findings(results: dict[str, list[dict[str, object]]]):
+    def runner(cmd, cwd, input_text, output_file, slice_data):
+        if slice_data.get("_judge"):
+            raise AssertionError("judge should not be invoked")
+        _write_review_result(output_file, results.get(slice_data["lane"], []))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    return runner
+
+
+def _group_all(candidates: list[dict]) -> list[list[str]]:
+    return [[candidate["id"] for candidate in candidates]]
+
+
+def _dedupe_aware(review_runner, *, groups=_group_all, rc=0, calls=None):
+    """Answer dedupe children with `groups(candidates)`; pass every other child to `review_runner`."""
+
+    def runner(cmd, cwd, input_text, output_file, slice_data):
+        if not slice_data.get("_dedupe"):
+            return review_runner(cmd, cwd, input_text, output_file, slice_data)
+        if calls is not None:
+            calls.append((cmd, slice_data))
+        if rc:
+            return subprocess.CompletedProcess(cmd, rc, "", "dedupe crashed")
+        output_file.write_text(
+            json.dumps({"schema_version": 1, "groups": groups(slice_data["candidates"])}),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    return runner
+
+
+class ModelDedupeTests(unittest.TestCase):
+    setUp = ShotsAndJudgeTests.setUp
+    tearDown = ShotsAndJudgeTests.tearDown
+    add_slice = ShotsAndJudgeTests.add_slice
+    runs = ShotsAndJudgeTests.runs
+
+    TERRA = ReviewConfig(deduper=HarnessProfile(harness="codex", model="terra"))
+
+    def run_reviews(self, runner, *, config: ReviewConfig | None = None) -> tuple[int, dict]:
+        return ShotsAndJudgeTests.run_reviews(self, runner, config=config or self.TERRA)
+    @property
+    def same_path(self) -> dict[str, list[dict]]:
+        # Same file, distinct lines and wording: only the dedupe model can group these two reports.
+        return {
+            "codex:a": [_finding(title="Unlocked cache init", severity="P2", lines=(10, 12))],
+            "codex:b": [_finding(title="Workers race on first load", severity="P1", lines=(40, 45))],
+        }
+
+    def two_lanes(self) -> None:
+        self.add_slice("api", lanes=[{"harness": "codex", "model": "a"}, {"harness": "codex", "model": "b"}])
+
+    def by_lane(self) -> dict[str, dict]:
+        return {run["lane"]: run for run in self.runs()}
+
+    def history(self, event: str) -> list[dict]:
+        return [e for e in ReviewState.load(self.review_dir).data["history"] if e["event"] == event]
+
+    def test_model_groups_same_wave_findings_under_the_highest_severity(self) -> None:
+        self.two_lanes()
+        calls: list = []
+
+        rc, summary = self.run_reviews(_dedupe_aware(_lane_findings(self.same_path), calls=calls))
+
+        self.assertEqual((rc, summary["ok"], len(calls)), (0, True, 1))
+        runs = self.by_lane()
+        [kept] = runs["codex:b"]["findings"]
+        dropped = ReviewState.load(self.review_dir)._load_findings_archive("api", runs["codex:a"])[0]
+        self.assertEqual(kept["status"], "open")
+        self.assertEqual(dropped["status"], "ignored")
+        self.assertEqual(dropped["resolution"]["finding_id"], kept["id"])
+        self.assertEqual(dropped["resolution"]["auto"], "model")
+        self.assertEqual(runs["codex:a"]["classification"], "auto_duplicates")
+        records = {rec["ln"]: rec for rec in summary["out"]}
+        self.assertEqual(records["codex:b"]["by"], {kept["id"]: ["codex:b", "codex:a"]})
+        self.assertNotIn("by", records["codex:a"])
+        self.assertEqual(records["codex:a"]["st"], "auto_duplicates")
+        self.assertIn("**Also reported by:** `codex:a`",
+                      Path(runs["codex:b"]["output_file"]).read_text(encoding="utf-8"))
+        self.assertIn("grouped by the dedupe model",
+                      Path(runs["codex:a"]["output_file"]).read_text(encoding="utf-8"))
+        [marked] = self.history("model_duplicate")
+        self.assertEqual((marked["finding_id"], marked["canonical_id"]), (dropped["id"], kept["id"]))
+        [done] = self.history("dedupe_completed")
+        self.assertEqual((done["duplicates"], done["harness"], done["model"]), (1, "codex", "terra"))
+
+    def test_dedupe_prompt_names_the_profile_model_without_severity_or_task(self) -> None:
+        self.two_lanes()
+        calls: list = []
+
+        self.run_reviews(_dedupe_aware(_lane_findings(self.same_path), calls=calls))
+
+        [(cmd, data)] = calls
+        self.assertEqual(cmd[cmd.index("-m") + 1], "terra")
+        self.assertIn("dedupe-groups.schema.json", " ".join(cmd))
+        prompt = cmd[-1]
+        self.assertIn("Workers race on first load", prompt)
+        self.assertNotIn("P1", prompt)
+        self.assertNotIn("severity\"", prompt)
+        self.assertNotIn("Review the current uncommitted changes.", prompt)
+        self.assertEqual({tuple(sorted(c)) for c in data["candidates"]},
+                         {("content", "id", "location", "run", "title")})
+
+    def test_default_deduper_uses_the_classifier_profile(self) -> None:
+        self.two_lanes()
+        calls: list = []
+        config = ReviewConfig(classifier=HarnessProfile(harness="codex", model="clf"))
+
+        self.run_reviews(_dedupe_aware(_lane_findings(self.same_path), calls=calls), config=config)
+
+        [(cmd, _data)] = calls
+        self.assertEqual(cmd[cmd.index("-m") + 1], "clf")
+        self.assertEqual(self.history("dedupe_completed")[0]["model"], "clf")
+
+    def test_deduper_false_never_runs_the_dedupe_model(self) -> None:
+        self.two_lanes()
+        calls: list = []
+
+        self.run_reviews(
+            _dedupe_aware(_lane_findings(self.same_path), calls=calls),
+            config=ReviewConfig(deduper=False),
+        )
+
+        self.assertEqual(calls, [])
+        self.assertEqual({run["status"] for run in self.runs()}, {"findings"})
+
+    def test_dedupe_runs_only_for_same_path_findings_from_different_runs(self) -> None:
+        self.two_lanes()
+        calls: list = []
+        results = {
+            "codex:a": [_finding(title="One", lines=(1, 2)), _finding(title="Two", lines=(50, 51))],
+            "codex:b": [_finding(title="Elsewhere", path="src/other.py")],
+        }
+
+        self.run_reviews(_dedupe_aware(_lane_findings(results), calls=calls))
+
+        self.assertEqual(calls, [])
+        self.assertEqual(self.history("dedupe_completed"), [])
+
+    def test_dedupe_candidates_come_from_the_same_wave_only(self) -> None:
+        self.two_lanes()
+        self.run_reviews(_dedupe_aware(_lane_findings(self.same_path), groups=lambda c: []))
+        calls: list = []
+
+        self.run_reviews(
+            _dedupe_aware(_lane_findings({"codex:a": self.same_path["codex:a"]}), calls=calls)
+        )
+
+        self.assertEqual(calls, [])
+
+    def assert_dedupe_failure_keeps_findings(self, runner) -> None:
+        self.two_lanes()
+
+        rc, summary = self.run_reviews(_dedupe_aware(_lane_findings(self.same_path), **runner))
+
+        self.assertEqual((rc, summary["ok"]), (2, False))
+        [err] = summary["err"]
+        self.assertEqual((err["s"], err["st"], err["p"]), ("api", "dedupe_failed", 1))
+        self.assertEqual({f["status"] for run in self.runs() for f in run["findings"]}, {"open"})
+        self.assertEqual({rec["ln"] for rec in summary["out"]}, {"codex:a", "codex:b"})
+        self.assertTrue(all("by" not in rec for rec in summary["out"]))
+        [failed] = self.history("dedupe_failed")
+        self.assertEqual(failed["model"], "terra")
+        self.assertEqual(self.history("model_duplicate"), [])
+
+    def test_failed_dedupe_child_keeps_findings_and_reports_dedupe_failed(self) -> None:
+        self.assert_dedupe_failure_keeps_findings({"rc": 1})
+
+    def test_invalid_dedupe_groups_keep_findings_and_report_dedupe_failed(self) -> None:
+        self.assert_dedupe_failure_keeps_findings({"groups": lambda c: [[c[0]["id"], "f_unknown"]]})
+
+    def test_dedupe_child_counts_against_max_parallel_after_the_wave(self) -> None:
+        self.two_lanes()
+        order: list[str] = []
+        inner = _dedupe_aware(_lane_findings(self.same_path))
+
+        def recording(cmd, cwd, input_text, output_file, slice_data):
+            order.append("dedupe" if slice_data.get("_dedupe") else slice_data["lane"])
+            return inner(cmd, cwd, input_text, output_file, slice_data)
+
+        probe = _ConcurrencyProbe(recording)
+        config = ReviewConfig(max_parallel=1, deduper=HarnessProfile(harness="codex", model="terra"))
+
+        self.run_reviews(probe, config=config)
+
+        self.assertEqual(probe.peak, 1)
+        self.assertEqual(sorted(order[:2]), ["codex:a", "codex:b"])
+        self.assertEqual(order[2:], ["dedupe"])
+
+    def test_by_follows_deterministic_then_model_groups_per_kept_finding(self) -> None:
+        self.add_slice("api", lanes=[{"harness": "codex", "model": m} for m in ("a", "b", "c")])
+        race = _finding(title="Cache init race", severity="P2", lines=(40, 45))
+        leak = _finding(title="Handle leak", path="src/io.py", severity="P2", lines=(5, 6))
+        results = {
+            "codex:a": [race, leak],
+            "codex:b": [race],
+            "codex:c": [
+                _finding(title="Workers clash on first load", severity="P1", lines=(80, 90)),
+                _finding(title="File never closed", path="src/io.py", severity="P1", lines=(70, 72)),
+            ],
+        }
+
+        def by_title(candidates: list[dict]) -> list[list[str]]:
+            ids = {c["title"]: c["id"] for c in candidates}
+            return [[ids["Cache init race"], ids["Workers clash on first load"]],
+                    [ids["Handle leak"], ids["File never closed"]]]
+
+        _, summary = self.run_reviews(_dedupe_aware(_lane_findings(results), groups=by_title))
+
+        record = next(rec for rec in summary["out"] if rec["ln"] == "codex:c")
+        kept = {f["title"]: f["id"] for f in self.by_lane()["codex:c"]["findings"]}
+        self.assertEqual(record["by"][kept["Workers clash on first load"]][0], "codex:c")
+        self.assertEqual(sorted(record["by"][kept["Workers clash on first load"]][1:]),
+                         ["codex:a", "codex:b"])
+        self.assertEqual(record["by"][kept["File never closed"]], ["codex:c", "codex:a"])
+        self.assertTrue(all("by" not in rec for rec in summary["out"] if rec["ln"] != "codex:c"))
+        markdown = Path(self.by_lane()["codex:c"]["output_file"]).read_text(encoding="utf-8")
+        self.assertEqual(markdown.count("**Also reported by:**"), 2)
+
+    def test_deterministic_duplicates_list_every_reporting_lane_in_by(self) -> None:
+        self.two_lanes()
+        same = [_finding(title="Cache init race", lines=(40, 45))]
+
+        _, summary = self.run_reviews(
+            _lane_findings({"codex:a": same, "codex:b": same}), config=ReviewConfig(deduper=False)
+        )
+
+        [kept_record] = [rec for rec in summary["out"] if rec.get("by")]
+        [(kept_id, labels)] = kept_record["by"].items()
+        self.assertEqual(labels, [kept_record["ln"], *({"codex:a", "codex:b"} - {kept_record["ln"]})])
+        kept_run = self.by_lane()[kept_record["ln"]]
+        self.assertIn(f"**Also reported by:** `{labels[1]}`",
+                      Path(kept_run["output_file"]).read_text(encoding="utf-8"))
 
 
 class VariantSessionTests(unittest.TestCase):
