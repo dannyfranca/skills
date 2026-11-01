@@ -171,6 +171,47 @@ class ReviewConfigTests(unittest.TestCase):
         self.assertEqual(config.max_passes, 2)
         self.assertEqual(config.judge_profile, HarnessProfile(harness="claude-code"))
 
+    def test_deduper_defaults_to_classifier_profile_and_accepts_table_or_false(self) -> None:
+        self.write_config(self.home, '[classifier]\nharness = "codex"\nmodel = "classifier-model"\n')
+        default = load_review_config(self.root, home=self.home)
+        self.assertIsNone(default.deduper)
+        self.assertTrue(default.dedupe_enabled)
+        self.assertEqual(default.dedupe_profile, default.classifier)
+
+        self.write_config(self.root, '[deduper]\nharness = "codex"\nmodel = "gpt-6.1-terra"\n')
+        table = load_review_config(self.root, home=self.home)
+        self.assertEqual(table.dedupe_profile, HarnessProfile(harness="codex", model="gpt-6.1-terra"))
+
+        (self.root / ".agents" / "multi-shot-review.toml").write_text("deduper = false\n", encoding="utf-8")
+        disabled = load_review_config(self.root, home=self.home)
+        self.assertFalse(disabled.dedupe_enabled)
+        for config in (default, table, disabled):
+            with self.subTest(deduper=config.deduper):
+                self.assertEqual(ReviewConfig.from_snapshot(config.to_snapshot(), variant="default").deduper, config.deduper)
+
+    def test_variant_body_sets_or_disables_the_deduper(self) -> None:
+        self.write_config(
+            self.root,
+            '[deduper]\nharness = "codex"\nmodel = "main"\n'
+            "[variant.off]\ndeduper = false\n"
+            '[variant.other.deduper]\nharness = "claude-code"\n',
+        )
+
+        self.assertFalse(load_review_config(self.root, home=self.home, variant="off").dedupe_enabled)
+        self.assertEqual(
+            load_review_config(self.root, home=self.home, variant="other").dedupe_profile,
+            HarnessProfile(harness="claude-code"),
+        )
+        self.assertEqual(
+            load_review_config(self.root, home=self.home, variant="default").dedupe_profile.model, "main"
+        )
+
+    def test_snapshot_without_deduper_loads_as_default(self) -> None:
+        snapshot = load_review_config(self.root, home=self.home).to_snapshot()
+        snapshot.pop("deduper")
+
+        self.assertIsNone(ReviewConfig.from_snapshot(snapshot, variant="default").deduper)
+
     def test_eval_table_is_left_to_the_eval_skill(self) -> None:
         self.write_config(self.root, 'max_passes = 2\n[[eval.analysts]]\nharness = "codex"\nmodel = "m"\n')
 
@@ -196,6 +237,10 @@ class ReviewConfigTests(unittest.TestCase):
             '[[reviewers]]\nharness = "codex"\nfrom_pass = 2\n',
             '[judge]\nharness = ""\n',
             '[judge]\nharness = "codex"\nunknown = true\n',
+            "deduper = true\n",
+            'deduper = "codex"\n',
+            '[deduper]\nharness = "unknown"\n',
+            '[deduper]\nharness = "codex"\nunknown = true\n',
             "classifier_model = 5\n",
             'classifier = "codex"\n',
             '[slice_default]\nharness = ""\n',

@@ -39,6 +39,7 @@ _SETTING_KEYS = {
     "classifier",
     "slice_default",
     "judge",
+    "deduper",
 }
 _EXPERIMENT_KEYS = {"variants", "variant"}
 # multi-shot-review-eval shares this config chain and owns the [eval] table.
@@ -86,6 +87,8 @@ class ReviewConfig:
     classifier: HarnessProfile | None = None
     slice_default: HarnessProfile | None = None
     judge: HarnessProfile | None = None
+    # None keeps the default dedupe model on the classifier profile; False disables it.
+    deduper: HarnessProfile | bool | None = None
     variant: str = DEFAULT_VARIANT
 
     @property
@@ -93,6 +96,16 @@ class ReviewConfig:
         """The judge shares the classifier profile unless configured on its own."""
 
         return self.classifier if self.judge is None else self.judge
+
+    @property
+    def dedupe_enabled(self) -> bool:
+        return self.deduper is not False
+
+    @property
+    def dedupe_profile(self) -> HarnessProfile | None:
+        """The dedupe model shares the classifier profile unless configured on its own."""
+
+        return self.deduper if isinstance(self.deduper, HarnessProfile) else self.classifier
 
     def to_snapshot(self) -> dict[str, Any]:
         """Effective settings without the variant tag, which the session stores on its own."""
@@ -118,8 +131,11 @@ class ReviewConfig:
         owner = "session config snapshot"
         expected = {config_field.name for config_field in fields(cls)} - _SESSION_OWNED_FIELDS
         if isinstance(snapshot, dict):
-            # Sessions created before max_parallel or reviewer lanes existed must stay loadable.
-            snapshot = _lanes_from_legacy_snapshot({"max_parallel": DEFAULT_MAX_PARALLEL, **snapshot})
+            # Sessions created before max_parallel, reviewer lanes, or the deduper existed must
+            # stay loadable.
+            snapshot = _lanes_from_legacy_snapshot(
+                {"max_parallel": DEFAULT_MAX_PARALLEL, "deduper": None, **snapshot}
+            )
         if not isinstance(snapshot, dict) or set(snapshot) != expected:
             raise ReviewStateError(f"invalid {owner}")
         if not isinstance(variant, str) or not VARIANT_TAG_RE.fullmatch(variant):
@@ -127,7 +143,7 @@ class ReviewConfig:
         settings = {
             key: (
                 _without_nulls(value)
-                if key in _PROFILE_SETTINGS
+                if key in _PROFILE_SETTINGS or key == "deduper"
                 else [_without_optional_lane_nulls(lane) for lane in value]
                 if key == "reviewers" and isinstance(value, list)
                 else value
@@ -493,6 +509,8 @@ def _validate_settings(path: Path | str, data: dict[str, Any]) -> dict[str, Any]
             validated[key] = _validate_reviewers(path, value)
         elif key == "max_parallel":
             validated[key] = _validate_max_parallel(path, value)
+        elif key == "deduper":
+            validated[key] = _validate_deduper(path, value)
         else:
             validated[key] = _validate_profile(path, key, value)
     return validated
@@ -578,6 +596,14 @@ def _validate_max_parallel(path: Path | str, value: Any) -> int | str:
             f'review config max_parallel must be a positive integer or "{MAX_PARALLEL_AUTO}": {path}'
         )
     return value
+
+
+def _validate_deduper(path: Path | str, value: Any) -> HarnessProfile | bool:
+    if value is False:
+        return False
+    if not isinstance(value, dict):
+        raise ReviewStateError(f"review config deduper must be a TOML table or false: {path}")
+    return _validate_profile(path, "deduper", value)
 
 
 def parse_max_parallel(value: str) -> int | str:
