@@ -72,12 +72,20 @@ python3 "$SKILL_DIR/scripts/run_reviews.py" --review-dir "$REVIEW_DIR" \
 All eligible slices run in one wave. At most `max_parallel` children run at the same time;
 the other children wait in a queue. A slice can have more than one reviewer lane, and a lane can
 run more than one independent shot of the same prompt in the wave. The runner marks a finding that
-a sibling shot already reported as an automatic duplicate. Reviewers emit the strict
+a sibling shot already reported as an automatic duplicate. After all runs of a slice finish, a
+dedupe model child groups same-path findings from different runs, and the runner marks those
+duplicates too. Reviewers emit the strict
 JSON shape in `references/review-result.schema.json`; the runner validates it, assigns
 session-scoped `f_` IDs, and replaces the raw result with generated Markdown. Invalid results are
 retryable slice failures. Consume only final JSON, finding IDs and Markdown paths in `out`, and
 diagnostics in `err`. Each `out` record names its lane in `ln`, its shot in `sh`, and carries
-`final`. Treat each finding as a hypothesis and validate it against the code and task.
+`final`. When other runs reported the same finding, `by` maps the kept finding ID to the lane
+labels of all its reports. Treat each finding as a hypothesis and validate it against the code and
+task.
+
+A dedupe failure returns an `err` record with `"st":"dedupe_failed"` and does not change the
+state of any finding. Handle each finding as usual, and use `dedupe_finding.py` for duplicates that
+you find.
 
 5. Complete the chosen mode:
 
