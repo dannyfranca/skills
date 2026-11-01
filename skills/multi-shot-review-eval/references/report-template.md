@@ -18,6 +18,13 @@ Write `report.md` in the eval directory with this structure. Use short lines. Us
 
 Pooled (<eval ids>): <diff, CI, bucket> — or "no earlier evals of this contrast".
 
+## Reviewer lanes
+
+| arm | lane | kept | unique | shared | rejected | rejection rate |
+| --- | --- | --- | --- | --- | --- | --- |
+
+Use `arms.<arm>.lanes` from `stats.json`. Write "no lane data" when no arm has lanes.
+
 ## Flags
 
 - Worsening (P ≥ 80%): <arm metric p_worse>, or none.

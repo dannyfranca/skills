@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from diff_size import DiffSize, resolve_diff_size
-from findings import load_findings
+from findings import load_findings, run_lanes
+from lane_metrics import LaneCounts, lane_counts
 from metrics import Ratio, session_metrics
 from prices import PriceTable
 from session_store import Session
@@ -19,6 +20,7 @@ class SessionFacts:
     metrics: dict[str, Ratio]
     finding_classes: Counter[str]
     findings_complete: bool
+    lanes: dict[str, LaneCounts] = field(default_factory=dict)
 
 
 class FactsCache:
@@ -52,6 +54,7 @@ class FactsCache:
             # Class totals must describe the same sessions as the quality metrics, which skip partial findings.
             finding_classes=Counter(item.finding_class.value for item in loaded.findings) if loaded.complete else Counter(),
             findings_complete=loaded.complete,
+            lanes=lane_counts(loaded.findings, ran=run_lanes(session)) if loaded.complete else {},
         )
 
 

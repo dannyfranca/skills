@@ -4,6 +4,27 @@ All files are in the eval directory `<review_root>/_evals/<eval-id>/`. `eval_sta
 
 Use JSON with UTF-8 text. Use the lowercase values exactly as this file shows them.
 
+## Lane metrics
+
+`stats.json` gives the reviewer-lane metrics of each arm in `arms.<arm>.lanes`. The key is the lane label from the review session. Each lane that ran has an entry, also with no findings. The metrics count only completed sessions that have all their findings.
+
+```json
+{
+  "lanes": {
+    "codex:model-x": {"kept": 12, "unique": 9, "shared": 3, "rejected": 8, "rejection_rate": 0.4}
+  }
+}
+```
+
+- A duplicate group is one finding and the same-wave reports that the reviewer runner grouped into it. A group counts one time for each lane that reported it. The kept copy sets the outcome of the group: when the author rejects it, the group is rejected for each lane.
+- `kept`: the kept groups that the lane reported.
+- `unique`: the kept groups that only this lane reported.
+- `shared`: the kept groups that this lane and one or more other lanes reported. `kept` is `unique` plus `shared`.
+- `rejected`: the rejected groups that the lane reported.
+- `rejection_rate`: `rejected / (kept + rejected)`. It is `null` when the lane has no kept or rejected group.
+- Open findings, removed findings, and duplicates that the author marked are not in these metrics.
+- A session from before reviewer lanes has no lane label. Its runs count as one lane, with the label `<harness>:<model>[:<reasoning>]` from the review profile.
+
 ## Analyst file
 
 Path: `analysts/<analyst>.json`. `<analyst>` is the harness and model with `/` changed to `-`, for example `codex-model-x` for the analyst `codex/model-x`. Model names in this file are placeholders.

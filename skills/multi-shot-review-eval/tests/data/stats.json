@@ -11,6 +11,22 @@
         "kept": 15,
         "rejected": 10
       },
+      "lanes": {
+        "claude-code:model-a": {
+          "kept": 6,
+          "rejected": 2,
+          "rejection_rate": 0.25,
+          "shared": 3,
+          "unique": 3
+        },
+        "codex:model-c": {
+          "kept": 12,
+          "rejected": 8,
+          "rejection_rate": 0.4,
+          "shared": 3,
+          "unique": 9
+        }
+      },
       "metrics": {
         "busy_minutes": {
           "ci95": [

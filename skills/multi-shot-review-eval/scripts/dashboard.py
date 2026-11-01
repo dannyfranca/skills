@@ -8,7 +8,7 @@ from typing import Any
 from agreement import ClassAccuracy, PairAgreement
 from analyst_files import AnalystFile, Synthesis
 from dashboard_review import analyst_views, finding_sample
-from dashboard_summary import header, recommendations, reproduction, strata, worsening
+from dashboard_summary import header, lanes, recommendations, reproduction, strata, worsening
 from eval_inputs import SampleEntry
 from forest_plot import forest_plot, forest_rows
 from html_parts import section, text
@@ -58,6 +58,7 @@ def render_dashboard(data: DashboardInput) -> str:
         _forest(stats),
         _trend(stats),
         strata(stats),
+        lanes(stats),
         worsening(stats),
         finding_sample(data.entries, data.analysts),
         analyst_views(data.analysts, data.agreement, data.accuracy),
