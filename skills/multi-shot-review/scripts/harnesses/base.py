@@ -80,6 +80,16 @@ class ReviewHarness(ABC):
     ) -> Invocation:
         """Build one read-only pass-budget judge invocation."""
 
+    @abstractmethod
+    def dedupe_invocation(
+        self,
+        *,
+        prompt: str,
+        output_file: Path,
+        profile: ResolvedProfile,
+    ) -> Invocation:
+        """Build one read-only invocation that groups duplicate findings of a wave."""
+
     def materialize_review_result(
         self,
         *,
