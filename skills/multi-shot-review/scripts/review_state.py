@@ -18,7 +18,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import AbstractContextManager
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable
@@ -28,7 +28,7 @@ from skill_revision import skill_revision
 from target_size import measure_target_size
 
 if TYPE_CHECKING:
-    from review_config import ReviewConfig
+    from review_config import ReviewConfig, ReviewerLane
 from review_result import (
     JUDGE_SCHEMA_PATH,
     RESULT_SCHEMA_VERSION,
@@ -68,8 +68,25 @@ DEFAULT_MAX_PASSES = 3
 JUDGE_VERDICTS = frozenset({"continue", "stop"})
 DEFAULT_SHOT_PASSES = 1
 SHOT_PASSES_ALWAYS = "always"
+LANE_KEYS = frozenset(
+    {
+        "label",
+        "harness",
+        "harness_source",
+        "model",
+        "model_source",
+        "reasoning",
+        "reasoning_source",
+        "from_pass",
+        "passes",
+        "shots",
+        "required",
+        "retire_when_clean",
+    }
+)
+SETTLED_RUN_STATUSES = frozenset({"findings", "no_findings", "ignored"})
 # Runs whose findings were all rejected or auto-deduplicated count as clean shots
-# for the shot phase-down rule, because the author kept nothing from them.
+# for the lane phase-down rule, because the author kept nothing from them.
 CLEAN_IGNORED_CLASSIFICATIONS = frozenset({"ignored_findings", "auto_duplicates"})
 AUTO_DUPLICATE_TITLE_OVERLAP = 0.6
 
@@ -104,6 +121,67 @@ def _validate_harness_choice(value: Any, source: Any, *, owner: str) -> None:
         raise ReviewStateError(f"{owner} has invalid harness: {exc}") from exc
     if source not in HARNESS_SOURCES:
         raise ReviewStateError(f"{owner} has invalid harness_source")
+
+
+def _validate_lane(lane: Any, *, owner: str) -> None:
+    if not isinstance(lane, dict):
+        raise ReviewStateError(f"{owner} must be an object")
+    if set(lane) != LANE_KEYS:
+        raise ReviewStateError(f"{owner} must have exactly: {', '.join(sorted(LANE_KEYS))}")
+    if not isinstance(lane["label"], str) or not lane["label"].strip():
+        raise ReviewStateError(f"{owner} must have a label string")
+    _validate_harness_choice(lane["harness"], lane["harness_source"], owner=owner)
+    for field in ("model", "reasoning"):
+        _validate_execution_choice(lane[field], lane[f"{field}_source"], field=field, owner=owner)
+    for field in ("from_pass", "shots"):
+        if type(lane[field]) is not int or lane[field] < 1:
+            raise ReviewStateError(f"{owner} {field} must be a positive integer")
+    if lane["passes"] is not None and (type(lane["passes"]) is not int or lane["passes"] < 1):
+        raise ReviewStateError(f"{owner} passes must be a positive integer or null")
+    for field in ("required", "retire_when_clean"):
+        if not isinstance(lane[field], bool):
+            raise ReviewStateError(f"{owner} {field} must be a boolean")
+
+
+def _stored_lanes(lanes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    stored: list[dict[str, Any]] = []
+    for lane in lanes:
+        model, reasoning = lane.get("model"), lane.get("reasoning")
+        stored.append(
+            {
+                "harness": lane.get("harness"),
+                "harness_source": lane.get("harness_source", "slice-override"),
+                "model": model,
+                "model_source": lane.get("model_source")
+                or ("harness-default" if model is None else "slice-override"),
+                "reasoning": reasoning,
+                "reasoning_source": lane.get("reasoning_source")
+                or ("harness-default" if reasoning is None else "slice-override"),
+                "from_pass": lane.get("from_pass", 1),
+                "passes": lane.get("passes"),
+                "shots": lane.get("shots", 1),
+                "required": lane.get("required", False),
+                "retire_when_clean": lane.get("retire_when_clean", True),
+                "name": lane.get("name"),
+            }
+        )
+    for lane, label in zip(stored, _lane_labels(stored)):
+        del lane["name"]
+        lane["label"] = label
+    return stored
+
+
+def _validate_lanes(lanes: Any, *, owner: str) -> None:
+    if not isinstance(lanes, list) or not lanes:
+        raise ReviewStateError(f"{owner} must have a non-empty lanes array")
+    for index, lane in enumerate(lanes):
+        _validate_lane(lane, owner=f"{owner} lane {index + 1}")
+    labels = [lane["label"] for lane in lanes]
+    if len(set(labels)) != len(labels):
+        raise ReviewStateError(f"{owner} lane labels must be unique")
+    # A slice whose lanes all start later would have nobody to review its first pass.
+    if not any(lane["from_pass"] == 1 for lane in lanes):
+        raise ReviewStateError(f"{owner} needs a lane with from_pass 1")
 
 
 def now_iso() -> str:
@@ -361,10 +439,65 @@ def _run_is_clean(run: dict[str, Any]) -> bool:
     )
 
 
-def _latest_shot_runs(runs: Iterable[dict[str, Any]]) -> dict[int, dict[str, Any]]:
-    latest: dict[int, dict[str, Any]] = {}
+def _lane_base_label(lane: dict[str, Any]) -> str:
+    if lane.get("name"):
+        return str(lane["name"])
+    if lane.get("reasoning"):
+        # Keep the empty model slot so a reasoning effort never reads as a model ID.
+        return f"{lane['harness']}:{lane.get('model') or ''}:{lane['reasoning']}"
+    if lane.get("model"):
+        return f"{lane['harness']}:{lane['model']}"
+    return str(lane["harness"])
+
+
+def _lane_labels(lanes: list[dict[str, Any]]) -> list[str]:
+    labels: list[str] = []
+    for index, lane in enumerate(lanes, start=1):
+        base = _lane_base_label(lane)
+        label, suffix = base, index
+        while label in labels:
+            label = f"{base}#{suffix}"
+            suffix += 1
+        labels.append(label)
+    return labels
+
+
+def _slice_lanes(item: dict[str, Any]) -> list[dict[str, Any]]:
+    if "lanes" in item:
+        return item["lanes"]
+    # Sessions written before lanes keep top-level profile and shot settings; read them as one lane.
+    shots = int(item.get("shots", 1))
+    shot_passes = item.get("shot_passes", DEFAULT_SHOT_PASSES)
+    lane = {
+        "harness": item["harness"],
+        "harness_source": item["harness_source"],
+        "model": item.get("model"),
+        "model_source": item["model_source"],
+        "reasoning": item.get("reasoning"),
+        "reasoning_source": item["reasoning_source"],
+        "from_pass": 1,
+        "passes": None if shots == 1 or shot_passes == SHOT_PASSES_ALWAYS else shot_passes,
+        "shots": shots,
+        "required": False,
+        "retire_when_clean": True,
+    }
+    return [{"label": _lane_base_label(lane), **lane}]
+
+
+def _run_lane_index(lanes: list[dict[str, Any]], run: dict[str, Any]) -> int:
+    label = run.get("lane")
+    for index, lane in enumerate(lanes):
+        if lane["label"] == label:
+            return index
+    return 0
+
+
+def _latest_lane_shot_runs(
+    lanes: list[dict[str, Any]], runs: Iterable[dict[str, Any]]
+) -> dict[tuple[int, int], dict[str, Any]]:
+    latest: dict[tuple[int, int], dict[str, Any]] = {}
     for run in runs:
-        latest[int(run.get("shot", 1))] = run
+        latest[(_run_lane_index(lanes, run), int(run.get("shot", 1)))] = run
     return latest
 
 
@@ -412,7 +545,7 @@ def _finding_history_block(prior_findings: list[dict[str, Any]]) -> str:
         if entry["end_line"] is not None and entry["end_line"] != entry["start_line"]:
             location = f"{location}-{entry['end_line']}"
         lines.append(
-            f"- pass {entry['pass']} shot {entry['shot']} [{entry['severity']}] "
+            f"- pass {entry['pass']} lane {entry['lane']} shot {entry['shot']} [{entry['severity']}] "
             f"{entry['title']} ({location}): {entry['outcome']}"
         )
     return "\n".join(lines)
@@ -842,23 +975,10 @@ class ReviewState:
                     raise ReviewStateError(f"prompt slice {name!r} must have prompt text")
             if not isinstance(item.get("cwd"), str) or not item["cwd"]:
                 raise ReviewStateError(f"slice {name!r} must have cwd")
-            _validate_harness_choice(
-                item.get("harness"),
-                item.get("harness_source"),
-                owner=f"slice {name!r}",
-            )
-            _validate_execution_choice(
-                item.get("model"),
-                item.get("model_source"),
-                field="model",
-                owner=f"slice {name!r}",
-            )
-            _validate_execution_choice(
-                item.get("reasoning"),
-                item.get("reasoning_source"),
-                field="reasoning",
-                owner=f"slice {name!r}",
-            )
+            if "lanes" in item:
+                _validate_lanes(item["lanes"], owner=f"slice {name!r}")
+            else:
+                self._validate_legacy_slice_profile(name, item)
             if type(item.get("next_pass")) is not int or item["next_pass"] < 1:
                 raise ReviewStateError(f"slice {name!r} must have a positive next_pass")
             if not isinstance(item.get("complete"), bool):
@@ -874,13 +994,6 @@ class ReviewState:
             definition_version = item.get("definition_version", 1)
             if type(definition_version) is not int or definition_version < 1:
                 raise ReviewStateError(f"slice {name!r} has invalid definition version")
-            shots = item.get("shots", 1)
-            if type(shots) is not int or shots < 1:
-                raise ReviewStateError(f"slice {name!r} must have a positive shots count")
-            if not _valid_shot_passes(item.get("shot_passes", DEFAULT_SHOT_PASSES)):
-                raise ReviewStateError(
-                    f'slice {name!r} shot_passes must be a positive integer or "{SHOT_PASSES_ALWAYS}"'
-                )
             pass_base = item.get("pass_base", 0)
             if type(pass_base) is not int or pass_base < 0:
                 raise ReviewStateError(f"slice {name!r} has invalid pass base")
@@ -912,6 +1025,33 @@ class ReviewState:
                             f"duplicate session finding id: {finding_id}"
                         )
                     session_finding_ids.add(finding_id)
+
+    @staticmethod
+    def _validate_legacy_slice_profile(name: str, item: dict[str, Any]) -> None:
+        _validate_harness_choice(
+            item.get("harness"),
+            item.get("harness_source"),
+            owner=f"slice {name!r}",
+        )
+        _validate_execution_choice(
+            item.get("model"),
+            item.get("model_source"),
+            field="model",
+            owner=f"slice {name!r}",
+        )
+        _validate_execution_choice(
+            item.get("reasoning"),
+            item.get("reasoning_source"),
+            field="reasoning",
+            owner=f"slice {name!r}",
+        )
+        shots = item.get("shots", 1)
+        if type(shots) is not int or shots < 1:
+            raise ReviewStateError(f"slice {name!r} must have a positive shots count")
+        if not _valid_shot_passes(item.get("shot_passes", DEFAULT_SHOT_PASSES)):
+            raise ReviewStateError(
+                f'slice {name!r} shot_passes must be a positive integer or "{SHOT_PASSES_ALWAYS}"'
+            )
 
     @staticmethod
     def _validate_judgement(slice_name: str, judgement: Any) -> None:
@@ -968,6 +1108,9 @@ class ReviewState:
         shot = run.get("shot", 1)
         if type(shot) is not int or shot < 1:
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid shot")
+        lane = run.get("lane")
+        if lane is not None and (not isinstance(lane, str) or not lane.strip()):
+            raise ReviewStateError(f"slice {slice_name!r} has run with invalid lane")
         if not isinstance(run.get("output_file"), str) or not run["output_file"]:
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid output_file")
         if run.get("status") not in {"running", "findings", "no_findings", "failed", "timeout", "ignored"}:
@@ -1222,18 +1365,11 @@ class ReviewState:
         reasoning_source: str | None = None,
         source: str = "classifier",
         user_directive: str | None = None,
-        shots: int = 1,
-        shot_passes: int | str = DEFAULT_SHOT_PASSES,
+        lanes: list[dict[str, Any]] | None = None,
     ) -> None:
         self._validate_slice_name(name)
         if source not in {"classifier", "user"}:
             raise ReviewStateError("slice source must be classifier or user")
-        if isinstance(shots, bool) or type(shots) is not int or shots < 1:
-            raise ReviewStateError("slice shots must be a positive integer")
-        if not _valid_shot_passes(shot_passes):
-            raise ReviewStateError(
-                f'slice shot_passes must be a positive integer or "{SHOT_PASSES_ALWAYS}"'
-            )
         if source == "user":
             user_directive = _require_non_empty_text(user_directive or "", "user directive")
         if mode not in {"native", "prompt"}:
@@ -1253,37 +1389,26 @@ class ReviewState:
                 raise ReviewStateError("prompt slices cannot be combined with native target flags")
             if not prompt or not prompt.strip():
                 raise ReviewStateError("prompt slices require non-empty prompt text")
-        _validate_harness_choice(harness, harness_source, owner="slice")
-        if model_source is None:
-            model_source = "harness-default" if model is None else "slice-override"
-        if reasoning_source is None:
-            reasoning_source = (
-                "harness-default" if reasoning is None else "slice-override"
-            )
-        _validate_execution_choice(
-            model,
-            model_source,
-            field="model",
-            owner="slice",
-        )
-        _validate_execution_choice(
-            reasoning,
-            reasoning_source,
-            field="reasoning",
-            owner="slice",
-        )
+        if lanes is None:
+            lanes = [
+                {
+                    "harness": harness,
+                    "harness_source": harness_source,
+                    "model": model,
+                    "model_source": model_source,
+                    "reasoning": reasoning,
+                    "reasoning_source": reasoning_source,
+                }
+            ]
+        stored_lanes = _stored_lanes(lanes)
+        _validate_lanes(stored_lanes, owner="slice")
         definition = {
             "name": name,
             "mode": mode,
             "target": target,
             "prompt": prompt,
             "cwd": str(cwd.resolve()),
-            "harness": harness,
-            "harness_source": harness_source,
-            "model": model,
-            "model_source": model_source,
-            "reasoning": reasoning,
-            "reasoning_source": reasoning_source,
+            "lanes": stored_lanes,
             "next_pass": 1,
             "complete": False,
             "last_error": None,
@@ -1291,8 +1416,6 @@ class ReviewState:
             "user_directive": user_directive,
             "removed": False,
             "definition_version": 1,
-            "shots": shots,
-            "shot_passes": shot_passes,
             "judgements": [],
         }
         existing = self.data["slices"].get(name)
@@ -1416,32 +1539,50 @@ class ReviewState:
             if not self._slice_wants_wave(item):
                 continue
             pass_number = item["next_pass"]
-            if pass_number > self._allowed_passes(item, max_passes):
+            if self._over_pass_budget(item, max_passes):
                 continue
+            lanes = _slice_lanes(item)
             wave = self._wave_runs(item, pass_number)
             if wave:
-                wave_size = max(int(run.get("shot", 1)) for run in wave)
-                shots = [
-                    shot
-                    for shot, run in _latest_shot_runs(wave).items()
+                slots = [
+                    slot
+                    for slot, run in _latest_lane_shot_runs(lanes, wave).items()
                     if run.get("status") in {"failed", "timeout"}
                 ]
             else:
-                wave_size = self._wave_size(item, pass_number)
-                shots = list(range(1, wave_size + 1))
+                slots = [
+                    (lane_index, shot)
+                    for lane_index, shots in self._wave_plan(item, pass_number)
+                    for shot in range(1, shots + 1)
+                ]
             prior_findings = self._prior_findings(name, item, pass_number)
-            for shot in shots:
+            for lane_index, shot in slots:
+                lane = lanes[lane_index]
                 output_file = self._next_output_file(
                     pass_number,
                     name,
                     item["runs"],
+                    lane=lane["label"],
+                    lane_index=lane_index + 1 if len(lanes) > 1 else None,
                     shot=shot,
-                    multi_shot=int(item.get("shots", 1)) > 1,
+                    multi_shot=lane["shots"] > 1,
                 )
+                profile = {
+                    field: lane[field]
+                    for field in (
+                        "harness",
+                        "harness_source",
+                        "model",
+                        "model_source",
+                        "reasoning",
+                        "reasoning_source",
+                    )
+                }
                 run_id = uuid.uuid4().hex
                 run = {
                     "id": run_id,
                     "pass": pass_number,
+                    "lane": lane["label"],
                     "shot": shot,
                     "output_file": str(output_file),
                     "status": "running",
@@ -1456,12 +1597,7 @@ class ReviewState:
                     "runner_key": _process_key(os.getpid()),
                     "error": None,
                     "definition_version": item.get("definition_version", 1),
-                    "harness": item["harness"],
-                    "harness_source": item["harness_source"],
-                    "model": item.get("model"),
-                    "model_source": item["model_source"],
-                    "reasoning": item.get("reasoning"),
-                    "reasoning_source": item["reasoning_source"],
+                    **profile,
                 }
                 item["runs"].append(run)
                 item["last_error"] = None
@@ -1471,6 +1607,7 @@ class ReviewState:
                         "slice": name,
                         "run_id": run_id,
                         "pass": pass_number,
+                        "lane": lane["label"],
                         "shot": shot,
                         "at": now_iso(),
                     }
@@ -1487,7 +1624,10 @@ class ReviewState:
                                 json.dumps(self.data["session"]["target"])
                             ),
                             "session_variant": self.data["session"]["variant"],
+                            **profile,
                             "pass": pass_number,
+                            "lane": lane["label"],
+                            "lane_index": lane_index + 1,
                             "shot": shot,
                             "prior_findings": prior_findings,
                         },
@@ -1503,9 +1643,19 @@ class ReviewState:
             name
             for name in sorted(self.data["slices"])
             if self._slice_wants_wave(self.data["slices"][name])
-            and self.data["slices"][name]["next_pass"]
-            > self._allowed_passes(self.data["slices"][name], max_passes)
+            and self._over_pass_budget(self.data["slices"][name], max_passes)
         ]
+
+    def _over_pass_budget(self, item: dict[str, Any], max_passes: int) -> bool:
+        if item["next_pass"] <= self._allowed_passes(item, max_passes):
+            return False
+        # A wave that already has runs passed the budget check when it started; its retries
+        # finish that wave.
+        if self._wave_runs(item, item["next_pass"]):
+            return False
+        # A clean wave leaves no findings to judge; the wave that only runs pending required lanes
+        # is part of completing the slice, not a further review pass.
+        return not (self._latest_wave_settled_clean(item) and self._pending_required_lanes(item))
 
     def reserve_judges(self, *, max_passes: int = DEFAULT_MAX_PASSES) -> dict[str, dict[str, Any]]:
         """Claim each awaiting judge so a concurrent runner does not start a second one."""
@@ -1724,20 +1874,61 @@ class ReviewState:
             and run.get("definition_version", 1) == item.get("definition_version", 1)
         ]
 
-    def _wave_size(self, item: dict[str, Any], pass_number: int) -> int:
-        # Extra shots pay off on the first passes of a scope, where the reviewer has not seen the
-        # content yet; a redefinition is a new scope, a judge window is not.
-        shot_passes = item.get("shot_passes", DEFAULT_SHOT_PASSES)
-        if shot_passes != SHOT_PASSES_ALWAYS and pass_number - item.get("pass_base", 0) > shot_passes:
-            return 1
-        clean_shots = sum(
-            1
+    def _wave_plan(self, item: dict[str, Any], pass_number: int) -> list[tuple[int, int]]:
+        """Return (lane index, shot count) pairs for a new wave of the slice."""
+
+        lanes = _slice_lanes(item)
+        version = item.get("definition_version", 1)
+        earlier = [
+            run
             for run in item["runs"]
-            if run.get("pass", 0) < pass_number
-            and run.get("definition_version", 1) == item.get("definition_version", 1)
-            and _run_is_clean(run)
-        )
-        return max(1, int(item.get("shots", 1)) - clean_shots)
+            if run.get("definition_version", 1) == version and int(run.get("pass", 0)) < pass_number
+        ]
+        if earlier and self._latest_wave_settled_clean(item):
+            pending = self._pending_required_lanes(item)
+            if pending:
+                return [(index, lanes[index]["shots"]) for index in pending]
+        # Lane schedules count from the slice definition: a redefinition is a new scope, a judge
+        # window is not.
+        relative_pass = pass_number - item.get("pass_base", 0)
+        plan: list[tuple[int, int]] = []
+        for index, lane in enumerate(lanes):
+            if relative_pass < lane["from_pass"]:
+                continue
+            if lane["passes"] is not None and relative_pass >= lane["from_pass"] + lane["passes"]:
+                continue
+            shots = lane["shots"]
+            if lane["retire_when_clean"]:
+                shots -= sum(
+                    1
+                    for run in earlier
+                    if _run_lane_index(lanes, run) == index and _run_is_clean(run)
+                )
+            if shots > 0:
+                plan.append((index, shots))
+        if plan:
+            return plan
+        # Open findings still need a verifier when every lane is off schedule or retired; the
+        # lane that reported them last knows them best.
+        for run in reversed(earlier):
+            if run.get("status") in {"findings", "ignored"} and not _run_is_clean(run):
+                return [(_run_lane_index(lanes, run), 1)]
+        return [(0, 1)]
+
+    def _pending_required_lanes(self, item: dict[str, Any]) -> list[int]:
+        lanes = _slice_lanes(item)
+        version = item.get("definition_version", 1)
+        ran = {
+            _run_lane_index(lanes, run)
+            for run in item["runs"]
+            if run.get("definition_version", 1) == version
+            and run.get("status") in SETTLED_RUN_STATUSES
+        }
+        return [
+            index
+            for index, lane in enumerate(lanes)
+            if lane["required"] and index not in ran
+        ]
 
     def _latest_wave_settled_clean(self, item: dict[str, Any]) -> bool:
         passes = [
@@ -1747,14 +1938,18 @@ class ReviewState:
         ]
         if not passes:
             return False
-        latest = _latest_shot_runs(self._wave_runs(item, max(passes)))
+        latest = _latest_lane_shot_runs(_slice_lanes(item), self._wave_runs(item, max(passes)))
         return all(_run_is_clean(run) for run in latest.values())
+
+    def _review_settled(self, item: dict[str, Any]) -> bool:
+        return self._latest_wave_settled_clean(item) and not self._pending_required_lanes(item)
 
     def _prior_findings(
         self, slice_name: str, item: dict[str, Any], pass_number: int
     ) -> list[dict[str, Any]]:
         entries: list[dict[str, Any]] = []
         version = item.get("definition_version", 1)
+        lanes = _slice_lanes(item)
         for run in item["runs"]:
             if int(run.get("pass", 0)) >= pass_number:
                 continue
@@ -1768,6 +1963,7 @@ class ReviewState:
                 entries.append(
                     {
                         "pass": int(run["pass"]),
+                        "lane": _run_lane_index(lanes, run) + 1,
                         "shot": int(run.get("shot", 1)),
                         "id": finding["id"],
                         "severity": finding["severity"],
@@ -1778,7 +1974,7 @@ class ReviewState:
                         "outcome": _finding_outcome(finding),
                     }
                 )
-        entries.sort(key=lambda entry: (entry["pass"], entry["shot"], entry["id"]))
+        entries.sort(key=lambda entry: (entry["pass"], entry["lane"], entry["shot"], entry["id"]))
         return entries
 
     def complete_run(
@@ -1918,6 +2114,7 @@ class ReviewState:
                 "slice": slice_name,
                 "run_id": run_id,
                 "pass": run["pass"],
+                "lane": self._run_lane_label(item, run),
                 "shot": run.get("shot", 1),
                 "status": run["status"],
                 "classification": run["classification"],
@@ -1930,17 +2127,21 @@ class ReviewState:
     def _settle_wave(self, item: dict[str, Any], pass_number: int) -> None:
         """Decide the slice's next step once every shot of the wave has reported."""
 
-        latest = _latest_shot_runs(self._wave_runs(item, pass_number))
+        latest = _latest_lane_shot_runs(_slice_lanes(item), self._wave_runs(item, pass_number))
         statuses = {run.get("status") for run in latest.values()}
         if statuses & {"running", "failed", "timeout"}:
             item["complete"] = False
             return
         item["last_error"] = None
-        if all(_run_is_clean(run) for run in latest.values()):
+        if self._review_settled(item):
             item["complete"] = True
             return
         item["next_pass"] = max(item["next_pass"], pass_number + 1)
         item["complete"] = False
+
+    @staticmethod
+    def _run_lane_label(item: dict[str, Any], run: dict[str, Any]) -> str:
+        return run.get("lane") or _slice_lanes(item)[0]["label"]
 
     def _mark_auto_duplicates(
         self,
@@ -2130,7 +2331,7 @@ class ReviewState:
                 self._archive_and_render_run(name, run)
             else:
                 self._render_run_findings(run)
-            item["complete"] = self._latest_wave_settled_clean(item) or self._stopped_by_judge(item)
+            item["complete"] = self._review_settled(item) or self._stopped_by_judge(item)
             if item["complete"]:
                 item["last_error"] = None
         except (OSError, UnicodeError):
@@ -2172,7 +2373,7 @@ class ReviewState:
                 self._archive_and_render_run(name, run)
             else:
                 self._render_run_findings(run)
-            item["complete"] = self._latest_wave_settled_clean(item) or self._stopped_by_judge(item)
+            item["complete"] = self._review_settled(item) or self._stopped_by_judge(item)
             if item["complete"]:
                 item["last_error"] = None
         except (OSError, UnicodeError):
@@ -2216,6 +2417,7 @@ class ReviewState:
                 model_source=run["model_source"],
                 reasoning=run.get("reasoning"),
                 reasoning_source=run["reasoning_source"],
+                lane=run.get("lane"),
             ),
         )
 
@@ -2257,6 +2459,7 @@ class ReviewState:
             model_source=run["model_source"],
             reasoning=run.get("reasoning"),
             reasoning_source=run["reasoning_source"],
+            lane=run.get("lane"),
         )
         self._archive_run_findings(slice_name, run)
         archive_path = Path(run["findings_archive"])
@@ -2363,6 +2566,8 @@ class ReviewState:
         name: str,
         runs: Iterable[dict[str, Any]],
         *,
+        lane: str | None = None,
+        lane_index: int | None = None,
         shot: int = 1,
         multi_shot: bool = False,
     ) -> Path:
@@ -2372,12 +2577,15 @@ class ReviewState:
             sum(
                 1
                 for run in runs
-                if run.get("pass") == pass_number and run.get("shot", 1) == shot
+                if run.get("pass") == pass_number
+                and run.get("shot", 1) == shot
+                and run.get("lane", lane) == lane
             )
             + 1
         )
         timestamp = filename_timestamp()
-        shot_suffix = f"-shot{shot}" if multi_shot else ""
+        lane_suffix = "" if lane_index is None else f"-lane{lane_index}"
+        shot_suffix = lane_suffix + (f"-shot{shot}" if multi_shot else "")
         while True:
             retry_suffix = "" if attempt == 1 else f"-retry{attempt}"
             candidate = (
@@ -2889,6 +3097,7 @@ def _write_failure_review_artifact(
                 model_source=reservation.slice_data["model_source"],
                 reasoning=reservation.slice_data.get("reasoning"),
                 reasoning_source=reservation.slice_data["reasoning_source"],
+                lane=reservation.slice_data.get("lane"),
             ),
         )
     except (OSError, UnicodeError):
@@ -2992,6 +3201,7 @@ def _out_record(
         "final": final,
         "ids": _open_finding_ids(run) if final else state._finding_ids_for_run(slice_name, run),
         "p": int(run["pass"]),
+        "ln": state._run_lane_label(state.data["slices"][slice_name], run),
         "s": slice_name,
         "sh": int(run.get("shot", 1)),
         "st": run.get("classification") or "done",
@@ -3013,6 +3223,7 @@ def _wave_out_records(
                 "f": _relative_path(Path(run["output_file"])),
                 "final": False,
                 "ids": [finding["id"] for finding in (run.get("findings") or [])],
+                "ln": state._run_lane_label(state.data["slices"][slice_name], run),
                 "p": int(run["pass"]),
                 "s": slice_name,
                 "sh": int(run.get("shot", 1)),
@@ -3385,8 +3596,12 @@ def run_reviews(
                 remaining = _remaining_count(state)
             display_status = persisted_status if completion_applied else "skipped-late-completion"
             if stream_progress:
+                lanes = _slice_lanes(reservation.slice_data)
+                lane_index = int(reservation.slice_data["lane_index"])
                 shot = int(reservation.slice_data.get("shot", 1))
-                shot_label = f" shot {shot}" if "-shot" in reservation.output_file.name else ""
+                shot_label = f" shot {shot}" if lanes[lane_index - 1]["shots"] > 1 else ""
+                if len(lanes) > 1:
+                    shot_label = f" lane {lane_index}{shot_label}"
                 print(
                     f"{reservation.slice_name}: pass {reservation.pass_number}{shot_label} {display_status} -> {reservation.output_file}",
                     file=progress_stream,
@@ -3444,8 +3659,6 @@ def run_reviews(
 
 
 def parse_add_slice_args(argv: list[str] | None = None) -> argparse.Namespace:
-    from review_config import parse_shot_passes
-
     parser = argparse.ArgumentParser(description="Register one review slice in an initialized review state.")
     parser.add_argument("--review-dir", required=True, type=Path)
     parser.add_argument("--name", required=True)
@@ -3454,20 +3667,11 @@ def parse_add_slice_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--commit")
     parser.add_argument("--prompt-file", type=Path)
     parser.add_argument(
-        "--shots",
-        type=int,
+        "--reviewers-file",
+        type=Path,
         help=(
-            "Run this many parallel reviewer shots per pass; each clean shot "
-            "reduces later waves by one. Defaults to the configured shots."
-        ),
-    )
-    parser.add_argument(
-        "--shot-passes",
-        type=parse_shot_passes,
-        metavar="N|always",
-        help=(
-            "Run more than one shot only on the first N passes of the slice scope; "
-            '"always" keeps the shot count on every pass. Defaults to the configured shot_passes.'
+            "Use the [[reviewers]] lanes in this TOML file for this slice instead of "
+            "the configured lanes."
         ),
     )
     parser.add_argument(
@@ -3536,31 +3740,60 @@ def add_slice_from_args(args: argparse.Namespace, *, stdin: Any = sys.stdin) -> 
             if args.user_directive_file is not None
             else None
         )
-        try:
-            profile = resolve_profile(
-                config.slice_default,
-                harness=args.harness,
-                model=args.model,
-                reasoning=args.reasoning,
-                override_source="slice-override",
-            )
-        except HarnessError as exc:
-            raise ReviewStateError(str(exc)) from exc
         state.add_slice(
             name=args.name,
             mode=mode,
             target=target,
             prompt=prompt,
             cwd=cwd,
-            harness=profile.harness,
-            harness_source=profile.harness_source,
-            model=profile.model,
-            model_source=profile.model_source,
-            reasoning=profile.reasoning,
-            reasoning_source=profile.reasoning_source,
             source="user" if user_directive is not None else "classifier",
             user_directive=user_directive,
-            shots=config.shots if args.shots is None else args.shots,
-            shot_passes=config.shot_passes if args.shot_passes is None else args.shot_passes,
+            lanes=_slice_lanes_from_args(args, config),
         )
         state.save()
+
+
+def _slice_lanes_from_args(args: argparse.Namespace, config: ReviewConfig) -> list[dict[str, Any]]:
+    from review_config import load_reviewers_file
+
+    profile_flags = any(value is not None for value in (args.harness, args.model, args.reasoning))
+    if args.reviewers_file is not None:
+        if profile_flags:
+            raise ReviewStateError(
+                "--reviewers-file cannot be combined with --harness, --model, or --reasoning"
+            )
+        return _lanes_with_source(load_reviewers_file(args.reviewers_file), "slice-override")
+    if not profile_flags and config.reviewers:
+        return _lanes_with_source(config.reviewers, "configured-default")
+    try:
+        profile = resolve_profile(
+            config.slice_default,
+            harness=args.harness,
+            model=args.model,
+            reasoning=args.reasoning,
+            override_source="slice-override",
+        )
+    except HarnessError as exc:
+        raise ReviewStateError(str(exc)) from exc
+    return [
+        {
+            "harness": profile.harness,
+            "harness_source": profile.harness_source,
+            "model": profile.model,
+            "model_source": profile.model_source,
+            "reasoning": profile.reasoning,
+            "reasoning_source": profile.reasoning_source,
+        }
+    ]
+
+
+def _lanes_with_source(lanes: Iterable[ReviewerLane], source: str) -> list[dict[str, Any]]:
+    return [
+        {
+            **asdict(lane),
+            "harness_source": source,
+            "model_source": "harness-default" if lane.model is None else source,
+            "reasoning_source": "harness-default" if lane.reasoning is None else source,
+        }
+        for lane in lanes
+    ]

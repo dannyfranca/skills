@@ -29,7 +29,7 @@ sys.path.insert(0, str(SCRIPTS))
 import classify_slices  # noqa: E402
 import review_state as review_state_module  # noqa: E402
 from skill_revision import skill_revision  # noqa: E402
-from review_config import ReviewConfig  # noqa: E402
+from review_config import ReviewConfig, ReviewerLane  # noqa: E402
 from harnesses import HarnessProfile  # noqa: E402
 from review_state import (  # noqa: E402
     ReviewState,
@@ -66,6 +66,21 @@ def _pin_session_config(review_dir: Path, config: ReviewConfig) -> None:
         state.data["session"]["variant"] = config.variant
         state.save()
 
+
+
+def _legacy_slice(review_dir: Path, name: str, *, shots: int = 1, shot_passes: int | str | None = None) -> None:
+    """Rewrite a slice into the pre-lane form that older sessions store."""
+    state_path = review_dir / "_state.json"
+    data = json.loads(state_path.read_text(encoding="utf-8"))
+    item = data["slices"][name]
+    lane = item.pop("lanes")[0]
+    for field in ("harness", "model", "reasoning"):
+        item[field] = lane[field]
+        item[f"{field}_source"] = lane[f"{field}_source"]
+    item["shots"] = shots
+    if shot_passes is not None:
+        item["shot_passes"] = shot_passes
+    state_path.write_text(json.dumps(data), encoding="utf-8")
 
 class ReviewStateTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -382,14 +397,14 @@ class ReviewStateTests(unittest.TestCase):
         reloaded = ReviewState.load(self.review_dir)
         self.assertEqual(reloaded.data["slices"]["api"]["next_pass"], 1)
         self.assertFalse(reloaded.data["slices"]["api"]["complete"])
-        self.assertIsNone(reloaded.data["slices"]["api"]["model"])
+        self.assertIsNone(reloaded.data["slices"]["api"]["lanes"][0]["model"])
         self.assertEqual(
-            reloaded.data["slices"]["api"]["model_source"],
+            reloaded.data["slices"]["api"]["lanes"][0]["model_source"],
             "harness-default",
         )
-        self.assertIsNone(reloaded.data["slices"]["api"]["reasoning"])
+        self.assertIsNone(reloaded.data["slices"]["api"]["lanes"][0]["reasoning"])
         self.assertEqual(
-            reloaded.data["slices"]["api"]["reasoning_source"],
+            reloaded.data["slices"]["api"]["lanes"][0]["reasoning_source"],
             "harness-default",
         )
 
@@ -556,6 +571,7 @@ class ReviewStateTests(unittest.TestCase):
                     item = item["runs"][location[1]]
                     value_key, source_key = location[2:]
                 else:
+                    item = item["lanes"][0]
                     value_key, source_key = location
                 item[value_key], item[source_key] = values
                 state_path.write_text(json.dumps(data), encoding="utf-8")
@@ -577,6 +593,7 @@ class ReviewStateTests(unittest.TestCase):
         state_path = self.review_dir / "_state.json"
         legacy = json.loads(state_path.read_text(encoding="utf-8"))
         item = legacy["slices"]["api"]
+        lane = item["lanes"][0]
         run = item["runs"][0]
         for field in (
             "model",
@@ -584,7 +601,7 @@ class ReviewStateTests(unittest.TestCase):
             "reasoning",
             "reasoning_source",
         ):
-            item.pop(field)
+            lane.pop(field)
             run.pop(field)
         state_path.write_text(json.dumps(legacy), encoding="utf-8")
 
@@ -630,8 +647,8 @@ class ReviewStateTests(unittest.TestCase):
         item = state.data["slices"]["api"]
         self.assertFalse(item["removed"])
         self.assertEqual(item["prompt"], "Review the API contract only.")
-        self.assertEqual(item["model"], "second-model")
-        self.assertEqual(item["reasoning"], "low")
+        self.assertEqual(item["lanes"][0]["model"], "second-model")
+        self.assertEqual(item["lanes"][0]["reasoning"], "low")
         self.assertEqual(len(item["runs"]), 1)
         self.assertEqual(item["runs"][0]["model"], "first-model")
         self.assertEqual(item["runs"][0]["model_source"], "configured-default")
@@ -945,7 +962,7 @@ class ClassifierTests(unittest.TestCase):
             self.assertIn("--reasoning <effort>", prompt)
             self.assertIn("Session variant: default", prompt)
             self.assertIn("Configured slice default: harness codex", prompt)
-            self.assertIn("Do not read\n`multi-shot-review.toml`", prompt)
+            self.assertIn("Do not read `multi-shot-review.toml`", prompt)
             self.assertIn("durable slice definition", " ".join(prompt.split()))
             self.assertNotIn("Keep each slice narrow", prompt)
             self.assertNotIn("Prefer the smallest useful set of slices", prompt)
@@ -2435,7 +2452,8 @@ class RunnerTests(unittest.TestCase):
     def test_await_reviews_reports_each_shot_of_a_multi_shot_wave(self) -> None:
         with ReviewState.locked(self.review_dir) as state:
             state.add_slice(name="api", mode="native", target={"uncommitted": True},
-                            prompt=None, cwd=self.root, shots=2)
+                            prompt=None, cwd=self.root,
+                            lanes=[{"harness": "codex", "shots": 2}])
             state.save()
         started = threading.Barrier(3, timeout=2)
         release = threading.Event()
@@ -2682,7 +2700,7 @@ class RunnerTests(unittest.TestCase):
         self.assertIsNone(run["reasoning"])
         self.assertEqual(run["reasoning_source"], "harness-default")
         artifact = Path(run["output_file"]).read_text(encoding="utf-8")
-        self.assertTrue(artifact.startswith('---\nvariant: "default"\nharness: "codex"\n'))
+        self.assertTrue(artifact.startswith('---\nvariant: "default"\nlane: "codex"\nharness: "codex"\n'))
         self.assertIn(
             'model_source: "harness-default"\n'
             "reasoning: null\n"
@@ -3160,45 +3178,45 @@ class CliTests(unittest.TestCase):
         self.assertEqual(explicit.returncode, 0, explicit.stderr)
         self.assertEqual(changed_harness.returncode, 0, changed_harness.stderr)
         state = ReviewState.load(review_dir)
-        self.assertEqual(state.data["slices"]["configured"]["harness"], "codex")
+        self.assertEqual(state.data["slices"]["configured"]["lanes"][0]["harness"], "codex")
         self.assertEqual(
-            state.data["slices"]["configured"]["harness_source"],
+            state.data["slices"]["configured"]["lanes"][0]["harness_source"],
             "configured-default",
         )
-        self.assertEqual(state.data["slices"]["configured"]["model"], "configured-slice")
+        self.assertEqual(state.data["slices"]["configured"]["lanes"][0]["model"], "configured-slice")
         self.assertEqual(
-            state.data["slices"]["configured"]["model_source"],
+            state.data["slices"]["configured"]["lanes"][0]["model_source"],
             "configured-default",
         )
-        self.assertEqual(state.data["slices"]["configured"]["reasoning"], "high")
+        self.assertEqual(state.data["slices"]["configured"]["lanes"][0]["reasoning"], "high")
         self.assertEqual(
-            state.data["slices"]["configured"]["reasoning_source"],
+            state.data["slices"]["configured"]["lanes"][0]["reasoning_source"],
             "configured-default",
         )
-        self.assertEqual(state.data["slices"]["explicit"]["model"], "specialized-slice")
+        self.assertEqual(state.data["slices"]["explicit"]["lanes"][0]["model"], "specialized-slice")
         self.assertEqual(
-            state.data["slices"]["explicit"]["model_source"],
+            state.data["slices"]["explicit"]["lanes"][0]["model_source"],
             "slice-override",
         )
-        self.assertEqual(state.data["slices"]["explicit"]["reasoning"], "low")
+        self.assertEqual(state.data["slices"]["explicit"]["lanes"][0]["reasoning"], "low")
         self.assertEqual(
-            state.data["slices"]["explicit"]["reasoning_source"],
+            state.data["slices"]["explicit"]["lanes"][0]["reasoning_source"],
             "slice-override",
         )
         self.assertEqual(
-            state.data["slices"]["changed-harness"]["harness"],
+            state.data["slices"]["changed-harness"]["lanes"][0]["harness"],
             "claude-code",
         )
         self.assertEqual(
-            state.data["slices"]["changed-harness"]["harness_source"],
+            state.data["slices"]["changed-harness"]["lanes"][0]["harness_source"],
             "slice-override",
         )
-        self.assertIsNone(state.data["slices"]["changed-harness"]["model"])
+        self.assertIsNone(state.data["slices"]["changed-harness"]["lanes"][0]["model"])
         self.assertEqual(
-            state.data["slices"]["changed-harness"]["model_source"],
+            state.data["slices"]["changed-harness"]["lanes"][0]["model_source"],
             "harness-default",
         )
-        self.assertIsNone(state.data["slices"]["changed-harness"]["reasoning"])
+        self.assertIsNone(state.data["slices"]["changed-harness"]["lanes"][0]["reasoning"])
 
     def test_add_slice_rejects_cwd_outside_session_repository(self) -> None:
         review_dir = Path(
@@ -3863,14 +3881,17 @@ class CliTests(unittest.TestCase):
         self.assertEqual(state.data["slices"]["api-prompt"]["mode"], "prompt")
         self.assertTrue(state.data["slices"]["api-prompt"]["complete"])
 
-    def test_config_chain_drives_shots_cap_and_judge_through_the_clis(self) -> None:
+    def test_config_chain_drives_lanes_cap_and_judge_through_the_clis(self) -> None:
         (Path(self.tmp.name) / ".agents").mkdir()
         (Path(self.tmp.name) / ".agents" / "multi-shot-review.toml").write_text(
-            'shots = 3\nmax_passes = 1\n\n[judge]\nharness = "codex"\nmodel = "judge-model"\n',
+            'max_passes = 1\n\n[[reviewers]]\nharness = "codex"\nshots = 3\n\n'
+            '[judge]\nharness = "codex"\nmodel = "judge-model"\n',
             encoding="utf-8",
         )
         (self.root / ".agents").mkdir()
-        (self.root / ".agents" / "multi-shot-review.toml").write_text("shots = 2\n", encoding="utf-8")
+        (self.root / ".agents" / "multi-shot-review.toml").write_text(
+            '[[reviewers]]\nharness = "codex"\nshots = 2\n', encoding="utf-8"
+        )
         review_dir = Path(
             self.run_cli(
                 str(SCRIPTS / "init_state.py"), "--root", str(self.root), "--task", "Review config."
@@ -3917,7 +3938,7 @@ class CliTests(unittest.TestCase):
             return json.loads(proc.stdout)
 
         first = run_wave()
-        self.assertEqual(ReviewState.load(review_dir).data["slices"]["api"]["shots"], 2)
+        self.assertEqual(ReviewState.load(review_dir).data["slices"]["api"]["lanes"][0]["shots"], 2)
         self.assertEqual(sorted((rec["p"], rec["sh"], rec["final"]) for rec in first["out"]),
                          [(1, 1, False), (1, 2, False)])
         self.assertEqual(first["judge"], [])
@@ -4332,7 +4353,18 @@ class ShotsAndJudgeTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def add_slice(self, name: str, *, shots: int = 1, shot_passes: int | str = "always") -> None:
+    def add_slice(
+        self,
+        name: str,
+        *,
+        shots: int = 1,
+        shot_passes: int | str = "always",
+        lanes: list[dict] | None = None,
+    ) -> None:
+        if lanes is None:
+            passes = None if shot_passes == "always" else shot_passes
+            lanes = [{"harness": "codex", "harness_source": "built-in-default",
+                      "shots": shots, "passes": passes}]
         with ReviewState.locked(self.review_dir) as state:
             state.add_slice(
                 name=name,
@@ -4340,8 +4372,7 @@ class ShotsAndJudgeTests(unittest.TestCase):
                 target={"uncommitted": True},
                 prompt=None,
                 cwd=self.root,
-                shots=shots,
-                shot_passes=shot_passes,
+                lanes=lanes,
             )
             state.save()
 
@@ -4357,52 +4388,31 @@ class ShotsAndJudgeTests(unittest.TestCase):
     def slice(self, name: str = "api") -> dict:
         return ReviewState.load(self.review_dir).data["slices"][name]
 
-    def test_add_slice_validates_and_stores_shots(self) -> None:
+    def test_add_slice_validates_and_stores_lane_shots_and_passes(self) -> None:
         for shots in (0, -1, True, "2", 1.5):
             with self.subTest(shots=shots), self.assertRaisesRegex(
                 ReviewStateError, "shots must be a positive integer"
             ):
                 self.add_slice("bad", shots=shots)
-        self.add_slice("api", shots=2)
-
-        self.assertEqual(self.slice()["shots"], 2)
-        self.assertEqual(self.slice()["judgements"], [])
-        self.assertEqual(review_state_module.parse_add_slice_args(
-            ["--review-dir", str(self.review_dir), "--name", "x", "--uncommitted", "--shots", "3"]
-        ).shots, 3)
-
-    def test_add_slice_validates_and_stores_shot_passes(self) -> None:
-        for shot_passes in (0, -1, True, "2", 1.5, "never"):
-            with self.subTest(shot_passes=shot_passes), self.assertRaisesRegex(
-                ReviewStateError, 'shot_passes must be a positive integer or "always"'
+        for passes in (0, -1, True, "2", 1.5):
+            with self.subTest(passes=passes), self.assertRaisesRegex(
+                ReviewStateError, "passes must be a positive integer or null"
             ):
-                self.add_slice("bad", shot_passes=shot_passes)
-        self.add_slice("api", shot_passes=2)
-        self.add_slice("web", shot_passes="always")
+                self.add_slice("bad", shot_passes=passes)
+        self.add_slice("api", shots=2, shot_passes=2)
+        self.add_slice("web", shots=2)
 
-        self.assertEqual(self.slice("api")["shot_passes"], 2)
-        self.assertEqual(self.slice("web")["shot_passes"], "always")
-        parse = review_state_module.parse_add_slice_args
+        self.assertEqual((self.slice("api")["lanes"][0]["shots"], self.slice("api")["lanes"][0]["passes"]), (2, 2))
+        self.assertIsNone(self.slice("web")["lanes"][0]["passes"])
+        self.assertEqual(self.slice("api")["judgements"], [])
+        self.assertNotIn("shots", self.slice("api"))
+
+    def test_add_slice_cli_rejects_legacy_shot_flags(self) -> None:
         base = ["--review-dir", str(self.review_dir), "--name", "x", "--uncommitted"]
-        self.assertEqual(parse(base + ["--shot-passes", "3"]).shot_passes, 3)
-        self.assertEqual(parse(base + ["--shot-passes", "always"]).shot_passes, "always")
-        for bad in ("0", "never", "1.5"):
-            with self.subTest(bad=bad), self.assertRaises(SystemExit), \
+        for flags in (["--shots", "2"], ["--shot-passes", "1"]):
+            with self.subTest(flags=flags), self.assertRaises(SystemExit), \
                     contextlib.redirect_stderr(io.StringIO()):
-                parse(base + ["--shot-passes", bad])
-
-    def test_add_slice_without_shot_passes_uses_configured_shot_passes(self) -> None:
-        _pin_session_config(self.review_dir, ReviewConfig(shots=2, shot_passes=2))
-        review_state_module.add_slice_from_args(review_state_module.parse_add_slice_args(
-            ["--review-dir", str(self.review_dir), "--name", "api", "--uncommitted"]
-        ))
-        review_state_module.add_slice_from_args(review_state_module.parse_add_slice_args(
-            ["--review-dir", str(self.review_dir), "--name", "web", "--uncommitted",
-             "--shot-passes", "always"]
-        ))
-
-        self.assertEqual(self.slice("api")["shot_passes"], 2)
-        self.assertEqual(self.slice("web")["shot_passes"], "always")
+                review_state_module.parse_add_slice_args(base + flags)
 
     def test_shot_passes_limits_extra_shots_to_the_first_passes(self) -> None:
         self.add_slice("api", shots=2, shot_passes=1)
@@ -4412,7 +4422,7 @@ class ShotsAndJudgeTests(unittest.TestCase):
         _, second = self.run_reviews(_per_shot({1: [_finding(title="Regression")]}))
         self.assertEqual(second["ran"], 1)
         self.assertEqual(second["out"][0]["p"], 2)
-        self.assertEqual(self.slice()["shots"], 2)
+        self.assertEqual(self.slice()["lanes"][0]["shots"], 2)
 
     def test_shot_passes_window_composes_with_clean_shot_phase_down(self) -> None:
         self.add_slice("api", shots=3, shot_passes=2)
@@ -4426,17 +4436,15 @@ class ShotsAndJudgeTests(unittest.TestCase):
         self.assertEqual(third["ran"], 1)
         self.assertEqual(third["out"][0]["p"], 3)
 
-    def test_slice_without_shot_passes_key_runs_extra_shots_on_the_first_pass_only(self) -> None:
-        self.add_slice("api", shots=2)
-        state_path = self.review_dir / "_state.json"
-        data = json.loads(state_path.read_text(encoding="utf-8"))
-        del data["slices"]["api"]["shot_passes"]
-        state_path.write_text(json.dumps(data), encoding="utf-8")
+    def test_legacy_slice_without_shot_passes_key_runs_extra_shots_on_the_first_pass_only(self) -> None:
+        self.add_slice("api")
+        _legacy_slice(self.review_dir, "api", shots=2, shot_passes=None)
 
         _, first = self.run_reviews(_per_shot({1: [_finding()], 2: [_finding(title="B", path="b.py")]}))
         _, second = self.run_reviews(_per_shot({1: [_finding(title="C")]}))
 
         self.assertEqual((first["ran"], second["ran"]), (2, 1))
+        self.assertEqual({rec.get("ln") for rec in first["out"] + second["out"]}, {"codex"})
 
     def test_redefined_slice_re_arms_the_shot_passes_window(self) -> None:
         self.add_slice("api", shots=2, shot_passes=1)
@@ -4466,18 +4474,6 @@ class ShotsAndJudgeTests(unittest.TestCase):
         self.assertEqual(second["judge"][0]["verdict"], "continue")
         self.assertEqual(second["ran"], 1)
         self.assertEqual(second["out"][0]["p"], 2)
-
-    def test_add_slice_without_shots_uses_configured_shots(self) -> None:
-        _pin_session_config(self.review_dir, ReviewConfig(shots=2))
-        review_state_module.add_slice_from_args(review_state_module.parse_add_slice_args(
-            ["--review-dir", str(self.review_dir), "--name", "api", "--uncommitted"]
-        ))
-        review_state_module.add_slice_from_args(review_state_module.parse_add_slice_args(
-            ["--review-dir", str(self.review_dir), "--name", "web", "--uncommitted", "--shots", "1"]
-        ))
-
-        self.assertEqual(self.slice("api")["shots"], 2)
-        self.assertEqual(self.slice("web")["shots"], 1)
 
     def test_multi_shot_wave_runs_every_shot_with_shot_suffixed_files(self) -> None:
         self.add_slice("api", shots=2)
@@ -4536,7 +4532,7 @@ class ShotsAndJudgeTests(unittest.TestCase):
         _, third = self.run_reviews(_writes_review_result([]))
         self.assertEqual(third["ran"], 1)
         self.assertTrue(self.slice()["complete"])
-        self.assertEqual(self.slice()["shots"], 3)
+        self.assertEqual(self.slice()["lanes"][0]["shots"], 3)
 
     def test_one_clean_shot_reduces_the_next_wave_by_one(self) -> None:
         self.add_slice("api", shots=3)
@@ -4745,7 +4741,7 @@ class ShotsAndJudgeTests(unittest.TestCase):
         prompt = captured[0][-1]
         self.assertIn("earns another window of 1 review passes", prompt)
         self.assertIn("It has completed 1 passes", prompt)
-        self.assertIn("- pass 1 shot 1 [P1] Race in cache (src/cache.py:42-45): reported in the previous pass", prompt)
+        self.assertIn("- pass 1 lane 1 shot 1 [P1] Race in cache (src/cache.py:42-45): reported in the previous pass", prompt)
         self.assertIn("The current window is passes 1 to 1.", prompt)
         self.assertIn("Return `continue` when the last pass kept any P0 or P1 finding", prompt)
         self.assertIn("kept P1 finding in any two consecutive passes of the current window", prompt)
@@ -5091,7 +5087,7 @@ class ShotsAndJudgeTests(unittest.TestCase):
         self.assertIn("New scope finding", captured[0])
         self.assertNotIn("Old scope finding", captured[0])
 
-    def test_load_rejects_corrupt_shots_pass_window_and_judge_state(self) -> None:
+    def test_load_rejects_corrupt_lanes_pass_window_and_judge_state(self) -> None:
         self.add_slice("api")
         state_path = self.review_dir / "_state.json"
         pristine = json.loads(state_path.read_text(encoding="utf-8"))
@@ -5104,11 +5100,6 @@ class ShotsAndJudgeTests(unittest.TestCase):
             "started_at": "2026-01-01T00:00:00Z",
         }
         corruptions = {
-            "shots bool": {"shots": True},
-            "shots zero": {"shots": 0},
-            "shot_passes zero": {"shot_passes": 0},
-            "shot_passes bool": {"shot_passes": True},
-            "shot_passes text": {"shot_passes": "never"},
             "pass_base negative": {"pass_base": -1},
             "pass_base text": {"pass_base": "1"},
             "judgements object": {"judgements": {}},
@@ -5135,7 +5126,41 @@ class ShotsAndJudgeTests(unittest.TestCase):
                 state_path.write_text(json.dumps(data), encoding="utf-8")
                 with self.assertRaises(ReviewStateError):
                     ReviewState.load(self.review_dir)
+        lane_corruptions = {
+            "lane shots bool": {"shots": True},
+            "lane shots zero": {"shots": 0},
+            "lane passes zero": {"passes": 0},
+            "lane passes bool": {"passes": True},
+            "lane passes text": {"passes": "always"},
+            "lane from_pass zero": {"from_pass": 0},
+            "lane required text": {"required": "yes"},
+            "lane retire text": {"retire_when_clean": 1},
+            "lane label blank": {"label": " "},
+            "lane unknown key": {"name": "x"},
+        }
+        for label, fields in lane_corruptions.items():
+            with self.subTest(label):
+                data = json.loads(json.dumps(pristine))
+                data["slices"]["api"]["lanes"][0].update(fields)
+                state_path.write_text(json.dumps(data), encoding="utf-8")
+                with self.assertRaises(ReviewStateError):
+                    ReviewState.load(self.review_dir)
         state_path.write_text(json.dumps(pristine), encoding="utf-8")
+        for label, fields in {
+            "legacy shots bool": {"shots": True},
+            "legacy shots zero": {"shots": 0},
+            "legacy shot_passes zero": {"shot_passes": 0},
+            "legacy shot_passes bool": {"shot_passes": True},
+            "legacy shot_passes text": {"shot_passes": "never"},
+        }.items():
+            with self.subTest(label):
+                _legacy_slice(self.review_dir, "api")
+                data = json.loads(state_path.read_text(encoding="utf-8"))
+                data["slices"]["api"].update(fields)
+                state_path.write_text(json.dumps(data), encoding="utf-8")
+                with self.assertRaises(ReviewStateError):
+                    ReviewState.load(self.review_dir)
+                state_path.write_text(json.dumps(pristine), encoding="utf-8")
 
         with ReviewState.locked(self.review_dir) as state:
             state.reserve_eligible()
@@ -5178,15 +5203,15 @@ class ShotsAndJudgeTests(unittest.TestCase):
 
         prompt = captured[0]
         self.assertIn(
-            "- pass 1 shot 1 [P1] Race in cache init (src/cache.py:42-45): superseded by a later "
+            "- pass 1 lane 1 shot 1 [P1] Race in cache init (src/cache.py:42-45): superseded by a later "
             "pass: verify it was fixed and report it again if it still applies",
             prompt,
         )
         self.assertRegex(
             prompt,
-            r"- pass 1 shot 2 \[P2\] Race in cache init path \(src/cache.py:42-45\): duplicate of f_",
+            r"- pass 1 lane 1 shot 2 \[P2\] Race in cache init path \(src/cache.py:42-45\): duplicate of f_",
         )
-        self.assertIn("- pass 2 shot 1 [P1] Stale lock (src/lock.py:42-45): reported in the previous pass", prompt)
+        self.assertIn("- pass 2 lane 1 shot 1 [P1] Stale lock (src/lock.py:42-45): reported in the previous pass", prompt)
 
     def test_second_pass_prompt_lists_prior_findings_with_outcomes(self) -> None:
         self.add_slice("api")
@@ -5207,12 +5232,12 @@ class ShotsAndJudgeTests(unittest.TestCase):
         prompt = captured[0]
         self.assertIn("Earlier passes on this slice reported the findings below.", prompt)
         self.assertIn(
-            "- pass 1 shot 1 [P1] Race in cache (src/cache.py:42-45): reported in the previous "
+            "- pass 1 lane 1 shot 1 [P1] Race in cache (src/cache.py:42-45): reported in the previous "
             "pass and not rejected: verify it was addressed",
             prompt,
         )
         self.assertIn(
-            "- pass 1 shot 1 [P1] Stale lock (src/cache.py:42-45): rejected by the author: "
+            "- pass 1 lane 1 shot 1 [P1] Stale lock (src/cache.py:42-45): rejected by the author: "
             "Lock is held by the caller.",
             prompt,
         )
@@ -5305,6 +5330,35 @@ def _per_shot(results: dict[int, list[dict[str, object]] | None]):
     return runner
 
 
+def _per_lane(finding_lanes: set[str]):
+    """Each lane in `finding_lanes` reports one finding on its own file; other lanes report none."""
+
+    def runner(cmd, cwd, input_text, output_file, slice_data):
+        if slice_data.get("_judge"):
+            raise AssertionError("judge should not be invoked")
+        lane = slice_data["lane"]
+        findings = []
+        if lane in finding_lanes:
+            path = f"src/{lane.replace(':', '_')}_{slice_data['shot']}.py"
+            findings = [_finding(title=f"{lane} issue", path=path)]
+        _write_review_result(output_file, findings)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    return runner
+
+
+def _fails_lane_once(lane: str, inner):
+    failed: list[str] = []
+
+    def runner(cmd, cwd, input_text, output_file, slice_data):
+        if slice_data.get("lane") == lane and not failed:
+            failed.append(lane)
+            return subprocess.CompletedProcess(cmd, 1, "", "lane crashed")
+        return inner(cmd, cwd, input_text, output_file, slice_data)
+
+    return runner
+
+
 def _judge_aware(review_runner, *, verdict="stop", reason="Only P2 findings remain.",
                  judge_rc=0, seen=None):
     def runner(cmd, cwd, input_text, output_file, slice_data):
@@ -5331,6 +5385,228 @@ def _writes(text: str):
     return runner
 
 
+class ReviewerLaneTests(unittest.TestCase):
+    setUp = ShotsAndJudgeTests.setUp
+    tearDown = ShotsAndJudgeTests.tearDown
+    add_slice = ShotsAndJudgeTests.add_slice
+    run_reviews = ShotsAndJudgeTests.run_reviews
+    runs = ShotsAndJudgeTests.runs
+    slice = ShotsAndJudgeTests.slice
+
+    def lanes_run(self, finding_lanes: set[str], **kwargs) -> dict:
+        _, summary = self.run_reviews(_per_lane(finding_lanes), **kwargs)
+        return summary
+
+    @staticmethod
+    def ran(summary: dict) -> list[str]:
+        return sorted(rec["ln"] for rec in summary["out"])
+
+    def test_lanes_run_only_inside_their_pass_windows(self) -> None:
+        self.add_slice("api", lanes=[
+            {"harness": "codex", "model": "a"},
+            {"harness": "codex", "model": "b", "from_pass": 2, "passes": 1},
+        ])
+
+        first = self.lanes_run({"codex:a"})
+        second = self.lanes_run({"codex:a", "codex:b"})
+        third = self.lanes_run({"codex:a"})
+
+        self.assertEqual(self.ran(first), ["codex:a"])
+        self.assertEqual(self.ran(second), ["codex:a", "codex:b"])
+        self.assertEqual(self.ran(third), ["codex:a"])
+        self.assertEqual([rec["p"] for rec in third["out"]], [3])
+
+    def test_multi_lane_runs_name_their_lane_in_files_frontmatter_and_history(self) -> None:
+        self.add_slice("api", lanes=[{"harness": "codex", "model": "a"}, {"harness": "codex", "model": "b"}])
+
+        summary = self.lanes_run({"codex:a", "codex:b"})
+
+        self.assertEqual(self.ran(summary), ["codex:a", "codex:b"])
+        self.assertEqual(sorted(path.name[-15:] for path in self.review_dir.glob("*-1-api-lane*.md")),
+                         ["-1-api-lane1.md", "-1-api-lane2.md"])
+        by_lane = {run["lane"]: run for run in self.runs()}
+        self.assertEqual((by_lane["codex:b"]["model"], by_lane["codex:b"]["model_source"]), ("b", "slice-override"))
+        artifact = Path(by_lane["codex:b"]["output_file"]).read_text(encoding="utf-8")
+        self.assertTrue(artifact.startswith('---\nvariant: "default"\nlane: "codex:b"\n'))
+        events = ReviewState.load(self.review_dir).data["history"]
+        self.assertEqual({e["lane"] for e in events if e["event"] in {"run_reserved", "run_completed"}},
+                         {"codex:a", "codex:b"})
+
+    def test_later_pass_prompt_names_lanes_by_index_only(self) -> None:
+        self.add_slice("api", lanes=[{"harness": "codex", "model": "a"}, {"harness": "codex", "model": "b"}])
+        self.lanes_run({"codex:b"})
+        prompts: list[str] = []
+        inner = _per_lane({"codex:b"})
+
+        def capture(cmd, cwd, input_text, output_file, slice_data):
+            prompts.append(cmd[-1])
+            return inner(cmd, cwd, input_text, output_file, slice_data)
+
+        self.run_reviews(capture)
+
+        self.assertIn("- pass 1 lane 2 shot 1 [P1] codex:b issue", prompts[0])
+        self.assertNotIn("model", prompts[0].split("Earlier passes", 1)[1].split("Return only", 1)[0])
+
+    def test_clean_lane_retires_unless_retire_when_clean_is_false(self) -> None:
+        self.add_slice("api", lanes=[
+            {"harness": "codex", "model": "a"},
+            {"harness": "codex", "model": "b"},
+            {"harness": "codex", "model": "c", "retire_when_clean": False},
+        ])
+
+        self.lanes_run({"codex:b"})
+        second = self.lanes_run({"codex:b"})
+
+        self.assertEqual(self.ran(second), ["codex:b", "codex:c"])
+
+    def test_required_lane_runs_after_a_clean_wave_before_the_slice_completes(self) -> None:
+        self.add_slice("api", lanes=[
+            {"harness": "codex", "model": "a"},
+            {"harness": "codex", "model": "b", "from_pass": 3, "required": True, "shots": 2},
+        ])
+
+        first = self.lanes_run(set())
+        self.assertEqual(self.ran(first), ["codex:a"])
+        self.assertFalse(self.slice()["complete"])
+
+        second = self.lanes_run(set())
+        self.assertEqual(self.ran(second), ["codex:b", "codex:b"])
+        self.assertTrue(self.slice()["complete"])
+
+    def test_required_lane_runs_after_the_pass_budget_without_a_judge(self) -> None:
+        self.add_slice("api", lanes=[
+            {"harness": "codex", "model": "a"},
+            {"harness": "codex", "model": "b", "from_pass": 3, "required": True},
+        ])
+
+        self.lanes_run(set(), max_passes=1)
+        second = self.lanes_run(set(), max_passes=1)
+
+        self.assertEqual(self.ran(second), ["codex:b"])
+        self.assertTrue(self.slice()["complete"])
+        self.assertNotIn("judge_pending", self.slice())
+
+    def test_failed_required_lane_after_the_pass_budget_retries_without_a_judge(self) -> None:
+        self.add_slice("api", lanes=[
+            {"harness": "codex", "model": "a"},
+            {"harness": "codex", "model": "b", "from_pass": 3, "required": True},
+        ])
+        self.lanes_run(set(), max_passes=1)
+
+        self.run_reviews(_fails_lane_once("codex:b", _per_lane(set())), max_passes=1)
+        retry = self.lanes_run(set(), max_passes=1)
+
+        self.assertEqual(self.ran(retry), ["codex:b"])
+        self.assertEqual([rec["p"] for rec in retry["out"]], [2])
+        self.assertTrue(self.slice()["complete"])
+
+    def test_failed_lane_retries_alone_with_its_own_label_and_profile(self) -> None:
+        self.add_slice("api", lanes=[
+            {"harness": "codex", "model": "a"},
+            {"harness": "codex", "model": "b", "reasoning": "high"},
+        ])
+
+        self.run_reviews(_fails_lane_once("codex:b:high", _per_lane({"codex:a"})))
+        retry = self.lanes_run({"codex:a"})
+
+        self.assertEqual(self.ran(retry), ["codex:b:high"])
+        self.assertEqual([rec["p"] for rec in retry["out"]], [1])
+        retried = [run for run in self.runs() if run["lane"] == "codex:b:high"]
+        self.assertEqual([run["status"] for run in retried], ["failed", "no_findings"])
+        self.assertEqual({(run["model"], run["reasoning"]) for run in retried}, {("b", "high")})
+
+    def test_lane_pass_windows_continue_across_a_judge_continue(self) -> None:
+        self.add_slice("api", lanes=[
+            {"harness": "codex", "model": "a"},
+            {"harness": "codex", "model": "b", "from_pass": 2, "passes": 1},
+        ])
+        self.lanes_run({"codex:a"}, max_passes=1)
+        keep_going = _judge_aware(
+            _per_lane({"codex:a"}), verdict="continue", reason="P1 in the same file."
+        )
+
+        _, second = self.run_reviews(keep_going, max_passes=1)
+        _, third = self.run_reviews(keep_going, max_passes=1)
+
+        self.assertEqual(self.ran(second), ["codex:a", "codex:b"])
+        self.assertEqual({rec["p"] for rec in second["out"]}, {2})
+        self.assertEqual(self.ran(third), ["codex:a"])
+        self.assertEqual({rec["p"] for rec in third["out"]}, {3})
+
+    def test_without_a_scheduled_lane_the_last_lane_with_findings_continues(self) -> None:
+        self.add_slice("api", lanes=[
+            {"harness": "codex", "model": "a", "passes": 1},
+            {"harness": "codex", "model": "b", "passes": 1},
+        ])
+
+        self.lanes_run({"codex:b"})
+        second = self.lanes_run({"codex:b"})
+
+        self.assertEqual(self.ran(second), ["codex:b"])
+        self.assertFalse(self.slice()["complete"])
+
+    def test_colliding_lane_labels_get_an_index_suffix(self) -> None:
+        self.add_slice("api", lanes=[
+            {"harness": "codex"},
+            {"harness": "codex"},
+            {"harness": "codex", "model": "m", "reasoning": "high"},
+            {"harness": "claude-code", "name": "codex"},
+            {"harness": "codex", "reasoning": "high"},
+        ])
+
+        self.assertEqual([lane["label"] for lane in self.slice()["lanes"]],
+                         ["codex", "codex#2", "codex:m:high", "codex#4", "codex::high"])
+
+    def test_slice_needs_a_lane_that_starts_on_the_first_pass(self) -> None:
+        with self.assertRaisesRegex(ReviewStateError, "needs a lane with from_pass 1"):
+            self.add_slice("api", lanes=[{"harness": "codex", "from_pass": 2}])
+
+    def test_reviewers_file_replaces_the_configured_lanes_for_one_slice(self) -> None:
+        _pin_session_config(self.review_dir, ReviewConfig(reviewers=(
+            ReviewerLane(harness="codex", model="configured"),
+            ReviewerLane(harness="codex", model="second", from_pass=2),
+        )))
+        reviewers = Path(self.tmp.name) / "reviewers.toml"
+        reviewers.write_text(
+            '[[reviewers]]\nharness = "claude-code"\nname = "ab"\nshots = 2\nrequired = true\n',
+            encoding="utf-8",
+        )
+        base = ["--review-dir", str(self.review_dir), "--uncommitted"]
+        add = review_state_module.add_slice_from_args
+        parse = review_state_module.parse_add_slice_args
+
+        add(parse(base + ["--name", "configured"]))
+        add(parse(base + ["--name", "file", "--reviewers-file", str(reviewers)]))
+        add(parse(base + ["--name", "flag", "--model", "flagged"]))
+
+        configured = self.slice("configured")["lanes"]
+        self.assertEqual([(lane["label"], lane["from_pass"]) for lane in configured],
+                         [("codex:configured", 1), ("codex:second", 2)])
+        self.assertEqual({(lane["harness_source"], lane["model_source"]) for lane in configured},
+                         {("configured-default", "configured-default")})
+        [file_lane] = self.slice("file")["lanes"]
+        self.assertEqual((file_lane["label"], file_lane["harness"], file_lane["harness_source"],
+                          file_lane["shots"], file_lane["required"]),
+                         ("ab", "claude-code", "slice-override", 2, True))
+        [flag_lane] = self.slice("flag")["lanes"]
+        self.assertEqual((flag_lane["model"], flag_lane["model_source"]), ("flagged", "slice-override"))
+        with self.assertRaisesRegex(ReviewStateError, "--reviewers-file cannot be combined"):
+            add(parse(base + ["--name", "both", "--harness", "codex", "--reviewers-file", str(reviewers)]))
+
+    def test_legacy_session_keeps_its_file_names_and_runs_as_one_lane(self) -> None:
+        self.add_slice("api")
+        _legacy_slice(self.review_dir, "api", shots=2, shot_passes="always")
+
+        summary = self.lanes_run({"codex"})
+        second = self.lanes_run({"codex"})
+
+        self.assertEqual((summary["ran"], second["ran"]), (2, 2))
+        self.assertNotIn("lanes", self.slice())
+        self.assertEqual(sorted(path.name[-9:] for path in self.review_dir.glob("*-1-api-shot*.md")),
+                         ["-shot1.md", "-shot2.md"])
+        self.assertEqual({run["lane"] for run in self.runs()}, {"codex"})
+
+
 class VariantSessionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -5338,8 +5614,9 @@ class VariantSessionTests(unittest.TestCase):
         (self.root / ".agents").mkdir(parents=True)
         self.config_file = self.root / ".agents" / "multi-shot-review.toml"
         self.config_file.write_text(
-            "shots = 1\n[variants]\ndefault = 0\nb = 0\n[variant.a]\nshots = 2\n"
-            "[variant.b]\nshots = 3\n",
+            '[[reviewers]]\nharness = "codex"\n[variants]\ndefault = 0\nb = 0\n'
+            '[[variant.a.reviewers]]\nharness = "codex"\nshots = 2\n'
+            '[[variant.b.reviewers]]\nharness = "codex"\nshots = 3\n',
             encoding="utf-8",
         )
 
@@ -5381,15 +5658,15 @@ class VariantSessionTests(unittest.TestCase):
     def test_session_pins_the_drawn_variant_and_ignores_later_config_edits(self) -> None:
         review_dir = init_review_state(self.root, "Review it.")
         session = ReviewState.load(review_dir).data["session"]
-        self.assertEqual((session["variant"], session["config"]["shots"]), ("a", 2))
+        self.assertEqual((session["variant"], session["config"]["reviewers"][0]["shots"]), ("a", 2))
 
-        self.config_file.write_text("shots = 5\n", encoding="utf-8")
+        self.config_file.write_text('[[reviewers]]\nharness = "codex"\nshots = 5\n', encoding="utf-8")
 
-        self.assertEqual(self.add_slice_from_cli(review_dir, "api")["shots"], 2)
+        self.assertEqual(self.add_slice_from_cli(review_dir, "api")["lanes"][0]["shots"], 2)
 
     def test_forced_variant_is_recorded_in_state_artifacts_and_summary(self) -> None:
         review_dir = init_review_state(self.root, "Review it.", variant="b")
-        self.assertEqual(self.add_slice_from_cli(review_dir, "api")["shots"], 3)
+        self.assertEqual(self.add_slice_from_cli(review_dir, "api")["lanes"][0]["shots"], 3)
 
         rc, summary = run_reviews(
             review_dir,

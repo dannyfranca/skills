@@ -26,8 +26,6 @@ harness supports, or delete the `model` line to use the harness default):
 review_file = "REVIEW"
 review_root = "~/.reviews"
 max_passes = 3
-shots = 1
-shot_passes = 1
 max_parallel = "auto"
 
 [classifier]
@@ -55,26 +53,27 @@ reasoning = "medium"
   under review.
 - `max_passes`: review passes a slice may run before the judge decides. Defaults to `3`. Must be a
   positive integer.
-- `shots`: reviewer shots per pass for a slice that `add_slice.py` creates without `--shots`.
-  Defaults to `1`. Must be a positive integer.
-- `shot_passes`: number of passes at the start of a slice definition that run more than one shot.
-  Applies to a slice that `add_slice.py` creates without `--shot-passes`. Defaults to `1`. Must be a
-  positive integer or `"always"`.
+- `[[reviewers]]`: reviewer lanes for a slice that `add_slice.py` creates without a profile
+  option. See [Reviewer lanes](#reviewer-lanes). With no lane, a slice gets one lane that uses the
+  `slice_default` profile and one shot.
 - `max_parallel`: maximum number of reviewer or judge children that run at the same time. Other
   children of the wave wait in a queue. Defaults to `"auto"`. When a wave starts, `"auto"` uses the
   lower of the CPU count and the available memory divided by 2 GiB, with a minimum of `1`. When the
   host has no `/proc/meminfo`, `"auto"` uses the CPU count. Must be a positive integer or `"auto"`.
   `run_reviews.py --max-parallel <n|auto>` overrides it for one call.
 - `classifier`: harness profile used by the slice classifier.
-- `slice_default`: harness profile used when a slice does not override it.
+- `slice_default`: harness profile of a slice when the config has no `[[reviewers]]` lane, or when
+  `add_slice.py` gets `--harness`, `--model`, or `--reasoning`.
 - `judge`: harness profile used by the pass-budget judge. When no config in the chain has a
   `[judge]` table, the judge uses the `classifier` profile.
 - `harness`: required profile field. Supported IDs are `codex` and `claude-code`.
 - `model` and `reasoning`: optional, non-empty, harness-specific strings.
 
 Unknown settings, incomplete profiles, invalid values, and the former flat model/reasoning keys are
-rejected. With no profile, the harness defaults to `codex`; model and reasoning remain the harness
-defaults.
+rejected. The former `shots` and `shot_passes` keys are rejected too. The error lists each former
+key with its file. It also shows the `[[reviewers]]` lanes that keep the same reviews, from the
+merged config chain. Sessions that a former config created still load and run. With no profile, the
+harness defaults to `codex`; model and reasoning remain the harness defaults.
 
 `classify_slices.py` and `add_slice.py` accept `--harness`, `--model`, and `--reasoning` overrides.
 Changing the configured harness without also overriding model/reasoning clears those choices, so a
@@ -90,13 +89,15 @@ Variants rotate config setups between sessions, so you can compare their outputs
 automatic rollout.
 
 ```toml
-shots = 1
+[[reviewers]]
+harness = "codex"
 
 [variants]
 default = 1
 a = 2
 
-[variant.a]
+[[variant.a.reviewers]]
+harness = "codex"
 shots = 2
 
 [variant.a.classifier]
@@ -104,7 +105,7 @@ harness = "claude-code"
 ```
 
 - `[variant.<tag>]`: a variant body. It accepts the same settings as the main config. Its settings
-  replace the effective main settings. Profile tables stay atomic.
+  replace the effective main settings. Profile tables and the `[[reviewers]]` list stay atomic.
 - `default`: the reserved tag for the main config without a body. `[variant.default]` is rejected.
 - Tags must match `[a-z0-9][a-z0-9_-]*`.
 - `[variants]`: optional integer weights. A weight is relative to the sum of all weights. A body
@@ -124,7 +125,7 @@ Main settings merge down the chain as usual. The nearest config that has `[varia
 The session stores the tag as `session.variant`. The tag is `default` when there are no variants.
 Review Markdown frontmatter and the run summary JSON also include `variant`.
 
-## Passes, shots, and the judge
+## Passes, lanes, shots, and the judge
 
 ### Classification
 
@@ -156,32 +157,89 @@ outcome:
 
 The prompt tells the reviewer to report all high-value findings in the current run.
 
+### Reviewer lanes
+
+A lane is one reviewer profile and the passes where it runs. A slice has one or more lanes. Each
+lane runs its shots in the same wave as the other lanes of the slice.
+
+```toml
+[[reviewers]]
+harness = "codex"
+model = "<model>"
+reasoning = "high"
+shots = 2
+
+[[reviewers]]
+name = "second-opinion"
+harness = "claude-code"
+model = "sonnet"
+from_pass = 2
+passes = 1
+required = true
+```
+
+Lane settings:
+
+- `harness`: required. Supported IDs are `codex` and `claude-code`.
+- `model` and `reasoning`: optional, non-empty, harness-specific strings.
+- `name`: optional label. See the label rule below.
+- `from_pass`: the first pass where the lane runs. Defaults to `1`. One lane must start at pass
+  `1`.
+- `passes`: the number of passes where the lane runs, from `from_pass`. Omit it to run the lane in
+  all later passes.
+- `shots`: reviewer shots per pass. Defaults to `1`.
+- `required`: when `true`, the slice is not complete until the lane runs one time. Defaults to
+  `false`.
+- `retire_when_clean`: when `true`, each clean shot removes one shot of this lane from later waves.
+  Defaults to `true`.
+
+Unknown lane settings are rejected. The `[[reviewers]]` list is atomic: a nearer config or a
+variant body with `[[reviewers]]` replaces the full list.
+
+Each lane has a label that is unique in its slice. The label is `name`. Without `name`, the label
+is `harness:model:reasoning`. A label without `reasoning` is `harness:model`, and a label without
+both is `harness`. A label with `reasoning` and without `model` keeps the empty model part, for
+example `codex::high`. When two lanes have the same
+label, the later lane gets the suffix `#<index>`, where `<index>` is its position in the list.
+
+Pass numbers count from the start of the slice definition. A judge `continue` verdict does not
+reset them. A slice removal and a new `add_slice.py` of the same name starts again at pass `1`.
+
+`add_slice.py --reviewers-file <file>` replaces the lanes of one slice. The file contains only
+`[[reviewers]]` tables. Do not use it with `--harness`, `--model`, or `--reasoning`. Those options
+give one lane from the `slice_default` profile and ignore the configured lanes.
+
+Each run keeps a snapshot of its lane. The runner adds the lane label to the review Markdown
+frontmatter as `lane` and to each `out` record as `ln`. When a slice has more than one lane, the
+review file name has `-lane<index>`. Finding history in the reviewer prompt names the lane by its
+index only, as `pass N lane M shot K`. Model names are metric data, not reviewer context.
+
 ### Shots
 
-`add_slice.py --shots <n>` sets the number of shots. A shot is an independent reviewer run of the
-same prompt in the same wave. Without `--shots`, the slice uses the configured `shots` value. The
-default is `1`.
+A shot is an independent reviewer run of the same prompt in the same wave. With more than one
+shot, the review file name has `-shot<index>`.
 
 The runner marks some findings as automatic duplicates. The conditions are:
 
-- A sibling shot of the same wave reported a finding at the same path.
+- A sibling shot of the same wave reported a finding at the same path. A shot of another lane is
+  also a sibling.
 - The line ranges overlap.
 - The title token overlap is 0.6 or more.
 
 The resolution of an automatic duplicate has `"auto": true`. The runner keeps the copy with the
 highest severity.
 
-`add_slice.py --shot-passes <n|always>` sets the number of passes that run more than one shot.
-Without `--shot-passes`, the slice uses the configured `shot_passes` value. The default is `1`.
-Passes count from the start of the slice definition. After the window, each pass runs one shot.
-With `always`, each pass runs the shots that the phase-down rule below gives. A judge `continue`
-verdict does not open a new window. A slice removal and a new `add_slice.py` of the same name
-opens a new window.
+### Phase-down and completion
 
-Inside the window, the number of shots decreases. Each shot that gives no kept findings removes one
-shot from later waves. The minimum is one shot. The number never increases. When all shots of a
-wave are clean, the slice is complete. When a shot fails or times out, the runner runs only that
-shot again.
+Phase-down applies to each lane. In a lane with `retire_when_clean = true`, each shot that gives no
+kept findings removes one shot of that lane from later waves. The number never increases. A lane
+with no shots left stops. A lane with `retire_when_clean = false` keeps all its shots in its passes.
+
+When all shots of a wave are clean, the slice is complete, unless a required lane did not run yet.
+Then the next wave runs only the required lanes that did not run.
+
+When no lane is scheduled for a pass and findings are open, the last lane that gave findings runs
+one shot. When a shot fails or times out, the runner runs only that shot again.
 
 ### Judge
 
@@ -294,9 +352,9 @@ cannot resolve the target. Older sessions do not have this field.
 
 Execution selections are durable:
 
-- Slice definitions store `harness`, `model`, `reasoning`, and their source fields.
-- Every run snapshots all six fields, so later configuration or slice-definition changes do not
-  alter prior run identity.
+- Each slice lane stores `harness`, `model`, `reasoning`, and their source fields.
+- Every run snapshots its lane: all six fields and the lane label. Later configuration or
+  slice-definition changes do not alter prior run identity.
 - Successful review Markdown artifacts include matching YAML frontmatter, with the session
   `variant` first.
 - Classifier attempts store only harness/model/reasoning, timestamps, status, and exit code.

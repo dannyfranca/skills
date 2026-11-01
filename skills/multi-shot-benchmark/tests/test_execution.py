@@ -39,7 +39,7 @@ class ExecutionTests(unittest.TestCase):
         git(repo, 'add', '.')
         git(repo, 'commit', '-m', 'change')
         config = self.root / 'arm.toml'
-        config.write_text('max_passes = 3\nshots = 1\n')
+        config.write_text('max_passes = 3\n')
         self.output = self.root / 'runs/one'
         prepare(repo, 'HEAD', 'Task', config, self.output, worktree_root=self.root / 'worktrees', benchmark_root=self.root / 'runs')
         self.fixture = self.root / 'fixture.py'

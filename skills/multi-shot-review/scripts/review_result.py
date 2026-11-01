@@ -119,6 +119,10 @@ def validate_stored_finding(value: Any, *, owner: str = "finding") -> dict[str, 
     return {"id": finding_id, **normalized, "status": status, "resolution": resolution}
 
 
+def _lane_lines(lane: str | None) -> list[str]:
+    return [] if lane is None else [f"lane: {json.dumps(lane)}"]
+
+
 def render_review_markdown(
     findings: list[dict[str, Any]],
     *,
@@ -129,6 +133,7 @@ def render_review_markdown(
     model_source: str,
     reasoning: str | None,
     reasoning_source: str,
+    lane: str | None = None,
 ) -> str:
     model_value = "null" if model is None else json.dumps(model)
     reasoning_value = "null" if reasoning is None else json.dumps(reasoning)
@@ -136,6 +141,7 @@ def render_review_markdown(
     lines = [
         "---",
         f"variant: {json.dumps(variant)}",
+        *_lane_lines(lane),
         f"harness: {json.dumps(harness)}",
         f"harness_source: {json.dumps(harness_source)}",
         f"model: {model_value}",
@@ -207,6 +213,7 @@ def render_review_failure_markdown(
     model_source: str,
     reasoning: str | None,
     reasoning_source: str,
+    lane: str | None = None,
 ) -> str:
     """Render a human-readable record for output that could not become findings."""
     model_value = "null" if model is None else json.dumps(model)
@@ -215,6 +222,7 @@ def render_review_failure_markdown(
         [
             "---",
             f"variant: {json.dumps(variant)}",
+            *_lane_lines(lane),
             f"harness: {json.dumps(harness)}",
             f"harness_source: {json.dumps(harness_source)}",
             f"model: {model_value}",

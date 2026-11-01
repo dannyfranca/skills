@@ -41,8 +41,8 @@ class SchedulingTests(unittest.TestCase):
             git(self.repo, 'commit', '-m', f'change {n}')
             commits.append(git(self.repo, 'rev-parse', 'HEAD').decode().strip())
         (self.root / 'task.md').write_text('Preserve the requested change')
-        (self.root / 'arm.toml').write_text('max_passes = 1\nshots = 1\n')
-        (self.root / 'arm-b.toml').write_text('max_passes = 4\nshots = 1\n[variants]\nb-test = 1\n[variant.b-test]\n[variant.b-test.classifier]\nharness = "codex"\nmodel = "classifier-b"\nreasoning = "high"\n[variant.b-test.slice_default]\nharness = "codex"\nmodel = "reviewer-b"\nreasoning = "high"\n[variant.b-test.judge]\nharness = "codex"\nmodel = "judge-b"\nreasoning = "high"\n')
+        (self.root / 'arm.toml').write_text('max_passes = 1\n')
+        (self.root / 'arm-b.toml').write_text('max_passes = 4\n[variants]\nb-test = 1\n[variant.b-test]\n[variant.b-test.classifier]\nharness = "codex"\nmodel = "classifier-b"\nreasoning = "high"\n[variant.b-test.slice_default]\nharness = "codex"\nmodel = "reviewer-b"\nreasoning = "high"\n[variant.b-test.judge]\nharness = "codex"\nmodel = "judge-b"\nreasoning = "high"\n')
         self.spec = {'repo': str(self.repo), 'driver': PROFILE, 'repetitions': 2,
                      'cases': [{'head': c, 'task_file': 'task.md'} for c in commits],
                      'arms': [{'name': 'a', 'config': 'arm.toml'},

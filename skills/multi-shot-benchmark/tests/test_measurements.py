@@ -233,7 +233,8 @@ class MeasurementTests(unittest.TestCase):
         from harnesses import HarnessProfile, resolve_profile
         with ReviewState.locked(review_dir) as state:
             cid = state.start_classification(resolve_profile(HarnessProfile('codex', 'fixture', 'high'), override_source='fixture'))
-            state.add_slice(name='whole', mode='prompt', target=None, prompt='Review', cwd=Path(replay['worktree']), shots=2)
+            state.add_slice(name='whole', mode='prompt', target=None, prompt='Review', cwd=Path(replay['worktree']),
+                            lanes=[{'harness': 'codex', 'shots': 2}])
             state.complete_classification(cid, 0)
             first, second = state.reserve_eligible(max_passes=3)
             finding = {'severity': 'P2', 'title': 'Same defect', 'content': 'Same defect',

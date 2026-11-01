@@ -20,13 +20,15 @@ from storage import configure
 def config_text(config, output: Path) -> str:
     effective = config.to_snapshot()
     lines = [f'review_root = {json.dumps(str(output / "sessions"), ensure_ascii=False)}']
+    tables = [(f'[{key}]', value) for key, value in effective.items() if isinstance(value, dict)]
+    tables += [(f'[[{key}]]', item) for key, value in effective.items()
+               if isinstance(value, list) for item in value if isinstance(item, dict)]
     for key, value in effective.items():
-        if value is not None and not isinstance(value, dict):
+        if value is not None and not isinstance(value, (dict, list)):
             lines.append(f'{key} = {json.dumps(value, ensure_ascii=False)}')
-    for key, value in effective.items():
-        if isinstance(value, dict):
-            lines.append(f'[{key}]')
-            lines.extend(f'{k} = {json.dumps(v, ensure_ascii=False)}' for k, v in value.items() if v is not None)
+    for header, table in tables:
+        lines.append(header)
+        lines.extend(f'{k} = {json.dumps(v, ensure_ascii=False)}' for k, v in table.items() if v is not None)
     if config.variant != 'default':
         lines.extend(['[variants]', f'{config.variant} = 1', f'[variant.{config.variant}]'])
     return '\n'.join(lines) + '\n'

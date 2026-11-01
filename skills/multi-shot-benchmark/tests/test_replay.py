@@ -40,7 +40,10 @@ class ReplayTests(unittest.TestCase):
         git(self.repo, 'commit', '-m', 'future fix')
         self.future = git(self.repo, 'rev-parse', 'HEAD').decode().strip()
         self.config = self.root / 'arm.toml'
-        self.config.write_text('shots = 2\n[slice_default]\nharness = "codex"\nmodel = "test-model"\n')
+        self.config.write_text('[slice_default]\nharness = "codex"\nmodel = "test-model"\n'
+                               '[[reviewers]]\nharness = "codex"\nmodel = "lane-model"\nshots = 2\n'
+                               '[[reviewers]]\nharness = "claude-code"\nname = "late"\nfrom_pass = 2\n'
+                               'passes = 3\nrequired = true\nretire_when_clean = false\n')
 
     def tearDown(self):
         self.temp.cleanup()
@@ -57,8 +60,15 @@ class ReplayTests(unittest.TestCase):
         with self.assertRaises(BenchmarkError):
             git(worktree, 'cat-file', '-e', self.future)
         session = load(Path(state['review_dir']) / '_state.json')
-        self.assertEqual(session['session']['config']['shots'], 2)
+        self.assertEqual(session['session']['config']['reviewers'], [
+            {'harness': 'codex', 'model': 'lane-model', 'reasoning': None, 'name': None, 'from_pass': 1,
+             'passes': None, 'shots': 2, 'required': False, 'retire_when_clean': True},
+            {'harness': 'claude-code', 'model': None, 'reasoning': None, 'name': 'late', 'from_pass': 2,
+             'passes': 3, 'shots': 1, 'required': True, 'retire_when_clean': False},
+        ])
         self.assertEqual(session['session']['config']['slice_default']['model'], 'test-model')
+        self.assertIn('[[reviewers]]\nharness = "codex"\nmodel = "lane-model"\n',
+                      (out / 'session.toml').read_text())
         cleanup(out)
         self.assertFalse(worktree.exists())
         self.assertTrue(self.repo.exists())
@@ -79,7 +89,7 @@ class ReplayTests(unittest.TestCase):
         self.assertNotEqual(states[0]['worktree'], states[1]['worktree'])
 
     def test_variant_identity_and_resume(self):
-        self.config.write_text('shots = 2\n[variants]\nchosen = 1\n[variant.chosen]\n')
+        self.config.write_text('max_passes = 2\n[variants]\nchosen = 1\n[variant.chosen]\n')
         out = self.root / 'runs' / 'chosen'
         state = prepare(self.repo, self.head, 'Task', self.config, out, variant='chosen',
                         worktree_root=self.root / 'worktrees')

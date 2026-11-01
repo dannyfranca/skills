@@ -15,8 +15,8 @@ A minimal run specification has this shape:
 ```
 
 Paths resolve from the specification file. Case names are optional. Add `base` for an explicit
-ancestor range or a merge commit. Repetitions default to two. Arm configs use the complete
-current multi-shot config surface, including shots, pass behavior, harness, model, reasoning,
+ancestor range or a merge commit. Repetitions default to two. Arm configs use the complete current
+multi-shot config surface, including reviewer lanes, pass behavior, harness, model, reasoning,
 classifier, judge, and variants. A variant must be explicit when its file defines A/B alternatives.
 Use a fixed driver profile for every assignment. Review arm changes are the experimental treatment.
 
