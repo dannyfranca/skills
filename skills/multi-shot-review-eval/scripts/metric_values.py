@@ -21,6 +21,7 @@ FINDING_METRICS = frozenset(
     {
         "kept_p0_p2",
         "kept_p0_p2_per_100_lines",
+        "kept_p0_p2_per_usd",
         "pass1_kept_share",
         "rejected_share",
         "untriaged_per_session",
@@ -58,6 +59,8 @@ def session_metric_values(
         values["tokens"] = (usage.tokens, 1)
     if usage is not None and usage.usd_complete:
         values["usd"] = (usage.usd, 1)
+        if loaded.complete:
+            values["kept_p0_p2_per_usd"] = (values["kept_p0_p2"][0], usage.usd)
     return values
 
 

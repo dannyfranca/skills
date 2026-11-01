@@ -55,6 +55,7 @@ COST = Margin(MarginKind.RELATIVE, 0.10)
 METRICS: tuple[MetricSpec, ...] = (
     MetricSpec("kept_p0_p2", Direction.HIGHER, QUALITY, primary=True),
     MetricSpec("kept_p0_p2_per_100_lines", Direction.HIGHER, QUALITY),
+    MetricSpec("kept_p0_p2_per_usd", Direction.HIGHER, QUALITY),
     MetricSpec("pass1_kept_share", Direction.HIGHER, QUALITY),
     MetricSpec("rejected_share", Direction.LOWER, RATE),
     MetricSpec("untriaged_per_session", Direction.LOWER, COST),
