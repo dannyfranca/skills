@@ -16,6 +16,8 @@ FINDING_STATUSES = frozenset({"open", "ignored", "superseded"})
 RESULT_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "references" / "review-result.schema.json"
 JUDGE_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "references" / "judge-verdict.schema.json"
 JUDGE_VERDICTS = frozenset({"continue", "stop"})
+DEDUPE_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "references" / "dedupe-groups.schema.json"
+MODEL_DUPLICATE = "model"
 
 
 class ReviewResultError(ValueError):
@@ -68,6 +70,44 @@ def parse_judge_verdict(text: str) -> dict[str, str]:
         "verdict": verdict,
         "reason": _non_empty_string(result["reason"], "judge verdict reason"),
     }
+
+
+def parse_dedupe_groups(text: str, candidates: dict[str, str]) -> list[list[str]]:
+    """Return duplicate groups from a strict dedupe document; `candidates` maps ID to run ID."""
+    try:
+        result = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ReviewResultError(f"dedupe output is not valid JSON: {exc}") from exc
+    if not isinstance(result, dict):
+        raise ReviewResultError("dedupe result must be an object")
+    _require_exact_keys(result, {"schema_version", "groups"}, "dedupe result")
+    if (
+        isinstance(result["schema_version"], bool)
+        or not isinstance(result["schema_version"], int)
+        or result["schema_version"] != RESULT_SCHEMA_VERSION
+    ):
+        raise ReviewResultError(
+            f"dedupe result schema_version must be {RESULT_SCHEMA_VERSION}"
+        )
+    if not isinstance(result["groups"], list):
+        raise ReviewResultError("dedupe result groups must be an array")
+    grouped: set[str] = set()
+    groups: list[list[str]] = []
+    for index, group in enumerate(result["groups"]):
+        owner = f"dedupe group {index}"
+        if not isinstance(group, list) or len(group) < 2:
+            raise ReviewResultError(f"{owner} must list at least two finding IDs")
+        for finding_id in group:
+            if not isinstance(finding_id, str) or finding_id not in candidates:
+                raise ReviewResultError(f"{owner} names an unknown finding: {finding_id!r}")
+            if finding_id in grouped:
+                raise ReviewResultError(f"{owner} repeats finding {finding_id}")
+            grouped.add(finding_id)
+        # One run never reports the same problem twice, so a group holds one finding per run.
+        if len({candidates[finding_id] for finding_id in group}) != len(group):
+            raise ReviewResultError(f"{owner} must join one finding from each run")
+        groups.append(list(group))
+    return groups
 
 
 def assign_finding_ids(
@@ -134,6 +174,7 @@ def render_review_markdown(
     reasoning: str | None,
     reasoning_source: str,
     lane: str | None = None,
+    reported_by: dict[str, list[str]] | None = None,
 ) -> str:
     model_value = "null" if model is None else json.dumps(model)
     reasoning_value = "null" if reasoning is None else json.dumps(reasoning)
@@ -173,12 +214,20 @@ def render_review_markdown(
                 "",
             ]
         )
+        also = (reported_by or {}).get(finding["id"])
+        if also:
+            lines.extend([f"**Also reported by:** {', '.join(f'`{label}`' for label in also)}", ""])
         resolution = finding.get("resolution")
         if finding.get("status") == "ignored" and isinstance(resolution, dict):
             if resolution.get("kind") == "duplicate" and resolution.get("auto") is True:
                 detail = (
                     f"Duplicate of `{resolution['finding_id']}` "
                     "(detected automatically across same-wave shots)."
+                )
+            elif resolution.get("kind") == "duplicate" and resolution.get("auto") == MODEL_DUPLICATE:
+                detail = (
+                    f"Duplicate of `{resolution['finding_id']}` "
+                    "(grouped by the dedupe model across same-wave runs)."
                 )
             elif resolution.get("kind") == "duplicate":
                 detail = f"Duplicate of `{resolution['finding_id']}`."
@@ -307,9 +356,11 @@ def _validate_resolution(value: Any, *, status: str, owner: str) -> dict[str, An
             "at": _non_empty_string(value["at"], f"{owner} resolution at"),
         }
         if "auto" in value:
-            if value["auto"] is not True:
-                raise ReviewResultError(f"{owner} auto duplicate marker must be true")
-            resolution["auto"] = True
+            if value["auto"] is not True and value["auto"] != MODEL_DUPLICATE:
+                raise ReviewResultError(
+                    f"{owner} auto duplicate marker must be true or {MODEL_DUPLICATE!r}"
+                )
+            resolution["auto"] = value["auto"]
         return resolution
     if status == "superseded" and kind == "superseded":
         if "successor_run_id" in value:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from review_result import JUDGE_SCHEMA_PATH, RESULT_SCHEMA_PATH
+from review_result import DEDUPE_SCHEMA_PATH, JUDGE_SCHEMA_PATH, RESULT_SCHEMA_PATH
 
 from .base import HarnessError, Invocation, ResolvedProfile, ReviewHarness
 
@@ -55,6 +55,16 @@ class ClaudeCodeHarness(ReviewHarness):
     ) -> Invocation:
         del output_file
         return _structured_invocation(prompt, profile, JUDGE_SCHEMA_PATH)
+
+    def dedupe_invocation(
+        self,
+        *,
+        prompt: str,
+        output_file: Path,
+        profile: ResolvedProfile,
+    ) -> Invocation:
+        del output_file
+        return _structured_invocation(prompt, profile, DEDUPE_SCHEMA_PATH)
 
     def materialize_review_result(
         self,

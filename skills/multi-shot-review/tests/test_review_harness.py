@@ -21,7 +21,7 @@ from harnesses import (  # noqa: E402
     resolve_profile,
 )
 from review_state import ReviewState, init_review_state, run_reviews  # noqa: E402
-from review_result import JUDGE_SCHEMA_PATH, RESULT_SCHEMA_PATH  # noqa: E402
+from review_result import DEDUPE_SCHEMA_PATH, JUDGE_SCHEMA_PATH, RESULT_SCHEMA_PATH  # noqa: E402
 
 
 _module_home: tempfile.TemporaryDirectory | None = None
@@ -233,6 +233,31 @@ class JudgeInvocationTests(unittest.TestCase):
         self.assertNotIn("$schema", schema)
         self.assertEqual(settings["sandbox"]["filesystem"], {"denyWrite": ["."]})
         self.assertEqual(cmd[-2:], ["-p", "Judge."])
+
+
+class DedupeInvocationTests(unittest.TestCase):
+    def test_codex_dedupe_requests_groups_schema_read_only(self) -> None:
+        profile = resolve_profile(HarnessProfile("codex", model="gpt-6.1-terra"), override_source="slice-override")
+        cmd = get_harness("codex").dedupe_invocation(
+            prompt="Group.", output_file=Path("groups.json"), profile=profile
+        ).command
+
+        self.assertEqual(cmd[cmd.index("--output-schema") + 1], str(DEDUPE_SCHEMA_PATH))
+        self.assertEqual(cmd[cmd.index("--sandbox") + 1], "read-only")
+        self.assertEqual(cmd[cmd.index("-m") + 1], "gpt-6.1-terra")
+        self.assertEqual(cmd[-3:], ["-o", "groups.json", "Group."])
+
+    def test_claude_code_dedupe_requests_groups_schema_read_only(self) -> None:
+        profile = resolve_profile(HarnessProfile("claude-code"), override_source="slice-override")
+        cmd = get_harness("claude-code").dedupe_invocation(
+            prompt="Group.", output_file=Path("unused.json"), profile=profile
+        ).command
+
+        schema = json.loads(cmd[cmd.index("--json-schema") + 1])
+        settings = json.loads(cmd[cmd.index("--settings") + 1])
+        self.assertEqual(sorted(schema["required"]), ["groups", "schema_version"])
+        self.assertEqual(settings["sandbox"]["filesystem"], {"denyWrite": ["."]})
+        self.assertEqual(cmd[-2:], ["-p", "Group."])
 
 
 class ClaudeCodeRunnerIntegrationTests(unittest.TestCase):

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from review_result import JUDGE_SCHEMA_PATH, RESULT_SCHEMA_PATH
+from review_result import DEDUPE_SCHEMA_PATH, JUDGE_SCHEMA_PATH, RESULT_SCHEMA_PATH
 
 from .base import Invocation, ResolvedProfile, ReviewHarness
 
@@ -62,6 +62,20 @@ class CodexHarness(ReviewHarness):
             output_file=output_file,
             profile=profile,
             schema_path=JUDGE_SCHEMA_PATH,
+        )
+
+    def dedupe_invocation(
+        self,
+        *,
+        prompt: str,
+        output_file: Path,
+        profile: ResolvedProfile,
+    ) -> Invocation:
+        return _structured_invocation(
+            prompt=prompt,
+            output_file=output_file,
+            profile=profile,
+            schema_path=DEDUPE_SCHEMA_PATH,
         )
 
 

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openai.com/schemas/multi-shot-review/dedupe-groups-v1.json",
+  "title": "Multi-shot review dedupe groups",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "groups"],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "groups": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "minItems": 2,
+        "items": {
+          "type": "string",
+          "pattern": "^f_[A-Za-z0-9_-]{8}$"
+        }
+      }
+    }
+  }
+}

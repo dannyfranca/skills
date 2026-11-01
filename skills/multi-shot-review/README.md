@@ -43,6 +43,11 @@ reasoning = "high"
 harness = "codex"
 model = "<model>"
 reasoning = "medium"
+
+# With no [deduper] table in any config of the chain, the dedupe model uses the classifier profile.
+[deduper]
+harness = "codex"
+model = "<model>"
 ```
 
 - `review_file`: review-instruction basename. Defaults to `REVIEW`. It must not contain a path or
@@ -56,7 +61,7 @@ reasoning = "medium"
 - `[[reviewers]]`: reviewer lanes for a slice that `add_slice.py` creates without a profile
   option. See [Reviewer lanes](#reviewer-lanes). With no lane, a slice gets one lane that uses the
   `slice_default` profile and one shot.
-- `max_parallel`: maximum number of reviewer or judge children that run at the same time. Other
+- `max_parallel`: maximum number of reviewer, judge, or dedupe children that run at the same time. Other
   children of the wave wait in a queue. Defaults to `"auto"`. When a wave starts, `"auto"` uses the
   lower of the CPU count and the available memory divided by 2 GiB, with a minimum of `1`. When the
   host has no `/proc/meminfo`, `"auto"` uses the CPU count. Must be a positive integer or `"auto"`.
@@ -66,6 +71,9 @@ reasoning = "medium"
   `add_slice.py` gets `--harness`, `--model`, or `--reasoning`.
 - `judge`: harness profile used by the pass-budget judge. When no config in the chain has a
   `[judge]` table, the judge uses the `classifier` profile.
+- `deduper`: harness profile used by the dedupe model. When no config in the chain sets
+  `deduper`, the dedupe model uses the `classifier` profile. Set `deduper = false` to disable the
+  dedupe model. A variant body can set or disable it too. See [Dedupe model](#dedupe-model).
 - `harness`: required profile field. Supported IDs are `codex` and `claude-code`.
 - `model` and `reasoning`: optional, non-empty, harness-specific strings.
 
@@ -229,6 +237,37 @@ The runner marks some findings as automatic duplicates. The conditions are:
 The resolution of an automatic duplicate has `"auto": true`. The runner keeps the copy with the
 highest severity.
 
+### Dedupe model
+
+The dedupe model finds duplicates that the automatic rule does not find, for example the same
+problem with different wording or lines. It runs one time for each slice in a wave, after all runs
+of that slice finish. It runs only when candidates exist. A candidate is an open finding of the
+wave that has the same path as an open finding of a different run of the same wave. When a run of
+the slice failed or timed out, the dedupe model does not run.
+
+The dedupe child counts against `max_parallel`. Its prompt contains only the candidate ID, run,
+location, title, and content. It does not contain the severity or the task. The model only groups
+candidates. It does not decide if a finding is correct, and it does not change a severity. It
+returns the JSON document in
+[`references/dedupe-groups.schema.json`](references/dedupe-groups.schema.json).
+
+For each group, the runner keeps the open finding with the highest severity. It marks the other
+findings as duplicates with `"auto": "model"`. A finding that the parent resolved while the model
+ran keeps its resolution. History records a `model_duplicate` event for each duplicate and one
+`dedupe_completed` event with the harness, model, and reasoning.
+
+When the dedupe child fails, times out, or returns an invalid document, no finding changes
+state. The wave JSON then has an `err` record with `"st": "dedupe_failed"`, and history
+records a `dedupe_failed` event.
+
+### Reported by
+
+A kept finding that has automatic or model duplicates has an "Also reported by" line in its review
+Markdown. The line lists the lane labels of the duplicate reports. The `out` record of its run has
+`by`, which maps the kept finding ID to the lane labels of all its reports. The first label is the
+lane of the run. A run can keep more than one grouped finding, so `by` is an object, not a list.
+When no finding of the run has duplicates, the record has no `by`.
+
 ### Phase-down and completion
 
 Phase-down applies to each lane. In a lane with `retire_when_clean = true`, each shot that gives no
@@ -285,7 +324,7 @@ Verdicts for an earlier definition do not change it.
 
 ### Output files
 
-Judge outputs are in `<review-dir>/judge/`. The review Markdown of a slice with more than one shot
+Judge outputs are in `<review-dir>/judge/`. Dedupe model outputs are in `<review-dir>/dedupe/`. The review Markdown of a slice with more than one shot
 has a `-shot<n>` suffix.
 
 ## Review-instruction resolution
@@ -395,7 +434,7 @@ the durable record.
 Record rejected findings individually with `scripts/ignore_finding.py --id ... --reason ...` (or
 `--reason-file`). Record overlap with `scripts/dedupe_finding.py --id ... --canonical-id ...`; the
 canonical finding must still be open. Automatic same-wave duplicates use the same resolution kind
-with `"auto": true`. A valid follow-up pass supersedes any remaining open findings from earlier
+with `"auto": true`. Dedupe model duplicates use `"auto": "model"`. A valid follow-up pass supersedes any remaining open findings from earlier
 passes; shots of the same wave never supersede each other. Failed follow-ups leave them active.
 
 When a run becomes terminal, its finding records move to `history/<run-id>.json`; `_state.json`
