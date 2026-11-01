@@ -141,6 +141,10 @@ class EvalStatsCliTests(unittest.TestCase):
         self.assertEqual(rows[0]["metrics"]["kept_p0_p2"], [5, 1])
         self.assertTrue(rows[0]["findings_complete"])
         self.assertEqual(stats["arms"]["b"]["sessions_missing_findings"], 0)
+        self.assertEqual(
+            stats["arms"]["a"]["lanes"],
+            {"codex:model-c": {"kept": 15, "unique": 15, "shared": 0, "rejected": 10, "rejection_rate": 0.4}},
+        )
         self.assertEqual(summary["second_round_offer"], stats["second_round_offer"])
         self.assertIn("offer", stats["second_round_offer"]["b"])
 

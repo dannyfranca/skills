@@ -8,6 +8,7 @@ from typing import Any
 
 from arms import ArmPlan
 from contrast_stats import arm_summary, contrast
+from lane_metrics import merge_lane_counts
 from ledger import EvalRecord, Ledger
 from metrics import MetricSpec, Ratio, primary_metric
 from prices import TOTAL_TOKENS_ASSUMPTION, PriceTable
@@ -141,6 +142,7 @@ def _arm_section(name: str, facts: Sequence[SessionFacts], request: StatsRequest
         "sessions_with_diff_size": sum(f.diff_size is not None for f in completed),
         "sessions_missing_findings": sum(not f.findings_complete for f in completed),
         "finding_classes": dict(sorted(classes.items())),
+        "lanes": {lane: counts.as_dict() for lane, counts in merge_lane_counts(f.lanes for f in completed).items()},
         "metrics": {
             spec.name: asdict(
                 arm_summary(_values(facts, spec.name), seed=request.seed, resamples=RESAMPLES, key=f"arm:{name}:{spec.name}")
