@@ -70,14 +70,14 @@ python3 "$SKILL_DIR/scripts/run_reviews.py" --review-dir "$REVIEW_DIR" \
 ```
 
 All eligible slices run in one wave. At most `max_parallel` children run at the same time;
-the other children wait in a queue. A slice with `shots > 1` runs that many
-independent reviewer shots of the same prompt in the wave; the runner marks a finding that a
-sibling shot already reported as an automatic duplicate. Reviewers emit the strict
+the other children wait in a queue. A slice can have more than one reviewer lane, and a lane can
+run more than one independent shot of the same prompt in the wave. The runner marks a finding that
+a sibling shot already reported as an automatic duplicate. Reviewers emit the strict
 JSON shape in `references/review-result.schema.json`; the runner validates it, assigns
 session-scoped `f_` IDs, and replaces the raw result with generated Markdown. Invalid results are
 retryable slice failures. Consume only final JSON, finding IDs and Markdown paths in `out`, and
-diagnostics in `err`. Each `out` record names its shot in `sh` and carries `final`. Treat each
-finding as a hypothesis and validate it against the code and task.
+diagnostics in `err`. Each `out` record names its lane in `ln`, its shot in `sh`, and carries
+`final`. Treat each finding as a hypothesis and validate it against the code and task.
 
 5. Complete the chosen mode:
 
@@ -162,10 +162,10 @@ python3 "$SKILL_DIR/scripts/add_slice.py" \
   --user-directive-file "<verbatim-user-request-file>"
 ```
 
-`--shots <n>` sets the number of parallel reviewer shots per pass. Omit it to use the configured
-default. Every shot that returns no kept findings reduces later waves for that slice by one shot,
-down to one. `--shot-passes <n|always>` sets how many passes, counted from the slice definition,
-run more than one shot; later passes run one shot. Omit it to use the configured default of `1`.
+`--reviewers-file <file>` replaces the reviewer lanes of the slice. The file contains only
+`[[reviewers]]` tables. Each table sets `harness`, and optionally `model`, `reasoning`, `name`,
+`from_pass`, `passes`, `shots`, `required`, and `retire_when_clean`. Omit the option to use the
+configured lanes. Do not combine it with `--harness`, `--model`, or `--reasoning`.
 
 Remove a slice with the same authority marker:
 
