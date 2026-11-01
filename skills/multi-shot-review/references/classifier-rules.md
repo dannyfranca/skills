@@ -48,22 +48,22 @@ Every prompt permits reading any supporting context needed to understand the ass
 restricting findings and review opinions to the assigned changes. Supporting context is not an
 additional review assignment. The runner supplies only the output-format contract.
 
-## Harness, model, reasoning, and shots selection
+## Harness, model, reasoning, and lane selection
 
 Pass `add_slice.py --harness <harness>`, `--model <model>`, or `--reasoning <effort>` only when
 scoped guidance or a user directive names that value for the slice. Otherwise omit them; tooling
-applies the configured slice profile or harness defaults. The classifier prompt names the session
+applies the configured lanes, or the configured slice default when no lanes are configured. A
+profile option replaces the configured lanes with one lane. The classifier prompt names the session
 variant and the configured slice default. That prompt is the only source of configured values:
 do not read `multi-shot-review.toml` files. Never repeat a configured value as an explicit option.
 The configured default belongs to a variant experiment; an explicit option records a slice
 override and the experiment loses that slice. All three choices are durable slice state, not
 reviewer prompt content.
 
-Pass `--shots <n>` only when scoped guidance asks for parallel reviewer shots on a slice. Omit it
-to use the configured default. Shots run the same prompt independently in one wave; the tool marks
-duplicates across shots and reduces the count as shots come back clean.
-
-Pass `--shot-passes <n|always>` only when scoped guidance asks for it on a slice. It sets how many
-passes, counted from the slice definition, run more than one shot. Later passes run one shot. Omit
-it to use the configured default. A guidance rule can use the change size and the slice verbosity
-as factors.
+Pass `--reviewers-file <file>` only when scoped guidance asks for different reviewer lanes or
+shots on a slice. The file contains only `[[reviewers]]` tables. They replace the configured lanes
+for that slice. Do not combine it with `--harness`, `--model`, or `--reasoning`. Omit it to use the
+configured lanes. A lane sets a profile, the passes where it runs, and its shots. Shots run the
+same prompt independently in one wave. The tool marks duplicates across shots and lanes. For each
+clean shot of a lane, the tool removes one shot of that lane. A guidance rule can use the change
+size and the slice verbosity as factors.

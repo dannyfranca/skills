@@ -202,18 +202,19 @@ on stdin, for example with a quoted heredoc, including whole-change reviews.
 
 Each add may pass `--harness <harness>`, `--model <model>`, and/or `--reasoning <effort>` only
 when scoped guidance or the user directions below name that value for the slice. Otherwise omit
-the option; the tool applies the configured slice default above or leaves the choice to the review
-harness. The session state above is the only source of configured values. Do not read
-`multi-shot-review.toml` files, and never repeat a configured value as an explicit option: the
-configured default belongs to a variant experiment, and an explicit option records a different
-source. Treat harness, model, and reasoning choices as part of the durable slice definition, not
-as prompt text.
+the option; the tool applies the configured lanes, or the configured slice default above when no
+lanes are configured, or leaves the choice to the review harness. A profile option replaces the
+configured lanes with one lane. The session state above is the only source of configured values.
+Do not read `multi-shot-review.toml` files, and never repeat a configured value as an explicit
+option: the configured default belongs to a variant experiment, and an explicit option records a
+different source. Treat harness, model, and reasoning choices as part of the durable slice
+definition, not as prompt text.
 
-Pass `--shots <n>` only when scoped guidance asks for parallel reviewer shots on that slice. Omit
-it to use the configured default. Each shot runs the same prompt independently in the same wave.
-Pass `--shot-passes <n|always>` only when scoped guidance asks for it on that slice. It sets how many
-passes, counted from the slice definition, run more than one shot. Omit it to use the configured
-default. Scoped guidance can base it on the change size and the slice verbosity.
+Pass `--reviewers-file <file>` only when scoped guidance asks for different reviewer lanes or
+shots on that slice. The file contains only `[[reviewers]]` tables, and they replace the configured
+lanes for that slice. Do not combine it with `--harness`, `--model`, or `--reasoning`. Omit it to
+use the configured lanes. Each shot runs the same prompt independently in the same wave. Scoped
+guidance can base lanes and shots on the change size and the slice verbosity.
 
 Normally omit `--user-directive-file`. If the supplemental user directions explicitly authorize
 changing a user-controlled slice, pass this exact source file to the mutation:
