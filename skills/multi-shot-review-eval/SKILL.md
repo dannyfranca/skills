@@ -20,7 +20,7 @@ Run `eval_stats.py` with the user's arguments. With no arguments it uses the act
 - Exit code 3: the run wrote no files. Do [the price research](references/price-research.md) for each model in `prices_needed.missing_models` and `prices_needed.stale_models`, then run `eval_stats.py` again with the same arguments. When the research finds no price for a model, add `--allow-unpriced`. Tell the user which missing model has no USD and which stale model uses its old rate, with its `fetched_at`.
 - `second_round_offer.<arm>.offer` is true for an arm: tell the user the CI overlap and the kept-share gap, and offer a second sample round of 20 kept findings per arm. On yes, run `eval_stats.py --second-round <eval-id>`.
 
-`stats.json` also gives per-lane metrics for each arm: kept findings, findings that only one lane reported, findings that two or more lanes reported, and the rejection rate. [The output contract](references/output-contract.md) (Lane metrics) defines them.
+`stats.json` also gives per-lane metrics for each arm: kept findings, findings that only one lane reported, findings that two or more lanes reported, the rejection rate, and the cost of the lane. It also gives the yield of extra shots, the dedupe runs, the judge payoff, and the findings for each severity. [The output contract](references/output-contract.md) (Lane metrics, Setting metrics, Cost metric) defines them.
 
 Continue when `eval_stats.py` exits 0, `sample.json` exists, and the user has answered each second-round offer.
 

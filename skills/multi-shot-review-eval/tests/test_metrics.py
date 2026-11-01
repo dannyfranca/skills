@@ -81,6 +81,7 @@ class SessionMetricsTests(unittest.TestCase):
             "busy_minutes": Ratio(13, 1),
             "tokens": Ratio(500, 1),
             "usd": Ratio(1.5, 1),
+            "kept_p0_p2_per_usd": Ratio(2, 1.5),
             "failure_rate": Ratio(1, 4),
             "classifier_retries": Ratio(1, 1),
             "incomplete_rate": Ratio(0, 1),

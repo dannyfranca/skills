@@ -112,6 +112,7 @@ def write_session(
     root: Path | None = None,
     session_extra: dict[str, Any] | None = None,
     history_end: float | None = None,
+    events: list[dict[str, Any]] | None = None,
 ) -> Path:
     directory = review_root / repo / session_name
     directory.mkdir(parents=True)
@@ -182,7 +183,7 @@ def write_session(
             }
             for index, status in enumerate(classifications or ["succeeded"])
         ],
-        "history": [{"event": "run_completed", "at": at(end)}],
+        "history": [*(events or []), {"event": "run_completed", "at": at(end)}],
     }
     (directory / "_state.json").write_text(json.dumps(state))
     return directory

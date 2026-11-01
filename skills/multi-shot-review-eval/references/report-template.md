@@ -20,10 +20,20 @@ Pooled (<eval ids>): <diff, CI, bucket> — or "no earlier evals of this contras
 
 ## Reviewer lanes
 
-| arm | lane | kept | unique | shared | rejected | rejection rate |
-| --- | --- | --- | --- | --- | --- | --- |
+| arm | lane | kept | unique | shared | rejected | rejection rate | tokens | USD | kept / USD | unique / USD |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 
-Use `arms.<arm>.lanes` from `stats.json`. Write "no lane data" when no arm has lanes.
+Use `arms.<arm>.lanes` from `stats.json`. Write "no lane data" when no arm has lanes. Write "n/a" for a `null` value.
+
+## Review settings
+
+- Efficiency: <arm>: `kept_p0_p2_per_usd` <value>. This is the sum of kept P0–P2 findings divided by the sum of USD, for sessions with complete USD.
+- Shots: <arm>: per shot <runs> runs, <kept> kept, <rejected> rejected; extra-only kept <n>.
+- Dedupe: <arm>: <runs> runs, <failed> failed, <merged> merged, <tokens> tokens, <usd> USD.
+- Judge: <arm>: <continue> continue, <stop> stop, <continue_with_kept> continue with kept, <kept_after_continue> kept after continue.
+- Severity: <arm>: kept P0/P1/P2/P3 <n/n/n/n>, rejected <n/n/n/n>.
+
+Use `arms.<arm>.shots`, `dedupe`, `judge`, and `severity` from `stats.json`. Write "no setting data" when no arm has them.
 
 ## Flags
 

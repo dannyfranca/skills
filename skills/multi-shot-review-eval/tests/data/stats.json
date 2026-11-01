@@ -7,24 +7,45 @@
   },
   "arms": {
     "a": {
+      "dedupe": {
+        "failed": 1,
+        "merged": 5,
+        "runs": 3,
+        "tokens": 9000,
+        "usd": 0.05
+      },
       "finding_classes": {
         "kept": 15,
         "rejected": 10
       },
+      "judge": {
+        "continue": 2,
+        "continue_with_kept": 1,
+        "kept_after_continue": 2,
+        "stop": 3
+      },
       "lanes": {
         "claude-code:model-a": {
           "kept": 6,
+          "kept_per_usd": null,
           "rejected": 2,
           "rejection_rate": 0.25,
           "shared": 3,
-          "unique": 3
+          "tokens": null,
+          "unique": 3,
+          "unique_per_usd": null,
+          "usd": null
         },
         "codex:model-c": {
           "kept": 12,
+          "kept_per_usd": 20.0,
           "rejected": 8,
           "rejection_rate": 0.4,
           "shared": 3,
-          "unique": 9
+          "tokens": 120000,
+          "unique": 9,
+          "unique_per_usd": 15.0,
+          "usd": 0.6
         }
       },
       "metrics": {
@@ -173,6 +194,39 @@
       ],
       "sessions_missing_findings": 0,
       "sessions_with_diff_size": 0,
+      "severity": {
+        "P0": {
+          "kept": 1,
+          "rejected": 0
+        },
+        "P1": {
+          "kept": 7,
+          "rejected": 3
+        },
+        "P2": {
+          "kept": 10,
+          "rejected": 6
+        },
+        "P3": {
+          "kept": 0,
+          "rejected": 1
+        }
+      },
+      "shots": {
+        "by_shot": {
+          "1": {
+            "kept": 14,
+            "rejected": 8,
+            "runs": 10
+          },
+          "2": {
+            "kept": 7,
+            "rejected": 2,
+            "runs": 6
+          }
+        },
+        "extra_only_kept": 4
+      },
       "usage_coverage": {
         "logs_priced_from_table": 5,
         "sessions_with_logs": 5,

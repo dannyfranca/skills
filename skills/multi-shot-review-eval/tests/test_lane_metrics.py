@@ -5,13 +5,14 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from fixtures import PRICES, finding, run, slice_, write_session
+from fixtures import PRICES, claude_stdout, codex_stderr, finding, run, slice_, write_logs, write_session
 
-from findings import load_findings, run_lanes
-from lane_metrics import LaneCounts, lane_counts, merge_lane_counts
+from findings import load_findings, run_lane, session_runs
+from lane_metrics import LaneCounts, LaneRun, lane_counts
 from prices import load_price_table
 from session_facts import FactsCache
 from session_store import load_sessions
+from tally import merge_tallies
 
 
 def lane_run(run_id: str, lane: str, findings: list[dict[str, Any]], pass_number: int = 1) -> dict[str, Any]:
@@ -29,7 +30,8 @@ class LaneCountsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             write_session(Path(tmp), "20261001-0000-aaaaaaaa", slices={"core": slice_(*runs, **slice_options)})
             session = load_sessions(Path(tmp))[0]
-            return lane_counts(load_findings(session).findings, ran=run_lanes(session))
+            free = [LaneRun(run_lane(item), 0, 0.0) for item in session_runs(session)]
+            return lane_counts(load_findings(session).findings, runs=free)
 
     def test_groups_credit_every_reporting_lane(self) -> None:
         counts = self.counts(
@@ -75,8 +77,35 @@ class LaneCountsTests(unittest.TestCase):
         self.assertEqual(LaneCounts(kept=3, rejected=1).as_dict()["rejection_rate"], 0.25)
 
     def test_merge_adds_lanes_across_sessions(self) -> None:
-        merged = merge_lane_counts([{"a": LaneCounts(kept=1)}, {"a": LaneCounts(rejected=1), "b": LaneCounts(kept=2)}])
+        merged = merge_tallies([{"a": LaneCounts(kept=1)}, {"a": LaneCounts(rejected=1), "b": LaneCounts(kept=2)}])
         self.assertEqual(merged, {"a": LaneCounts(kept=1, rejected=1), "b": LaneCounts(kept=2)})
+
+    def test_unknown_cost_stays_unknown_after_merge(self) -> None:
+        merged = merge_tallies([{"a": LaneCounts(kept=1, tokens=10, usd=0.5)}, {"a": LaneCounts(kept=1, tokens=None, usd=None)}])
+        self.assertEqual(merged["a"], LaneCounts(kept=2, tokens=None, usd=None))
+        self.assertIsNone(merged["a"].as_dict()["kept_per_usd"])
+
+    def test_lane_cost_comes_from_its_run_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = write_session(
+                Path(tmp),
+                "20261001-0000-aaaaaaaa",
+                slices={
+                    "core": slice_(
+                        lane_run("r1", "claude:b", [finding("f_1"), finding("f_2")]),
+                        lane_run("r2", "codex:a", [finding("f_3")]),
+                        lane_run("r3", "codex:a", []),
+                    )
+                },
+            )
+            write_logs(directory, "r1-1-core", stdout=claude_stdout(0.5))
+            write_logs(directory, "r2-1-core", stderr=codex_stderr("100"))
+            write_logs(directory, "classifier-c1", stdout=claude_stdout(9.0))
+            facts = FactsCache(load_price_table(PRICES)).get(load_sessions(Path(tmp))[0])
+        claude = facts.lanes["claude:b"].as_dict()
+        self.assertEqual((claude["usd"], claude["kept_per_usd"], claude["unique_per_usd"]), (0.5, 4.0, 4.0))
+        self.assertEqual(facts.lanes["codex:a"].as_dict()["usd"], None)
+        self.assertEqual(facts.lanes["codex:a"].tokens, None)
 
     def test_partial_findings_contribute_no_lanes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
