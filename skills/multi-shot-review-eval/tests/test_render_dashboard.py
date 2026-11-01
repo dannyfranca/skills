@@ -177,7 +177,7 @@ class RenderDashboardTests(unittest.TestCase):
 
     def test_sections_in_order(self) -> None:
         page = self.render()
-        markers = ["<header>", 'id="recommendations"', 'id="forest"', 'id="trend"', 'id="strata"', 'id="lanes"', 'id="worsening"', 'id="finding-sample"', 'id="analysts"', 'id="reproduction"']
+        markers = ["<header>", 'id="recommendations"', 'id="forest"', 'id="trend"', 'id="strata"', 'id="lanes"', 'id="settings"', 'id="worsening"', 'id="finding-sample"', 'id="analysts"', 'id="reproduction"']
         positions = [page.index(marker) for marker in markers]
         self.assertEqual(positions, sorted(positions))
 
@@ -241,8 +241,12 @@ class RenderDashboardTests(unittest.TestCase):
 
     def test_lanes_list_each_arm_lane(self) -> None:
         page = self.render()
-        lanes = page[page.index('id="lanes"') : page.index('id="worsening"')]
-        self.assertIn("<td>a</td><td>codex:model-c</td><td>12</td><td>9</td><td>3</td><td>8</td><td>40.0%</td>", lanes)
+        lanes = page[page.index('id="lanes"') : page.index('id="settings"')]
+        self.assertIn(
+            "<td>a</td><td>codex:model-c</td><td>12</td><td>9</td><td>3</td><td>8</td><td>40.0%</td>"
+            "<td>120000</td><td>0.6</td><td>20</td><td>15</td>",
+            lanes,
+        )
         self.assertIn("claude-code:model-a", lanes)
         self.assertNotIn("<td>b</td>", lanes)
 
@@ -252,6 +256,23 @@ class RenderDashboardTests(unittest.TestCase):
             summary.pop("lanes", None)
         page = self.render(stats=stats)
         self.assertIn("No lane data.", page)
+
+    def test_settings_list_each_table(self) -> None:
+        page = self.render()
+        settings = page[page.index('id="settings"') : page.index('id="worsening"')]
+        self.assertIn("<td>a</td><td>2</td><td>6</td><td>7</td><td>2</td><td>4</td>", settings)
+        self.assertIn("<td>a</td><td>3</td><td>1</td><td>5</td><td>9000</td><td>0.05</td>", settings)
+        self.assertIn("<td>a</td><td>2</td><td>3</td><td>1</td><td>2</td>", settings)
+        self.assertIn("<td>a</td><td>P3</td><td>0</td><td>1</td>", settings)
+        self.assertNotIn("<td>b</td>", settings)
+
+    def test_stats_without_settings_render(self) -> None:
+        stats = load_stats()
+        for summary in stats["arms"].values():
+            for key in ("shots", "dedupe", "judge", "severity"):
+                summary.pop(key, None)
+        page = self.render(stats=stats)
+        self.assertIn("No setting data.", page)
 
     def test_worsening_listed(self) -> None:
         page = self.render()

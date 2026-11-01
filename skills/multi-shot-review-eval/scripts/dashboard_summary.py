@@ -95,6 +95,11 @@ def lanes(stats: Mapping[str, Any]) -> str:
             number(counts["shared"]),
             number(counts["rejected"]),
             share(counts["rejection_rate"]),
+            # Evals written before lane cost have no cost keys; their cells read n/a.
+            number(counts.get("tokens")),
+            number(counts.get("usd")),
+            number(counts.get("kept_per_usd")),
+            number(counts.get("unique_per_usd")),
         ]
         for arm, summary in stats["arms"].items()
         # Evals written before lane metrics have no lanes; their dashboards still render.
@@ -105,13 +110,68 @@ def lanes(stats: Mapping[str, Any]) -> str:
     note = (
         "<p>Completed sessions with all findings. A duplicate group counts one time for each lane that reported it."
         " Unique: only this lane reported the kept finding. Shared: other lanes reported it too."
-        " Rejection rate: rejected / (kept + rejected).</p>"
+        " Rejection rate: rejected / (kept + rejected)."
+        " Tokens and USD: review runs of the lane only. They are n/a when a run of the lane has no cost in its log.</p>"
     )
-    return section(
-        "lanes",
-        "Reviewer lanes",
-        note + table(["arm", "lane", "kept", "unique", "shared", "rejected", "rejection rate"], rows),
-    )
+    headers = ["arm", "lane", "kept", "unique", "shared", "rejected", "rejection rate", "tokens", "USD", "kept / USD", "unique / USD"]
+    return section("lanes", "Reviewer lanes", note + table(headers, rows))
+
+
+def settings(stats: Mapping[str, Any]) -> str:
+    # Evals written before setting metrics have none of these keys; their dashboards still render.
+    arms = stats["arms"].items()
+    parts = [
+        _setting_table(
+            "Shots",
+            "Kept and rejected count each duplicate group one time for each shot that reported it."
+            " Extra-only kept: kept groups that no first shot reported.",
+            ["arm", "shot", "runs", "kept", "rejected", "extra-only kept"],
+            [
+                [text(arm), text(shot), number(counts["runs"]), number(counts["kept"]), number(counts["rejected"]), number(summary["shots"].get("extra_only_kept"))]
+                for arm, summary in arms
+                if summary.get("shots")
+                for shot, counts in (summary["shots"].get("by_shot") or {}).items()
+            ],
+        ),
+        _setting_table(
+            "Dedupe",
+            "Merged: findings that a dedupe run marked as duplicates. Tokens and USD are n/a when a dedupe log has no cost.",
+            ["arm", "runs", "failed", "merged", "tokens", "USD"],
+            [
+                [text(arm), number(counts["runs"]), number(counts["failed"]), number(counts["merged"]), number(counts.get("tokens")), number(counts.get("usd"))]
+                for arm, summary in arms
+                if (counts := summary.get("dedupe"))
+            ],
+        ),
+        _setting_table(
+            "Judge",
+            "Continue with kept: continue verdicts after which the same slice definition kept a finding."
+            " Kept after continue: kept findings from passes after the first continue verdict.",
+            ["arm", "continue", "stop", "continue with kept", "kept after continue"],
+            [
+                [text(arm), number(counts["continue"]), number(counts["stop"]), number(counts["continue_with_kept"]), number(counts["kept_after_continue"])]
+                for arm, summary in arms
+                if (counts := summary.get("judge"))
+            ],
+        ),
+        _setting_table(
+            "Severity",
+            "Kept and rejected findings per severity.",
+            ["arm", "severity", "kept", "rejected"],
+            [
+                [text(arm), text(severity), number(counts["kept"]), number(counts["rejected"])]
+                for arm, summary in arms
+                for severity, counts in (summary.get("severity") or {}).items()
+            ],
+        ),
+    ]
+    body = "".join(part for part in parts if part)
+    note = "<p>Completed sessions with all findings.</p>"
+    return section("settings", "Review settings", note + body if body else "<p>No setting data.</p>")
+
+
+def _setting_table(title: str, note: str, headers: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
+    return f"<h3>{text(title)}</h3><p>{text(note)}</p>{table(headers, rows)}" if rows else ""
 
 
 def worsening(stats: Mapping[str, Any]) -> str:
