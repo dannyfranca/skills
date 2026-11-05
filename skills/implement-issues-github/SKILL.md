@@ -32,9 +32,10 @@ If an explicit leaf is blocked outside the selection, show the required expansio
 7. Commit and push the branch with `/micro-commits`.
 8. Open a `ready-for-review` PR whose body contains `Closes #<leaf-number>`. Continue when the commit, remote branch, and PR exist.
 9. Merge the PR at the first allowed point, unattended through required checks. Continue when GitHub shows the PR merged and its issue closed.
-10. Refresh dependent leaves. Close an Epic when all descendants close; reopen it when an open descendant appears. Continue when dependent labels and Epic states match their descendants.
-11. Return to step 1 until the completion criterion holds.
+10. From the main checkout, run `git worktree remove` without `--force` and delete the local branch. Leave a refused worktree to `worktree-janitor`. Continue when `git worktree list` omits it, or Git refused.
+11. Refresh dependent leaves. Close an Epic when all descendants close; reopen it when an open descendant appears. Continue when dependent labels and Epic states match their descendants.
+12. Return to step 1 until the completion criterion holds.
 
 ## Completion Criterion
 
-The run finishes when a state refresh finds no `ready-for-agent` leaf in the selection and every leaf handled by the run has its PR merged and its issue closed.
+The run finishes when a state refresh finds no `ready-for-agent` leaf in the selection and every leaf handled by the run has passed step 10.
