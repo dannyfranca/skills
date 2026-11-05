@@ -19,7 +19,7 @@ npx skills add dannyfranca/skills --skill multi-shot-review
 
 - `browser` — Browser guidance for agents.
 - `graceful-pause` — Pause agents without wasting tokens; in-flight multi-shot reviews finish.
-- `implement-issues-github` — Implement GitHub issues with reviews.
+- `implement-issues-github` — Implement GitHub issues through to merged PRs.
 - `implement-tickets-local` — Implement local tickets with reviews.
 - `micro-commits` — Create focused, incremental commits.
 - `multi-shot-benchmark` — Compare full review workflows on isolated real historical diffs.
