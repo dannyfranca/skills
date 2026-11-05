@@ -31,7 +31,7 @@ If an explicit leaf is blocked outside the selection, show the required expansio
    - add `in-progress`
    - remove `ready-for-agent`
    - Continue when GitHub reflects all three changes.
-4. Derive a short kebab-case feature slug from its title. Use `$worktrees` to create `<repo-root>/.worktrees/issue-<leaf-number>-<feature-slug>` on branch `issue-<leaf-number>-<feature-slug>`. Continue when the hydrated worktree is on that branch.
+4. Derive a short kebab-case feature slug from its title. Use `/worktrees` with task slug and branch `issue-<leaf-number>-<feature-slug>`. Continue when the hydrated worktree is on that branch.
 5. Implement it using `/implement`
 6. Run `/multi-shot-review`. Continue until the review is quiet.
 7. Commit and push the branch with `/micro-commits`.
