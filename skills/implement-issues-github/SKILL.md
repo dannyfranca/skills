@@ -1,24 +1,19 @@
 ---
 name: implement-issues-github
-description: Implement GitHub issues in isolated worktrees with review or autonomous PR handling
+description: Implement GitHub issues in isolated worktrees through to merged PRs
 ---
 
 # Implement GitHub Issues
 
-Read [`../to-tickets-gh/references/tracker.md`](../to-tickets-gh/references/tracker.md) completely. Resolve `autonomous` as a mode modifier and every other argument as a selector:
+Read [`../to-tickets-gh/references/tracker.md`](../to-tickets-gh/references/tracker.md) completely. Resolve every argument as a selector. Ask for a target when the request selects none:
 
 - leaf issue(s): exactly those issues
 - Epic(s): their open descendant leaves
-- `drain-ready`: repeatedly query the Ready frontier until empty. With Epics or leaves, the frontier is only their leaves. With no other selector, the frontier is the full repository.
+- `repo`: every leaf in the repository
 - any combination of explicit leaves and Epics, where Epics resolve to leaves
 - One PR per leaf
 - If pointed to a(n) Epic(s), loop over one leaf at a time
 - You MUST run `/multi-shot-review` before committing and pushing the branch.
-
-## Modes
-
-- `review` (default): a leaf completes when its ready-for-review PR is open.
-- `autonomous`: a leaf completes when its PR is merged and the merge closes its issue. Continue unattended through required checks and merge at the first allowed point.
 
 If an explicit leaf is blocked outside the selection, show the required expansion and get user confirmation before adding issues. Execute sequentially.
 
@@ -35,14 +30,11 @@ If an explicit leaf is blocked outside the selection, show the required expansio
 5. Implement it using `/implement`
 6. Run `/multi-shot-review`. Continue until the review is quiet.
 7. Commit and push the branch with `/micro-commits`.
-8. Open a `ready-for-review` PR whose body contains `Closes #<leaf-number>`.
-    - If on `autonomous` mode, merge the PR. Continue when the code is merged
-    - If on `review` mode, continue when the commit, remote branch, and PR exist
-9. Drive the leaf to its mode's completion state. Continue when GitHub reflects that state.
+8. Open a `ready-for-review` PR whose body contains `Closes #<leaf-number>`. Continue when the commit, remote branch, and PR exist.
+9. Merge the PR at the first allowed point, unattended through required checks. Continue when GitHub shows the PR merged and its issue closed.
 10. Refresh dependent leaves. Close an Epic when all descendants close; reopen it when an open descendant appears. Continue when dependent labels and Epic states match their descendants.
 11. Return to step 1 until the completion criterion holds.
 
 ## Completion Criterion
 
-- Explicit selection finishes when every selected leaf reaches its mode's completion state. In `review` mode, also finish when each remaining selected leaf is blocked solely by selected leaves at their completion state.
-- `drain-ready` finishes when a state refresh finds no `ready-for-agent` leaf in its frontier and every leaf handled by the run has reached its mode's completion state.
+The run finishes when a state refresh finds no `ready-for-agent` leaf in the selection and every leaf handled by the run has its PR merged and its issue closed.
