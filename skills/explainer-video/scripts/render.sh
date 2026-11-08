@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # Renders VIDEO_DIR/scenes/*.py (one Narrated scene per file) in file-name order.
 #   render.sh preview VIDEO_DIR [SCENE_FILE...]  480p15 renders and contact sheets in VIDEO_DIR/build/sheets
-#   render.sh final VIDEO_DIR OUT.mp4            1080p60 video, loudness-normalised, with chapters
+#   render.sh final VIDEO_DIR SLUG               1080p60 video, loudness-normalised, with chapters,
+#                                                at $EXPLAINER_VIDEOS/<YYYYMMDD-HHMM>-SLUG.mp4
 set -euo pipefail
 
 SCRIPTS="$(dirname "$(readlink -f "$0")")"
 HOME_DIR="${EXPLAINER_HOME:-$HOME/.cache/explainer-video}"
+# One folder for every video of this skill; the time prefix sorts them by date.
+VIDEOS="${EXPLAINER_VIDEOS:-$HOME/Videos/explainer-video}"
 export MANIM="$HOME_DIR/venv/bin/manim"
 export PYTHONPATH="$SCRIPTS${PYTHONPATH:+:$PYTHONPATH}"
 # Each process may load the 300 MB voice model, so parallelism stays below the core count.
@@ -54,9 +57,8 @@ preview() {
 }
 
 final() {
-  local out
-  out="$(realpath -m "${1:?missing OUT.mp4}")"
-  mkdir -p "$(dirname "$out")"
+  local out="$VIDEOS/$(date +%Y%m%d-%H%M)-${1:?missing SLUG}.mp4"
+  mkdir -p "$VIDEOS"
   mapfile -t files < <(scene_files)
   render h "$VIDEO_DIR/build/final" "${files[@]}"
 
