@@ -11,6 +11,7 @@ Make a 3Blue1Brown-style video that teaches the subject the user describes. Use 
 Call: `/explainer-video <subject> [voice=af_heart] [captions=off] [chapters-file]`.
 
 - Get the audience from the user text. If the user names no audience, teach a smart newcomer.
+- Write the narration, captions, and on-screen text in the language of the user text, unless the user names a language. The voice sets the speech language: American English is `af_heart`, Brazilian Portuguese is `pf_dora`. Other English and Portuguese voices: `bf_*`, `bm_*`, `am_*`, `pm_alex`, `pm_santa`. If the user names no voice, use the default voice for the video language.
 - `voice=` sets `EXPLAINER_VOICE`. `captions=off` sets `EXPLAINER_CAPTIONS=off`. `chapters-file` sets `EXPLAINER_CHAPTERS_FILE=on`: a YouTube chapter list goes next to the video. Export them for every `render.sh` command.
 - The work dir `VIDEO_DIR` is `$TMPDIR/<slug>-video/`. Keep scenes in `VIDEO_DIR/scenes/`.
 - `SKILL_DIR` is the directory of this file.
