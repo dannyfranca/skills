@@ -29,5 +29,5 @@ Call: `/explainer-video <subject> [voice=af_heart] [captions=off]`.
    Done when each question maps to a chapter that answers it.
 4. Read [STYLE.md](STYLE.md). Write one file per chapter: `VIDEO_DIR/scenes/NN_slug.py`. Done when the narration answers every plan question.
 5. Run `SKILL_DIR/scripts/render.sh preview VIDEO_DIR`. Look at every contact sheet in `VIDEO_DIR/build/sheets/`. Fix overlaps, cut-off content, crowded frames, and visuals that do not match the voice. Re-render only the changed files: `render.sh preview VIDEO_DIR scenes/NN_slug.py`. Done when every sheet is clean.
-6. Run `SKILL_DIR/scripts/render.sh final VIDEO_DIR ~/Videos/<slug>.mp4` in the background. Done when it prints `video:`.
+6. Run `SKILL_DIR/scripts/render.sh final VIDEO_DIR <slug>` in the background. Done when it prints `video:`. The video goes to `~/Videos/explainer-video/<YYYYMMDD-HHMM>-<slug>.mp4`.
 7. Give the user the embedded video, the chapter list, and the voice.
