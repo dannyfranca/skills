@@ -3,6 +3,7 @@
 #   render.sh preview VIDEO_DIR [SCENE_FILE...]  480p15 renders and contact sheets in VIDEO_DIR/build/sheets
 #   render.sh final VIDEO_DIR SLUG               1080p60 video, loudness-normalised, with chapters,
 #                                                at $EXPLAINER_VIDEOS/<YYYYMMDD-HHMM>-SLUG.mp4
+#                                                EXPLAINER_CHAPTERS_FILE=on also writes a YouTube chapter list next to it
 set -euo pipefail
 
 SCRIPTS="$(dirname "$(readlink -f "$0")")"
@@ -67,7 +68,7 @@ final() {
   mkdir -p build/join
   : > build/join/list.txt
   printf ';FFMETADATA1\n' > build/join/chapters.txt
-  : > "${out%.mp4}.chapters.txt"
+  : > build/join/youtube.txt
   local start=0
   for f in "${files[@]}"; do
     n=$(basename "$f" .py)
@@ -83,7 +84,7 @@ final() {
     title=$(sed -n 's/^TITLE = "\(.*\)"$/\1/p' "$f" | head -n 1)
     end=$(awk -v s="$start" -v d="$dur" 'BEGIN { printf "%d", s + d * 1000 }')
     printf '[CHAPTER]\nTIMEBASE=1/1000\nSTART=%s\nEND=%s\ntitle=%s\n' "$start" "$end" "${title:-$n}" >> build/join/chapters.txt
-    awk -v s="$start" -v t="${title:-$n}" 'BEGIN { s = int(s / 1000); printf "%d:%02d %s\n", s / 60, s % 60, t }' >> "${out%.mp4}.chapters.txt"
+    awk -v s="$start" -v t="${title:-$n}" 'BEGIN { s = int(s / 1000); printf "%d:%02d %s\n", s / 60, s % 60, t }' >> build/join/youtube.txt
     start=$end
   done
 
@@ -100,8 +101,13 @@ print(j["input_i"], j["input_tp"], j["input_lra"], j["input_thresh"], j["target_
     -af "loudnorm=I=-16:TP=-1.5:LRA=11:measured_I=$mi:measured_TP=$mtp:measured_LRA=$mlra:measured_thresh=$mth:offset=$off:linear=true" \
     -ar 48000 -c:a aac -b:a 192k -movflags +faststart "$out"
   echo "video: $out"
+  # The chapters are already in the mp4. The text file is only for a YouTube description.
+  if [[ "${EXPLAINER_CHAPTERS_FILE:-off}" == on ]]; then
+    cp build/join/youtube.txt "${out%.mp4}.chapters.txt"
+    echo "chapters file: ${out%.mp4}.chapters.txt"
+  fi
   echo "chapters:"
-  cat "${out%.mp4}.chapters.txt"
+  cat build/join/youtube.txt
 }
 
 case "$mode" in
