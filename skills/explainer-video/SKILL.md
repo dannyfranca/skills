@@ -8,10 +8,10 @@ disable-model-invocation: true
 
 Make a 3Blue1Brown-style video that teaches the subject the user describes. Use Manim for the visuals and Kokoro for the voice. The target is teaching: the viewer must understand the subject at the end. The subject sets the length.
 
-Call: `/explainer-video <subject> [voice=af_heart] [captions=off]`.
+Call: `/explainer-video <subject> [voice=af_heart] [captions=off] [chapters-file]`.
 
 - Get the audience from the user text. If the user names no audience, teach a smart newcomer.
-- `voice=` sets `EXPLAINER_VOICE`. `captions=off` sets `EXPLAINER_CAPTIONS=off`. Export them for every `render.sh` command.
+- `voice=` sets `EXPLAINER_VOICE`. `captions=off` sets `EXPLAINER_CAPTIONS=off`. `chapters-file` sets `EXPLAINER_CHAPTERS_FILE=on`: a YouTube chapter list goes next to the video. Export them for every `render.sh` command.
 - The work dir `VIDEO_DIR` is `$TMPDIR/<slug>-video/`. Keep scenes in `VIDEO_DIR/scenes/`.
 - `SKILL_DIR` is the directory of this file.
 
