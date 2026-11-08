@@ -10,12 +10,20 @@ CACHE = HOME / "tts-cache"
 VOICE = os.environ.get("EXPLAINER_VOICE", "af_heart")
 SAMPLE_RATE = 24000
 
+# Kokoro voice names start with their language letter: af_heart is American English, pf_dora is Brazilian Portuguese.
+LANGS = {"a": "en-us", "b": "en-gb", "p": "pt-br"}
+LANG = LANGS[VOICE[0]]
+WORDS = {
+    "en": {"to": "to", "so": "so", "percent": "percent"},
+    "pt": {"to": "para", "so": "então", "percent": "por cento"},
+}[LANG[:2]]
+
 
 def plain(tex):
     """Caption TeX to the words a narrator reads."""
-    s = tex.replace(r"$\to$", " to ").replace(r"$\Rightarrow$", " so ")
+    s = tex.replace(r"$\to$", f" {WORDS['to']} ").replace(r"$\Rightarrow$", f" {WORDS['so']} ")
     s = re.sub(r"\\[a-zA-Z]+\{([^}]*)\}", r"\1", s)
-    s = s.replace(r"\\", " ").replace(r"\_", " ").replace(r"\%", " percent").replace("$", "")
+    s = s.replace(r"\\", " ").replace(r"\_", " ").replace(r"\%", f" {WORDS['percent']}").replace("$", "")
     return re.sub(r"\s+", " ", s).strip()
 
 
@@ -27,7 +35,7 @@ def _synth(text):
     if _kokoro is None:
         from kokoro_onnx import Kokoro
         _kokoro = Kokoro(str(HOME / "kokoro" / "kokoro-v1.0.onnx"), str(HOME / "kokoro" / "voices-v1.0.bin"))
-    samples, sr = _kokoro.create(text, voice=VOICE, speed=1.0, lang="en-us")
+    samples, sr = _kokoro.create(text, voice=VOICE, speed=1.0, lang=LANG)
     assert sr == SAMPLE_RATE
     return samples
 
