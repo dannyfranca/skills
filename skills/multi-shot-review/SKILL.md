@@ -1,6 +1,6 @@
 ---
 name: multi-shot-review
-description: Review changes in content slices sized for manageable context, using configured harnesses and repository review policy. Use for iterative review barriers or explicitly requested one-wave reports.
+description: Use for iterative review barriers or a requested one-wave review report.
 ---
 
 # Multi-Shot Review
