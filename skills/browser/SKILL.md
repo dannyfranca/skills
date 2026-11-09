@@ -19,6 +19,8 @@ If Chrome is not installed, remove `--browser=chrome`.
 
 Use a session name that tells the site and the task, for example `-s=shop-login`. Complete the task in the local session unless you find a bot wall.
 
+When a site asks for an email address, a verification code, or a magic link, use the `agent-email` skill.
+
 ## Bot walls
 
 A **bot wall** is a page that blocks automated browsers. It is a bot wall when the snapshot shows one of these:
