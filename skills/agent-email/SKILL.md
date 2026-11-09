@@ -17,7 +17,7 @@ The agent has its own address: `$AGENT_EMAIL_ADDRESS`. Use it for all signups an
 ## Signup
 
 1. Record the start time: `start=$(date -u +%Y-%m-%dT%H:%M:%SZ)`.
-2. Submit the signup with `$AGENT_EMAIL_ADDRESS`. For web forms, use the `browser` skill.
+2. Submit the signup with `$AGENT_EMAIL_ADDRESS`. For web forms, use the `browser` skill. For the password, use the `agent-secrets` skill.
 3. Poll for mail from the service, received after `$start`, every 10 seconds for a maximum of 3 minutes. The step is complete when the message arrives. If no message arrives, request a new email once, then report to the user.
 4. Read the message and get the code or link. Open the link in the same browser session.
 
