@@ -1,6 +1,6 @@
 ---
 name: worktrees
-description: Git worktree location and setup conventions. Use when creating a worktree for a project.
+description: Use when creating a worktree.
 ---
 
 Ensure the source branch is up to date with the remote branch, or create from remote if needed.

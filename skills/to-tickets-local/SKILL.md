@@ -1,6 +1,6 @@
 ---
 name: to-tickets-local
-description: Publish tracer-bullet tickets as unversioned local files
+description: Use when tracer-bullet tickets go to local files.
 ---
 
 # To Tickets — Local

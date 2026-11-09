@@ -1,6 +1,6 @@
 ---
 name: worktree-janitor
-description: Periodic cleanup and recovery for ephemeral Git worktrees.
+description: Use to clean up or recover ephemeral Git worktrees.
 disable-model-invocation: true
 ---
 

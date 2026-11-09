@@ -1,6 +1,6 @@
 ---
 name: mcp-cli
-description: Call an approved HTTPS MCP endpoint through a scoped CLI. Use when another skill needs MCP without registering server schemas in the agent context.
+description: Use when another skill needs MCP without registered server schemas.
 ---
 
 # MCP CLI
