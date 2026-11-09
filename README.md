@@ -17,6 +17,7 @@ npx skills add dannyfranca/skills --skill multi-shot-review
 
 ## Available skills
 
+- `agent-email` — Email inbox for agent signups, with AgentMail or SMTP.
 - `browser` — Browser guidance for agents.
 - `explainer-video` — Make a narrated 3Blue1Brown-style explainer video.
 - `graceful-pause` — Pause agents without wasting tokens; in-flight multi-shot reviews finish.
