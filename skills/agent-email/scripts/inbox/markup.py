@@ -15,19 +15,25 @@ BLOCK_TAGS = {
     "h1", "h2", "h3", "h4", "h5", "h6",
 }
 
-# A comment that never closes runs to the end of the stylesheet.
-CSS_COMMENT = re.compile(r"/\*.*?(?:\*/|\Z)", re.S)
 IMPORTANT = re.compile(r"\s*!\s*important\s*$")
 CSS_ESCAPE = re.compile(r"\\(?:([0-9a-f]{1,6})\s?|(.))", re.I | re.S)
+ESCAPE = r"\\(?:[0-9a-f]{1,6}\s?|.)"
+# A string ends at a newline, where a browser drops it as a bad string. A comment that never closes runs to the end.
+STRING = r"""(?:"(?:\\.|[^"\\\n])*"?|'(?:\\.|[^'\\\n])*'?)"""
+# Strings, escapes, and comments can hold braces, semicolons, and comment marks that are no CSS syntax.
+CSS_TOKEN = re.compile(rf"""(/\*.*?(?:\*/|\Z))|{STRING}|{ESCAPE}|[{{}};]|[^{{}};"'\\/]+|.""", re.I | re.S)
 NUMBER = re.compile(r"([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([a-z%]*)")
 SCALE = re.compile(r"scale[xyz3d]*\(([^)]*)\)")
 OPACITY_FILTER = re.compile(r"opacity\(([^)]*)\)")
 HEX_ALPHA = re.compile(r"#(?:[0-9a-f]{3}([0-9a-f])|[0-9a-f]{6}([0-9a-f]{2}))")
 COLOR_FUNCTION = re.compile(r"(?:rgb|hsl|hwb|lab|lch|oklab|oklch)a?\((.*)\)")
-COMBINATOR = re.compile(r"\s*[\s>+~]\s*")
-SIBLING = re.compile(r"[+~]\s*\*\s*$")
-# An unclosed bracket runs to the end, so a long run of "[" is one match and not one rescan per bracket.
-PSEUDO_OR_ATTRIBUTE = re.compile(r"::?[\w-]+(?:\([^)]*(?:\)|\Z))?|\[[^\]]*(?:\]|\Z)")
+# An unclosed bracket runs to the end, so a long run of "[" is one token and not one rescan per bracket.
+PSEUDO_OR_ATTRIBUTE = rf"""::?[\w-]+(?:\([^)]*(?:\)|\Z))?|\[(?:{STRING}|\\.|[^\]"'\\])*(?:\]|\Z)"""
+SELECTOR_TOKEN = re.compile(rf"({ESCAPE})|({PSEUDO_OR_ATTRIBUTE})|(\s*[\s>+~]\s*)|(,)|[^\\:\[\s>+~,]+|.", re.I | re.S)
+TAG = re.compile(r"[a-z][a-z0-9]*", re.I)
+IDENTIFIER = rf"((?:[\w-]|{ESCAPE})+)"
+# One scan, so that the "." of an escaped "\." starts no class.
+COMPOUND_PART = re.compile(rf"#{IDENTIFIER}|\.{IDENTIFIER}|{ESCAPE}|.", re.I | re.S)
 
 FAINT = 0.1
 FAR_PX = 500
@@ -67,8 +73,13 @@ def unescape(css):
     return CSS_ESCAPE.sub(character, css)
 
 
+def css_tokens(css):
+    return (" " if match.group(1) else match.group(0) for match in CSS_TOKEN.finditer(css))
+
+
 def declarations(css):
-    for declaration in CSS_COMMENT.sub("", css).split(";"):
+    # A semicolon inside a string splits it too, which can only add declarations and never hide a real one.
+    for declaration in "".join(css_tokens(css)).split(";"):
         name, colon, value = declaration.partition(":")
         name, value = unescape(name).strip().lower(), IMPORTANT.sub("", " ".join(unescape(value).lower().split()))
         if colon and name:
@@ -153,42 +164,80 @@ def hides(css):
 
 
 def compound_target(compound):
-    tag = re.match(r"[a-z][a-z0-9]*", compound, re.I)
-    ids = re.findall(r"#([\w-]+)", compound)
-    return tag.group(0).lower() if tag else None, ids[0] if ids else None, frozenset(re.findall(r"\.([\w-]+)", compound))
+    tag = TAG.match(compound)
+    parts = COMPOUND_PART.findall(compound)
+    ids = [unescape(id) for id, _ in parts if id]
+    classes = frozenset(unescape(name) for _, name in parts if name)
+    return tag.group(0).lower() if tag else None, ids[0] if ids else None, classes
 
 
-def selector_target(selector):
-    """The (tag, id, classes) of the element that a CSS selector picks, without its ancestors."""
-    # An attribute value can hold a combinator, so brackets go before the split. A bracket alone picks any element.
-    selector = PSEUDO_OR_ATTRIBUTE.sub("*", selector.strip())
-    targets = [compound_target(compound) for compound in COMBINATOR.split(selector) if compound]
-    if not targets:
-        return None
+def selector_target(compounds, combinators):
+    targets = [compound_target(compound) for compound in compounds]
+    index = len(targets) - 1
     # "a *" hides what is inside "a", so hiding "a" hides the same text. Siblings of "a" are not inside it.
-    if targets[-1] == ANY_ELEMENT and not SIBLING.search(selector):
-        targets = [target for target in targets if target != ANY_ELEMENT] or [ANY_ELEMENT]
-    return targets[-1]
+    while index and targets[index] == ANY_ELEMENT and not {"+", "~"} & set(combinators[index - 1]):
+        index -= 1
+    return targets[index]
+
+
+def selector_targets(selectors):
+    """The (tag, id, classes) of each element that a CSS selector list picks, without its ancestors."""
+    compounds, combinators, compound, combinator = [], [], "", ""
+    for match in SELECTOR_TOKEN.finditer(selectors + ","):
+        escape, pseudo_or_attribute, next_combinator, comma = match.groups()
+        if escape or not (pseudo_or_attribute or next_combinator is not None or comma):
+            compound += match.group(0)
+            continue
+        if pseudo_or_attribute:
+            # Pseudo-classes and attributes are ignored: an element with any of them can be the target.
+            compound += "*"
+            continue
+        if compound:
+            if compounds:
+                combinators.append(combinator)
+            compounds.append(compound)
+            compound, combinator = "", ""
+        if comma:
+            if compounds:
+                yield selector_target(compounds, combinators)
+            compounds, combinators, combinator = [], [], ""
+        else:
+            combinator += next_combinator.strip()
 
 
 def css_rules(css):
-    # A split on braces stays linear, where a rule regex rescans the rest of a brace-less stylesheet at every offset.
-    for chunk in css.split("}"):
-        head, brace, body = chunk.rpartition("{")
-        if brace:
-            yield head.rpartition("{")[2], body
+    """Each (selector list, declarations) of a stylesheet, also of rules nested in @media or in other rules."""
+    selectors, declarations, segment = [], [], []
+    for token in css_tokens(css):
+        if token == "{":
+            if selectors and declarations:
+                yield selectors[-1], "".join(declarations)
+            selectors.append("".join(segment))
+            declarations, segment = [], []
+        elif token == "}":
+            if selectors:
+                yield selectors.pop(), "".join(declarations)
+            declarations, segment = [], []
+        elif token == ";":
+            declarations.append(token)
+            segment = []
+        else:
+            declarations.append(token)
+            segment.append(token)
+    # A browser closes the blocks still open at the end of the stylesheet. Only the innermost has declarations left.
+    if selectors:
+        yield selectors[-1], "".join(declarations)
 
 
 def hiding_targets(stylesheets):
-    # Rules inside @media count too, and ancestors, pseudo-classes, and attributes are ignored:
-    # the sender controls all of them, so the parser hides too much rather than too little.
-    css = CSS_COMMENT.sub(" ", " ".join(stylesheets))
+    # Ancestors, pseudo-classes, and attributes are ignored: the sender controls all of them,
+    # so the parser hides too much rather than too little.
     targets = {
-        selector_target(unescape(selector))
-        for selectors, body in css_rules(css)
-        if hides(body)
-        for selector in selectors.split(",")
-    } - {None}
+        target
+        for selectors, declarations in css_rules(" ".join(stylesheets))
+        if hides(declarations)
+        for target in selector_targets(selectors)
+    }
     return [ANY_ELEMENT] if len(targets) > MAX_HIDING_TARGETS else list(targets)
 
 
