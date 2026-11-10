@@ -32,10 +32,15 @@ def invisible(ch):
     return unicodedata.category(ch)[0] == "C" or bool(INVISIBLE_MARKS.match(ch))
 
 
+def shown(text):
+    """The text as a reader sees it: full-width letters as ASCII, invisible characters gone."""
+    text = unicodedata.normalize("NFKC", text or "")
+    return "".join(ch for ch in text if ch in "\n\t" or not invisible(ch))
+
+
 def clean(text, limit=BODY_LIMIT):
     # NFKC first, so full-width brackets become "<" and ">" before they are neutralized.
-    text = unicodedata.normalize("NFKC", text or "")
-    text = "".join(ch for ch in text if ch in "\n\t" or not invisible(ch))
+    text = shown(text)
     # No "<" or ">" survives, so mail content cannot open or close a tag of the envelope.
     text = text.replace("<", "‹").replace(">", "›")
     text = re.sub(r"[ \t]+", " ", text)
@@ -74,7 +79,7 @@ def named_sites(label):
 
 
 def flag(host, label, sender_domain):
-    label_sites = named_sites(label or "")
+    label_sites = named_sites(shown(label))
     if label_sites and site(host) not in label_sites:
         return "text-mismatch"
     return "same-domain" if site(host) == site(sender_domain) else "other-domain"
