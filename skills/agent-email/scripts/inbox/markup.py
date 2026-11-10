@@ -8,22 +8,41 @@ VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link",
 BLOCK_TAGS = {"p", "div", "br", "tr", "li", "table", "section", "article", "blockquote", "hr", "h1", "h2", "h3", "h4", "h5", "h6"}
 # Text that a human cannot see is the usual place for instructions aimed at an agent.
 HIDDEN_STYLE = re.compile(
-    r"display\s*:\s*none|visibility\s*:\s*hidden|(?:font-size|opacity|max-height)\s*:\s*0(?![.\d]*[1-9])", re.I
+    r"display\s*:\s*none|visibility\s*:\s*hidden|(?:font-size|opacity|max-height)\s*:\s*0(?![.\d]*[1-9])"
+    r"|(?<![\w-])color\s*:\s*transparent",
+    re.I,
 )
 
 STYLE_BLOCK = re.compile(r"<style\b[^>]*>(.*?)</style\s*>", re.I | re.S)
 CSS_COMMENT = re.compile(r"/\*.*?\*/", re.S)
 CSS_RULE = re.compile(r"([^{}]+)\{([^{}]*)\}")
-COMBINATOR = re.compile(r"[\s>+~]+")
+COMBINATOR = re.compile(r"\s*[\s>+~]\s*")
+SIBLING = re.compile(r"[+~]\s*\*\s*$")
 PSEUDO_OR_ATTRIBUTE = re.compile(r"::?[\w-]+(?:\([^)]*\))?|\[[^\]]*\]")
+
+
+ANY_ELEMENT = (None, None, frozenset())
+
+
+def compound_target(compound):
+    compound = PSEUDO_OR_ATTRIBUTE.sub("", compound)
+    tag = re.match(r"[a-z][a-z0-9]*", compound, re.I)
+    ids = re.findall(r"#([\w-]+)", compound)
+    return tag.group(0).lower() if tag else None, ids[0] if ids else None, frozenset(re.findall(r"\.([\w-]+)", compound))
 
 
 def selector_target(selector):
     """The (tag, id, classes) of the element that a CSS selector picks, without its ancestors."""
-    last = PSEUDO_OR_ATTRIBUTE.sub("", COMBINATOR.split(selector.strip())[-1])
-    tag = re.match(r"[a-z][a-z0-9]*", last, re.I)
-    ids = re.findall(r"#([\w-]+)", last)
-    return tag.group(0).lower() if tag else None, ids[0] if ids else None, frozenset(re.findall(r"\.([\w-]+)", last))
+    selector = selector.strip()
+    targets = [compound_target(compound) for compound in COMBINATOR.split(selector) if compound]
+    # "a *" hides what is inside "a", so hiding "a" hides the same text. Siblings of "a" are not inside it.
+    if targets[-1] == ANY_ELEMENT and not SIBLING.search(selector):
+        targets = [target for target in targets if target != ANY_ELEMENT] or [ANY_ELEMENT]
+    return targets[-1]
+
+
+def hides(declarations):
+    return bool(HIDDEN_STYLE.search(CSS_COMMENT.sub("", declarations)))
 
 
 def hiding_targets(html):
@@ -33,7 +52,7 @@ def hiding_targets(html):
     return [
         selector_target(selector)
         for selectors, declarations in CSS_RULE.findall(css)
-        if HIDDEN_STYLE.search(declarations)
+        if hides(declarations)
         for selector in selectors.split(",")
         if selector.strip()
     ]
@@ -55,7 +74,7 @@ class _TextExtractor(HTMLParser):
             tag in SKIPPED_TAGS
             or "hidden" in attributes
             or attributes.get("aria-hidden") == "true"
-            or bool(HIDDEN_STYLE.search(attributes.get("style") or ""))
+            or hides(attributes.get("style") or "")
             or styled_hidden
         )
 
