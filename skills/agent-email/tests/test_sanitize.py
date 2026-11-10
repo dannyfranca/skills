@@ -169,6 +169,11 @@ class LinkTests(unittest.TestCase):
         found = sanitize.links([("https://evil.net/x", "https://site.com/verify")], "", "site.com")
         self.assertEqual(found[0]["flag"], "text-mismatch")
 
+    def test_flags_label_as_it_is_shown(self):
+        for label in ("ｓｉｔｅ.ｃｏｍ", "site​.com"):
+            found = sanitize.links([("https://evil.net/v", label)], "", "evil.net")
+            self.assertEqual(found[0]["flag"], "text-mismatch", label)
+
     def test_flags_label_with_any_top_level_domain(self):
         found = sanitize.links(
             [("https://evil.net/v", "https://trusted.online/v"), ("https://site.com/v?n=a.bc", "https://site.com/v?n=a.bc")],
