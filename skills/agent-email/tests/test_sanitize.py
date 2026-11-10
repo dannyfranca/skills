@@ -567,6 +567,13 @@ class HtmlToTextTests(unittest.TestCase):
         sanitize.html_to_text(html)
         self.assertLess(time.monotonic() - start, 0.5)
 
+    def test_form_start_inside_an_open_form_is_ignored(self):
+        html = "<form style=font-size:4px><form style=font-size:16px><span style=font-size:.2em>Code 654321</span></form><p>Seen</p>"
+        text, _ = sanitize.html_to_text(html)
+        self.assertEqual(text.split(), ["Seen"])
+        text, _ = sanitize.html_to_text("<form></form><form style=font-size:4px><span style=font-size:.2em>A</span></form><p>Seen</p>")
+        self.assertEqual(text.split(), ["Seen"])
+
     def test_end_tags_rejected_by_a_scope_barrier_stay_fast(self):
         start = time.monotonic()
         text, _ = sanitize.html_to_text("<div>" + "<span>" * 12000 + "<table>" + "</div>" * 12000 + "</table><p>Seen</p>")
