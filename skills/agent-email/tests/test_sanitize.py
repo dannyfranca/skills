@@ -330,8 +330,11 @@ class HtmlToTextTests(unittest.TestCase):
             text, _ = sanitize.html_to_text(f'<p style="{style}">Seen</p>')
             self.assertEqual(text.split(), ["Seen"], style)
 
-    def test_select_options_hide(self):
-        text, _ = sanitize.html_to_text("<select><option>A</option><option>Code 654321</option></select><p>Seen</p>")
+    def test_clipping_shorthand_or_unresolved_overflow_hides(self):
+        for style in ("overflow:hidden hidden", "overflow:visible clip", "--clip:hidden;overflow:var(--clip)"):
+            text, _ = sanitize.html_to_text(f'<p style="height:5px;line-height:200px;{style}">Code 654321</p><p>Seen</p>')
+            self.assertEqual(text.split(), ["Seen"], style)
+        text, _ = sanitize.html_to_text('<p style="height:80px;overflow:visible visible">Seen</p>')
         self.assertEqual(text.split(), ["Seen"])
 
     def test_long_style_values_stay_fast(self):
@@ -340,6 +343,10 @@ class HtmlToTextTests(unittest.TestCase):
             text, _ = sanitize.html_to_text(f'<p style="{name}:{"opacity(scale(" * 10000}">A</p><p>Seen</p>')
             self.assertEqual(text.split(), ["Seen"], name)
         self.assertLess(time.monotonic() - start, 0.5)
+
+    def test_select_options_hide(self):
+        text, _ = sanitize.html_to_text("<select><option>A</option><option>Code 654321</option></select><p>Seen</p>")
+        self.assertEqual(text.split(), ["Seen"])
 
     def test_end_tag_does_not_close_a_hidden_element_it_skips(self):
         text, _ = sanitize.html_to_text("<span><div hidden>A</span>Code 654321</div><p>Seen</p>")

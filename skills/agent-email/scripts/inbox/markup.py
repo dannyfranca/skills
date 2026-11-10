@@ -306,7 +306,7 @@ def font_factor(value):
 
 
 def clips(value):
-    return 0.0 if value in ("hidden", "clip") else 1.0
+    return 0.0 if {"hidden", "clip"} & set(value.split()) else 1.0
 
 
 def bounds(value):
