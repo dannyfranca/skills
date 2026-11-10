@@ -17,11 +17,13 @@ BLOCK_TAGS = {
 }
 
 IMPORTANT = re.compile(r"\s*!\s*important\s*$")
-CSS_ESCAPE = re.compile(r"\\(?:([0-9a-f]{1,6})\s?|(.))", re.I | re.S)
-ESCAPE = r"\\(?:[0-9a-f]{1,6}\s?|.)"
+# HTML and CSS split on ASCII whitespace only. Any other character, such as a no-break space, is part of a name.
+WHITESPACE = r"[ \t\n\r\f]"
+CSS_ESCAPE = re.compile(rf"\\(?:([0-9a-f]{{1,6}}){WHITESPACE}?|(.))", re.I | re.S)
+ESCAPE = rf"\\(?:[0-9a-f]{{1,6}}{WHITESPACE}?|.)"
 # A string ends at a newline, where a browser drops it as a bad string. A comment that never closes runs to the end.
 STRING = r"""(?:"(?:\\.|[^"\\\n])*"?|'(?:\\.|[^'\\\n])*'?)"""
-IDENTIFIER = rf"((?:[\w-]|{ESCAPE})+)"
+IDENTIFIER = rf"((?:[\w-]|[^\x00-\x7f]|{ESCAPE})+)"
 # Strings, URLs, escapes, and comments can hold braces, semicolons, and comment marks that are no CSS syntax.
 CSS_TOKEN = re.compile(rf"""(/\*.*?(?:\*/|\Z))|{IDENTIFIER}(\()?|{STRING}|[{{}};]|[^{{}};"'\\/\w-]+|.""", re.I | re.S)
 # An unquoted url() runs to its ")" whatever it holds, and a bad one runs to the end. A quoted one is a function.
@@ -36,7 +38,9 @@ COLOR_FUNCTION = re.compile(r"(?:rgb|hsl|hwb|lab|lch|oklab|oklch)a?\((.*)\)")
 PSEUDO_OR_ATTRIBUTE = rf"""::?[\w-]+(?:\([^)]*(?:\)|\Z))?|\[(?:{STRING}|\\.|[^\]"'\\])*(?:\]|\Z)"""
 # CSS 2 pseudo-elements also take a single colon.
 PSEUDO_ELEMENT = re.compile(r"::|:(?:before|after|first-line|first-letter)\Z", re.I)
-SELECTOR_TOKEN = re.compile(rf"({ESCAPE})|({PSEUDO_OR_ATTRIBUTE})|(\s*[\s>+~]\s*)|(,)|[^\\:\[\s>+~,]+|.", re.I | re.S)
+SELECTOR_TOKEN = re.compile(
+    rf"({ESCAPE})|({PSEUDO_OR_ATTRIBUTE})|({WHITESPACE}*[ \t\n\r\f>+~]{WHITESPACE}*)|(,)|[^\\:\[ \t\n\r\f>+~,]+|.", re.I | re.S
+)
 TAG = re.compile(IDENTIFIER, re.I | re.S)
 # One scan, so that the "." of an escaped "\." starts no class.
 COMPOUND_PART = re.compile(rf"#{IDENTIFIER}|\.{IDENTIFIER}|{ESCAPE}|.", re.I | re.S)
@@ -482,7 +486,7 @@ class _TextExtractor(_HtmlParser):
             self.handle_starttag(tag, root_attributes[tag].items())
 
     def presence(self, tag, attributes, parent=None):
-        classes = set((attributes.get("class") or "").split())
+        classes = set(re.split(WHITESPACE, attributes.get("class") or ""))
         styled = (
             found
             for (target_tag, target_id, target_classes), found in self.target_factors.items()
