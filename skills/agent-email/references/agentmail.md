@@ -1,28 +1,26 @@
-# AgentMail
+# AgentMail setup
 
-Use the `agentmail` CLI. If it is not on PATH, install it: `npm i -g agentmail-cli`. It reads `AGENTMAIL_API_KEY`. The inbox ID is `$AGENT_EMAIL_ADDRESS`. For other commands and flags, run `agentmail <command> --help`.
+`mail.py` calls the AgentMail REST API. It needs no CLI.
 
-List mail received after `$start`, newest first:
+| Variable | Value |
+| --- | --- |
+| `AGENT_EMAIL_PROVIDER` | `agentmail`, or unset. |
+| `AGENTMAIL_API_KEY` | An API key from the AgentMail console. |
+| `AGENT_EMAIL_ADDRESS` | The inbox address, for example `agent@agentmail.to`. It is also the inbox ID. |
+| `AGENTMAIL_BASE_URL` | Optional. Set `https://api.agentmail.eu` for an EU account. The default is `https://api.agentmail.to`. |
 
-```bash
-agentmail inboxes messages list --inbox-id "$AGENT_EMAIL_ADDRESS" --after "$start" \
-  --query 'messages[].{id:message_id,from:from,subject:subject,at:timestamp}'
-```
+Use the one inbox. Create a new inbox only when the user asks.
 
-If the mail is not there, add `--include-spam true`.
+## Agent Armor
 
-Read one message:
+Agent Armor is an AgentMail scan that marks mail that tries to control an agent. `mail.py` withholds mail that it marks `review`, and mail that it cannot scan. It is a beta feature. Only an owner or admin of a US organization can turn it on:
 
-```bash
-agentmail inboxes messages get --inbox-id "$AGENT_EMAIL_ADDRESS" --message-id "<id>" \
-  --query '{from:from,subject:subject,text:text,html:html}'
-```
+1. Open the AgentMail console.
+2. Go to **Settings** → **Labs**, and join Labs.
+3. Turn on **Agent Armor**. Select **Monitor** mode.
 
-Send, and reply:
+Without Agent Armor, `mail.py` still cleans the mail, and it applies the guard if one is set.
 
-```bash
-agentmail inboxes messages send --inbox-id "$AGENT_EMAIL_ADDRESS" --to "<to>" --subject "<subject>" --text "<body>"
-agentmail inboxes messages reply --inbox-id "$AGENT_EMAIL_ADDRESS" --message-id "<id>" --text "<body>"
-```
+## Guard
 
-Use the one inbox. Create a new inbox only when the user asks: `agentmail inboxes create --username <name>`.
+To add a model check that works with all providers, see [`guard.md`](guard.md).
