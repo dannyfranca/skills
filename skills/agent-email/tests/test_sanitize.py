@@ -64,11 +64,11 @@ class HtmlToTextTests(unittest.TestCase):
             "<p style='transform:scale(1, 0)'>D</p><p style='position:absolute;left:-9999px'>E</p>"
             "<p style='text-indent:-50em'>F</p><p style='font:0/0 a'>G</p><p style='-webkit-text-fill-color:transparent'>H</p>"
             "<p style='opacity:0.01'>I</p><p style='display:none !important;display:block'>J</p>"
-            "<p style='height:20px;overflow:hidden'>Box</p><p style='position:relative;left:-5px'>Nudge</p>"
+            "<p style='height:20px;overflow:hidden'>K</p><p style='position:relative;left:-5px'>Nudge</p>"
             "<p style='transform:scale(1.5)'>Big</p>"
         )
         text, _ = sanitize.html_to_text(html)
-        self.assertEqual(text.split(), ["Box", "Nudge", "Big"])
+        self.assertEqual(text.split(), ["Nudge", "Big"])
 
     def test_a_later_declaration_does_not_unhide(self):
         html = "<p style='display:none;display:banana'>A</p><p style='display:none;display:block'>B</p><p>Seen</p>"
@@ -308,10 +308,6 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text('<div style="font-size:.8em"><p style="transform:scale(.5)">Seen</p></div>')
         self.assertEqual(text.split(), ["Seen"])
 
-    def test_select_options_hide(self):
-        text, _ = sanitize.html_to_text("<select><option>A</option><option>Code 654321</option></select><p>Seen</p>")
-        self.assertEqual(text.split(), ["Seen"])
-
     def test_properties_compound_across_rules(self):
         for html in (
             "<style>.x {scale:.3} .x {zoom:.3}</style><p class='x'>A</p>",
@@ -320,6 +316,20 @@ class HtmlToTextTests(unittest.TestCase):
         ):
             text, _ = sanitize.html_to_text(html + "<div>Seen</div>")
             self.assertEqual(text.split(), ["Seen"], html)
+
+    def test_clipping_box_with_a_set_height_hides(self):
+        for html in (
+            '<p style="height:5px;line-height:200px;overflow:hidden">A</p>',
+            '<style>.c {overflow-y:clip}</style><p class="c" style="max-height:20px">A</p>',
+        ):
+            text, _ = sanitize.html_to_text(html + "<div>Seen</div>")
+            self.assertEqual(text.split(), ["Seen"], html)
+        text, _ = sanitize.html_to_text('<div style="overflow:hidden">Seen</div><div style="height:50px">Too</div>')
+        self.assertEqual(text.split(), ["Seen", "Too"])
+
+    def test_select_options_hide(self):
+        text, _ = sanitize.html_to_text("<select><option>A</option><option>Code 654321</option></select><p>Seen</p>")
+        self.assertEqual(text.split(), ["Seen"])
 
     def test_end_tag_does_not_close_a_hidden_element_it_skips(self):
         text, _ = sanitize.html_to_text("<span><div hidden>A</span>Code 654321</div><p>Seen</p>")
