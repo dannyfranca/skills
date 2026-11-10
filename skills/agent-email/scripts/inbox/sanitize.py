@@ -94,7 +94,12 @@ def host_of(url):
         return ""
 
 
+# IDNA reads these full stops as the dot between labels. NFKC already maps the full-width one.
+IDEOGRAPHIC_DOTS = str.maketrans("\u3002\uff61", "..")
+
+
 def named_sites(label):
+    label = label.translate(IDEOGRAPHIC_DOTS)
     hosts = [host_of(url) for url in URL.findall(label)] + DOMAIN_IN_TEXT.findall(URL.sub(" ", label))
     return {site(host) for host in hosts if host}
 
