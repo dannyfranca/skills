@@ -150,6 +150,10 @@ class LinkTests(unittest.TestCase):
         )
         self.assertEqual([f["url"] for f in found], ["https://site.com/b"])
 
+    def test_any_mismatched_label_flags_a_repeated_link(self):
+        found = sanitize.links([("https://evil.net/v", "Click"), ("https://evil.net/v", "https://site.com/v")], "", "site.com")
+        self.assertEqual(found, [{"url": "https://evil.net/v", "flag": "text-mismatch"}])
+
     def test_drops_links_with_backslashes(self):
         found = sanitize.links([("https://evil.net\\@site.com/verify", "x")], "Go https://evil.net\\@site.com/v", "site.com")
         self.assertEqual(found, [{"url": "https://evil.net", "flag": "other-domain"}])
