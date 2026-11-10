@@ -37,6 +37,8 @@ SELECTOR_TOKEN = re.compile(rf"({ESCAPE})|({PSEUDO_OR_ATTRIBUTE})|(\s*[\s>+~]\s*
 TAG = re.compile(IDENTIFIER, re.I | re.S)
 # One scan, so that the "." of an escaped "\." starts no class.
 COMPOUND_PART = re.compile(rf"#{IDENTIFIER}|\.{IDENTIFIER}|{ESCAPE}|.", re.I | re.S)
+# "&" stands for the parent rule's element, which is any element here.
+SIMPLE_COMPOUND = re.compile(rf"(?:{IDENTIFIER}|[*&])?(?:[#.]{IDENTIFIER}|[*&])*", re.I | re.S)
 
 FAINT = 0.1
 FAR_PX = 500
@@ -226,7 +228,7 @@ def selector_target(compounds, combinators):
 
 def selector_targets(selectors):
     """The (tag, id, classes) of each element that a CSS selector list picks, without its ancestors."""
-    compounds, combinators, compound, combinator = [], [], "", ""
+    compounds, combinators, compound, combinator, simple = [], [], "", "", True
     for match in SELECTOR_TOKEN.finditer(selectors + ","):
         escape, pseudo_or_attribute, next_combinator, comma = match.groups()
         if escape or not (pseudo_or_attribute or next_combinator is not None or comma):
@@ -235,16 +237,20 @@ def selector_targets(selectors):
         if pseudo_or_attribute:
             # Pseudo-classes and attributes are ignored: an element with any of them can be the target.
             compound += "*"
+            simple = simple and not (pseudo_or_attribute.startswith(":") and "(" in pseudo_or_attribute)
             continue
         if compound:
+            simple = simple and bool(SIMPLE_COMPOUND.fullmatch(compound))
             if compounds:
                 combinators.append(combinator)
             compounds.append(compound)
             compound, combinator = "", ""
         if comma:
-            if compounds:
-                yield selector_target(compounds, combinators)
-            compounds, combinators, combinator = [], [], ""
+            # Functional pseudo-classes and namespaces can pick elements that no tag, id, or class names.
+            # Such a rule hides every element: the sender controls the selector, so it may not narrow the check.
+            if compounds or not simple:
+                yield selector_target(compounds, combinators) if simple else ANY_ELEMENT
+            compounds, combinators, combinator, simple = [], [], "", True
         else:
             combinator += next_combinator.strip()
 
