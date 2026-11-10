@@ -462,6 +462,16 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text("<style>." + "é" * 40 + "|x {display:none}</style><p>Seen</p>")
         self.assertLess(time.monotonic() - start, 0.5)
 
+    def test_inherit_takes_the_parent_value_of_a_property_that_does_not_inherit(self):
+        for html in (
+            '<div style="opacity:.2">' + '<div style="opacity:inherit">' * 2 + "A" + "</div>" * 3 + "<p>Seen</p>",
+            "<style>.i {zoom:inherit}</style><div style='zoom:.4'><div class='i'><p class='i'>A</p></div></div><p>Seen</p>",
+            '<div style="max-height:0"><div style="overflow:hidden;max-height:inherit">A</div></div><p>Seen</p>',
+            '<div style="opacity:.5"><div><p style="opacity:inherit">Seen</p></div></div>',
+        ):
+            text, _ = sanitize.html_to_text(html)
+            self.assertEqual(text.split(), ["Seen"], html)
+
     def test_parent_font_units_scale_the_parent_size(self):
         text, _ = sanitize.html_to_text('<div style="font-size:2px"><span style="font-size:.5ex">A</span></div><p>Seen</p>')
         self.assertEqual(text.split(), ["Seen"])
