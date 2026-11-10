@@ -561,6 +561,12 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text(html)
         self.assertNotIn("654321", text)
 
+    def test_large_formatting_elements_opened_again_stay_fast(self):
+        start = time.monotonic()
+        html = "<div>" * 50 + "<b style='" + "padding:0;" * 15000 + "'>" + "</div>" * 50 + "<p>Code 654321</p>"
+        sanitize.html_to_text(html)
+        self.assertLess(time.monotonic() - start, 0.5)
+
     def test_end_tags_rejected_by_a_scope_barrier_stay_fast(self):
         start = time.monotonic()
         text, _ = sanitize.html_to_text("<div>" + "<span>" * 12000 + "<table>" + "</div>" * 12000 + "</table><p>Seen</p>")
