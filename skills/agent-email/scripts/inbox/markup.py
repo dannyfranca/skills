@@ -297,19 +297,22 @@ def scale_factor(arguments):
     return min((abs(number / 100 if unit == "%" else number) for number, unit in numbers(arguments)), default=1.0)
 
 
-# Only "em" and "%" sizes are relative to the parent font, and root units to the root font. Any other size is
-# absolute and replaces the parent font.
+# A font size in a font unit is relative to the parent font, and in a root unit to the root font. Any other size
+# is absolute and replaces the parent font.
+FONT_UNITS = ("em", "ex", "ch", "cap", "ic", "lh", "%")
 ROOT_UNITS = ("rem", "rlh", "rex", "rch", "rcap", "ric")
+
+
 def font_factor(value):
     if "smaller" in value:
         return 5 / 6
-    relative = [number / 100 if unit == "%" else number for number, unit in numbers(value) if unit in ("em", "%")]
-    return relative[0] if relative else None
+    relative = [length_px(number, unit, FONT_PERCENT_PX) for number, unit in numbers(value) if unit in FONT_UNITS]
+    return relative[0] / EM_PX if relative else None
 
 
 def font_px(value):
     absolute = [
-        length_px(number, unit, 0) for number, unit in numbers(value) if unit and unit not in ("em", "%", *ROOT_UNITS)
+        length_px(number, unit, 0) for number, unit in numbers(value) if unit and unit not in FONT_UNITS + ROOT_UNITS
     ]
     return absolute[0] / EM_PX if absolute else None
 

@@ -380,6 +380,12 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text('<object data="data:text/html,Visible">A</object><p>Seen</p>')
         self.assertEqual(text.split(), ["Seen"])
 
+    def test_parent_font_units_scale_the_parent_size(self):
+        text, _ = sanitize.html_to_text('<div style="font-size:2px"><span style="font-size:.5ex">A</span></div><p>Seen</p>')
+        self.assertEqual(text.split(), ["Seen"])
+        text, _ = sanitize.html_to_text('<div style="font-size:12px"><span style="font-size:2ch">Seen</span></div>')
+        self.assertEqual(text.split(), ["Seen"])
+
     def test_end_tag_does_not_close_a_hidden_element_it_skips(self):
         text, _ = sanitize.html_to_text("<span><div hidden>A</span>Code 654321</div><p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
