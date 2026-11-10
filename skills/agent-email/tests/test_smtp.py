@@ -135,6 +135,10 @@ class SmtpProviderTests(unittest.TestCase):
         self.assertEqual([m.id for m in found], ["2"])
         self.assertEqual(FakeImap.last_search, ("SINCE", "08-Nov-2026"))
 
+    def test_list_keeps_mail_from_the_same_second_as_the_start(self):
+        found = smtp.SmtpProvider().list(after=datetime(2026, 11, 9, 9, 0, 0, 500000, tzinfo=timezone.utc))
+        self.assertEqual([m.id for m in found], ["2", "1"])
+
     def test_search_starts_a_day_early_for_server_time_zones(self):
         FakeImap.store[b"3"] = ("08-Nov-2026 19:01:00 -0500", raw("x@site.com", "West", "Sun, 08 Nov 2026 19:01:00 -0500"))
         found = smtp.SmtpProvider().list(after=datetime(2026, 11, 9, 2, 0, tzinfo=timezone(timedelta(hours=2))))
