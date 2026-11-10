@@ -406,6 +406,11 @@ class _TextExtractor(_HtmlParser):
         self.finish_anchor()
 
     def handle_data(self, data):
+        # After "<!--<script" a browser keeps the script open past the next "</script>". HTMLParser ends it there,
+        # and only the script escape states tell which later text is still script, so the rest of the mail is hidden.
+        comment = data.find("<!--")
+        if self.stack and self.stack[-1][0] == "script" and comment >= 0 and "<script" in data[comment:].lower():
+            self.hidden_depth += 1
         if self.hidden_depth or self.in_closed_details():
             return
         self.parts.append(data)
