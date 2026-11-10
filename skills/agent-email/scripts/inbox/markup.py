@@ -501,15 +501,27 @@ class _TextExtractor(_HtmlParser):
         if self.in_closed_details() and tag == "summary":
             self.stack[-1][2]["summary_shown"] = True
         details = {"summary_shown": False} if tag == "details" and "open" not in attributes else None
+        if tag == "template" and {"shadowrootmode", "shadowroot"} & attributes.keys() and not self.hidden_depth:
+            self.hide_shadow_host()
         self.positions[tag].append(len(self.stack))
         if hidden:
             self.hidden_positions.append(len(self.stack))
-        self.stack.append((tag, hidden, details, level))
+        self.stack.append((tag, hidden, details, level, (len(self.parts), len(self.anchors))))
         self.hidden_depth += hidden
         if tag == "a" and not self.hidden_depth:
             # A browser closes an open anchor when the next one starts.
             self.finish_anchor()
             self.anchor = (attributes.get("href") or "", [])
+
+    # A declarative shadow root replaces the content of its host, and its slots can show any part of that content.
+    # The policy does not evaluate slots, so the host and its earlier content are hidden.
+    def hide_shadow_host(self):
+        host, _, details, level, (parts, anchors) = self.stack[-1]
+        del self.parts[parts:], self.anchors[anchors:]
+        self.anchor = None
+        self.stack[-1] = (host, True, details, level, (parts, anchors))
+        self.hidden_positions.append(len(self.stack) - 1)
+        self.hidden_depth += 1
 
     def handle_endtag(self, tag):
         # Content after the end tag of html or body still goes into body.
