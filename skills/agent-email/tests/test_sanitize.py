@@ -224,6 +224,16 @@ class LinkTests(unittest.TestCase):
         found = sanitize.links([("https://evil.net/v", "Verify site.com (via evil.net)")], "", "evil.net")
         self.assertEqual(found[0]["flag"], "text-mismatch")
 
+    def test_dotted_label_without_a_domain_stays_fast(self):
+        start = time.monotonic()
+        found = sanitize.links([("https://evil.net/v", "a." * 12000 + "1")], "", "evil.net")
+        self.assertLess(time.monotonic() - start, 0.5)
+        self.assertEqual(found[0]["flag"], "same-domain")
+
+    def test_finds_domain_after_double_dot(self):
+        found = sanitize.links([("https://evil.net/v", "go..site.com")], "", "evil.net")
+        self.assertEqual(found[0]["flag"], "text-mismatch")
+
     def test_flags_label_with_any_top_level_domain(self):
         found = sanitize.links(
             [("https://evil.net/v", "https://trusted.online/v"), ("https://site.com/v?n=a.bc", "https://site.com/v?n=a.bc")],
