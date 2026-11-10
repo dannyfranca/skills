@@ -54,8 +54,14 @@ VIEWPORT_UNIT_PX = 3.2
 # A percentage font size is of the parent font. A percentage box size is of a 600px mail column.
 FONT_PERCENT_PX = EM_PX / 100
 BOX_PERCENT_PX = 6
-BOX_SIZES = ("height", "width", "max-height", "max-width")
-OFFSETS = ("left", "top", "right", "bottom", "inset", "text-indent", "margin", "margin-left", "margin-top", "translate")
+BOX_SIZES = (
+    "height", "width", "max-height", "max-width", "block-size", "inline-size", "max-block-size", "max-inline-size",
+)
+OFFSETS = (
+    "left", "top", "right", "bottom", "inset", "text-indent", "margin", "margin-left", "margin-top", "translate",
+    "inset-inline", "inset-block", "inset-inline-start", "inset-inline-end", "inset-block-start", "inset-block-end",
+    "margin-inline", "margin-block", "margin-inline-start", "margin-block-start",
+)
 # A mask or a motion path can hide or move text in ways the policy does not compute.
 NONE_OR_HIDING = ("mask", "mask-image", "-webkit-mask", "-webkit-mask-image", "offset", "offset-path")
 
@@ -187,7 +193,7 @@ def hiding(name, value):
         or (name == "content-visibility" and value not in ("visible", "auto"))
         or (name in NONE_OR_HIDING and value != "none")
         or (name == "transform" and any(small_factor(arguments) for arguments in SCALE.findall(value)))
-        or (name == "scale" and small_factor(value))
+        or (name in ("scale", "font-size-adjust") and small_factor(value))
         or (name == "zoom" and fraction(value) < FAINT)
         # Only a turn about the z axis keeps text facing the reader.
         or (name == "rotate" and len(value.split()) > 1 and not value.startswith("z "))
@@ -197,7 +203,7 @@ def hiding(name, value):
 
 
 VISIBILITY_PROPERTIES = {
-    "display", "visibility", "font-size", "font", "opacity", "color", "-webkit-text-fill-color",
+    "display", "visibility", "font-size", "font", "font-size-adjust", "opacity", "color", "-webkit-text-fill-color",
     "clip", "clip-path", "transform", "filter", "content-visibility", "scale", "zoom", "rotate",
     *BOX_SIZES, *OFFSETS, *NONE_OR_HIDING,
 }
