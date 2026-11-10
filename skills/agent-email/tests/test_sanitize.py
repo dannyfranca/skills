@@ -157,6 +157,33 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text(html)
         self.assertEqual(text.split(), ["Seen"])
 
+    def test_escaped_punctuation_stays_in_the_selector(self):
+        html = (
+            r"<style>.sm\:hidden {display:none} #x\.y {display:none} .w-1\/2 {display:none}</style>"
+            "<div class='sm:hidden'>A</div><div id='x.y'>A</div><div class='w-1/2'>A</div><p class='sm'>Seen</p>"
+        )
+        text, _ = sanitize.html_to_text(html)
+        self.assertEqual(text.split(), ["Seen"])
+
+    def test_strings_hold_no_css_syntax(self):
+        html = (
+            '<style>.a {display:none;--label:"{"} .b {content:"/*"; display:none; x:"*/"} '
+            '.c {content:"x\n} .d {display:none}</style>'
+            "<p class='a'>A</p><p class='b'>A</p><p class='d'>A</p>"
+            """<p style='content:"/*";display:none;x:"*/"'>A</p><p class='c'>Seen</p>"""
+        )
+        text, _ = sanitize.html_to_text(html)
+        self.assertEqual(text.split(), ["Seen"])
+
+    def test_nested_rules_keep_their_declarations(self):
+        html = "<style>.a { .b { color: red } display: none } .c { &.d { display: none } }</style>"
+        text, _ = sanitize.html_to_text(html + "<p class='a'>A</p><p class='c d'>A</p><p class='c'>Seen</p>")
+        self.assertEqual(text.split(), ["Seen"])
+
+    def test_descendants_of_a_sibling_are_not_the_sibling(self):
+        text, _ = sanitize.html_to_text("<style>a + * * {display:none}</style><a>Link</a><p><b>Code 123456</b></p>")
+        self.assertEqual(text.split(), [])
+
     def test_non_rendered_containers_hide(self):
         tags = ("datalist", "iframe", "canvas", "audio", "video", "noembed", "noframes", "rp")
         text, _ = sanitize.html_to_text("".join(f"<{tag}>A</{tag}>" for tag in tags) + "<p>Seen</p>")
