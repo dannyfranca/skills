@@ -424,9 +424,9 @@ class _HtmlParser(HTMLParser):
 
     def handle_startendtag(self, tag, attrs):
         # HTML ignores "/>" on elements that are not void: <div style="display:none"/> stays open,
-        # and <style/> still starts a stylesheet.
+        # and <style/> still starts a stylesheet. <plaintext/> still takes the rest of the input as text.
         self.handle_starttag(tag, attrs)
-        if tag in self.CDATA_CONTENT_ELEMENTS:
+        if tag in self.CDATA_CONTENT_ELEMENTS or tag == "plaintext":
             self.set_cdata_mode(tag)
 
 
