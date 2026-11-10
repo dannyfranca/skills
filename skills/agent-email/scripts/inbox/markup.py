@@ -1,5 +1,6 @@
 """Visible text and links of untrusted HTML mail."""
 
+import math
 import re
 from collections import defaultdict
 from html.parser import HTMLParser
@@ -285,17 +286,28 @@ def css_rules(css):
         yield selectors[-1], "".join(declarations)
 
 
-def hiding_targets(stylesheets):
+def opacity(css):
+    # Each opacity multiplies down the tree, so nested elements that are each readable can together be too faint.
+    # The lowest value of each kind counts: a browser drops a value it cannot parse, and only it knows which.
+    found = declarations(css)
+    levels = [fraction(value) for name, value in found if name == "opacity"]
+    filters = [math.prod(map(fraction, OPACITY_FILTER.findall(value))) for name, value in found if name == "filter"]
+    return min(max(min(levels, default=1.0), 0.0), 1.0) * min(max(min(filters, default=1.0), 0.0), 1.0)
+
+
+def target_opacities(stylesheets):
     # Ancestors, pseudo-classes, and attributes are ignored: the sender controls all of them,
-    # so the parser hides too much rather than too little.
-    targets = {
-        target
-        for stylesheet in stylesheets
-        for selectors, declarations in css_rules(stylesheet)
-        if hides(declarations)
-        for target in selector_targets(selectors)
-    }
-    return [ANY_ELEMENT] if len(targets) > MAX_HIDING_TARGETS else list(targets)
+    # so the parser hides too much rather than too little. A hiding rule gives no opacity at all.
+    opacities = {}
+    for stylesheet in stylesheets:
+        for selectors, declarations in css_rules(stylesheet):
+            level = 0.0 if hides(declarations) else opacity(declarations)
+            if level < 1:
+                for target in selector_targets(selectors):
+                    opacities[target] = min(level, opacities.get(target, 1.0))
+    if len(opacities) > MAX_HIDING_TARGETS:
+        return {ANY_ELEMENT: min(opacities.values())}
+    return opacities
 
 
 def first_values(attrs):
@@ -335,18 +347,26 @@ class _StyleCollector(_HtmlParser):
 
 
 class _TextExtractor(_HtmlParser):
-    def __init__(self, hiding):
+    def __init__(self, opacities):
         super().__init__()
-        self.hiding = hiding
+        self.opacities = opacities
         self.stack, self.hidden_depth, self.parts, self.anchors, self.anchor = [], 0, [], [], None
         self.positions, self.hidden_positions = defaultdict(list), []
 
-    def hidden(self, tag, attributes):
+    def opacity(self, tag, attributes):
         classes = set((attributes.get("class") or "").split())
-        styled_hidden = any(
-            target_tag in (None, tag) and target_id in (None, attributes.get("id")) and target_classes <= classes
-            for target_tag, target_id, target_classes in self.hiding
+        styled = min(
+            (
+                level
+                for (target_tag, target_id, target_classes), level in self.opacities.items()
+                if target_tag in (None, tag) and target_id in (None, attributes.get("id")) and target_classes <= classes
+            ),
+            default=1.0,
         )
+        inherited = self.stack[-1][3] if self.stack else 1.0
+        return inherited * styled * opacity(attributes.get("style") or "")
+
+    def hidden(self, tag, attributes, level):
         return (
             tag in SKIPPED_TAGS
             or (tag == "dialog" and "open" not in attributes)
@@ -354,7 +374,7 @@ class _TextExtractor(_HtmlParser):
             or "hidden" in attributes
             or attributes.get("aria-hidden") == "true"
             or hides(attributes.get("style") or "")
-            or styled_hidden
+            or level < FAINT
         )
 
     def handle_starttag(self, tag, attrs):
@@ -363,14 +383,15 @@ class _TextExtractor(_HtmlParser):
         if tag in VOID_TAGS:
             return
         attributes = first_values(attrs)
-        hidden = self.hidden(tag, attributes)
+        level = self.opacity(tag, attributes)
+        hidden = self.hidden(tag, attributes, level)
         if self.in_closed_details() and tag == "summary":
             self.stack[-1][2]["summary_shown"] = True
         details = {"summary_shown": False} if tag == "details" and "open" not in attributes else None
         self.positions[tag].append(len(self.stack))
         if hidden:
             self.hidden_positions.append(len(self.stack))
-        self.stack.append((tag, hidden, details))
+        self.stack.append((tag, hidden, details, level))
         self.hidden_depth += hidden
         if tag == "a" and not self.hidden_depth:
             # A browser closes an open anchor when the next one starts.
@@ -385,7 +406,7 @@ class _TextExtractor(_HtmlParser):
         if self.hidden_positions and self.hidden_positions[-1] > self.positions[tag][-1]:
             return
         while self.stack:
-            open_tag, hidden, _ = self.stack.pop()
+            open_tag, hidden, *_ = self.stack.pop()
             self.positions[open_tag].pop()
             if hidden:
                 self.hidden_positions.pop()
@@ -429,7 +450,7 @@ def html_to_text(html):
     styles = _StyleCollector()
     styles.feed(html)
     styles.close()
-    extractor = _TextExtractor(hiding_targets(styles.stylesheets))
+    extractor = _TextExtractor(target_opacities(styles.stylesheets))
     extractor.feed(html)
     extractor.close()
     return "".join(extractor.parts), extractor.anchors

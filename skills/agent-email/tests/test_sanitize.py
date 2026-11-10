@@ -263,6 +263,15 @@ class HtmlToTextTests(unittest.TestCase):
             text, _ = sanitize.html_to_text(f'<p style="position:absolute;overflow:hidden;{style}">A</p><p>Seen</p>')
             self.assertEqual(text.split(), ["Seen"], style)
 
+    def test_nested_opacity_compounds(self):
+        inline = '<div style="opacity:.2">' * 8 + "A" + "</div>" * 8
+        styled = "<style>.d {opacity:.3}</style>" + '<div class="d">' * 3 + "A" + "</div>" * 3
+        for html in (inline, styled):
+            text, _ = sanitize.html_to_text(html + "<p>Seen</p>")
+            self.assertEqual(text.split(), ["Seen"], html)
+        text, _ = sanitize.html_to_text('<div style="opacity:.5"><div style="opacity:.5">Seen</div></div>')
+        self.assertEqual(text.split(), ["Seen"])
+
     def test_end_tag_does_not_close_a_hidden_element_it_skips(self):
         text, _ = sanitize.html_to_text("<span><div hidden>A</span>Code 654321</div><p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
