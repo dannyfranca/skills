@@ -80,7 +80,8 @@ def named_sites(label):
 
 def flag(host, label, sender_domain):
     label_sites = named_sites(shown(label))
-    if label_sites and site(host) not in label_sites:
+    # A label that also names the destination still names another site, and the reader may trust that one.
+    if label_sites - {site(host)}:
         return "text-mismatch"
     return "same-domain" if site(host) == site(sender_domain) else "other-domain"
 
