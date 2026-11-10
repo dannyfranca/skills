@@ -297,7 +297,9 @@ def scale_factor(arguments):
     return min((abs(number / 100 if unit == "%" else number) for number, unit in numbers(arguments)), default=1.0)
 
 
-# Only "em" and "%" sizes are relative to the parent font. Any other size is absolute and replaces it.
+# Only "em" and "%" sizes are relative to the parent font, and root units to the root font. Any other size is
+# absolute and replaces the parent font.
+ROOT_UNITS = ("rem", "rlh", "rex", "rch", "rcap", "ric")
 def font_factor(value):
     if "smaller" in value:
         return 5 / 6
@@ -306,8 +308,15 @@ def font_factor(value):
 
 
 def font_px(value):
-    absolute = [length_px(number, unit, 0) for number, unit in numbers(value) if unit and unit not in ("em", "%")]
+    absolute = [
+        length_px(number, unit, 0) for number, unit in numbers(value) if unit and unit not in ("em", "%", *ROOT_UNITS)
+    ]
     return absolute[0] / EM_PX if absolute else None
+
+
+def font_root(value):
+    relative = [length_px(number, unit, 0) for number, unit in numbers(value) if unit in ROOT_UNITS]
+    return relative[0] / EM_PX if relative else None
 
 
 def clips(value):
@@ -328,7 +337,7 @@ FACTORS = {
     "transform": {"transform": lambda value: math.prod(map(scale_factor, SCALE.findall(value)))},
     "scale": {"scale": scale_factor},
     "zoom": {"zoom": fraction},
-    **dict.fromkeys(("font-size", "font"), {"font-size": font_factor, "font-px": font_px}),
+    **dict.fromkeys(("font-size", "font"), {"font-size": font_factor, "font-px": font_px, "font-root": font_root}),
     **dict.fromkeys(("overflow", "overflow-x", "overflow-y", "overflow-block", "overflow-inline"), {"overflow": clips}),
     **dict.fromkeys(("height", "max-height", "block-size", "max-block-size"), {"height": bounds}),
 }
@@ -357,13 +366,14 @@ def share(factors):
     if factors.get("overflow", 1.0) == 0 and factors.get("height", 1.0) == 0:
         return 0.0
     return math.prod(
-        factor for group, factor in factors.items() if group not in ("overflow", "height", "font-size", "font-px")
+        factor for group, factor in factors.items() if group not in ("overflow", "height", "font-size", "font-px", "font-root")
     )
 
 
-def font_scale(factors, parent):
-    sizes = [parent * factors["font-size"]] if "font-size" in factors else []
-    return min(sizes + [factors["font-px"]] if "font-px" in factors else sizes, default=parent)
+def font_scale(factors, parent, root):
+    sizes = {"font-size": parent * factors.get("font-size", 1), "font-px": factors.get("font-px"),
+             "font-root": root * factors.get("font-root", 1)}
+    return min((size for group, size in sizes.items() if group in factors), default=parent)
 
 
 def target_factors(stylesheets):
@@ -422,6 +432,7 @@ class _TextExtractor(_HtmlParser):
         self.target_factors = target_factors
         self.stack, self.hidden_depth, self.parts, self.anchors, self.anchor = [], 0, [], [], None
         self.positions, self.hidden_positions = defaultdict(list), []
+        self.root_font = 1.0
 
     def presence(self, tag, attributes):
         classes = set((attributes.get("class") or "").split())
@@ -432,7 +443,7 @@ class _TextExtractor(_HtmlParser):
         )
         inherited, parent_font = self.stack[-1][3] if self.stack else (1.0, 1.0)
         found = merged(factors(attributes.get("style") or ""), *styled)
-        return inherited * share(found), font_scale(found, parent_font)
+        return inherited * share(found), font_scale(found, parent_font, self.root_font)
 
     def hidden(self, tag, attributes, level):
         return (
@@ -453,6 +464,9 @@ class _TextExtractor(_HtmlParser):
         attributes = first_values(attrs)
         level = self.presence(tag, attributes)
         hidden = self.hidden(tag, attributes, level)
+        if tag == "html":
+            # A browser merges the style of a repeated html tag into the one root, and only it knows which wins.
+            self.root_font = min(self.root_font, level[1])
         if self.in_closed_details() and tag == "summary":
             self.stack[-1][2]["summary_shown"] = True
         details = {"summary_shown": False} if tag == "details" and "open" not in attributes else None

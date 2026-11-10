@@ -358,16 +358,22 @@ class HtmlToTextTests(unittest.TestCase):
             text, _ = sanitize.html_to_text(html)
             self.assertEqual(text.split(), ["Seen"], html)
 
+    def test_root_relative_font_size_scales_the_root_size(self):
+        text, _ = sanitize.html_to_text('<html style="font-size:4px"><body><p style="font-size:.1rem">A</p><p style="font-size:1rem;font-size:16px">Seen</p></body></html>')
+        self.assertEqual(text.split(), ["Seen"])
+        text, _ = sanitize.html_to_text('<html style="font-size:.5rem"><body><p style="font-size:.8rem">Seen</p></body></html>')
+        self.assertEqual(text.split(), ["Seen"])
+
+    def test_gauge_fallback_text_hides(self):
+        text, _ = sanitize.html_to_text('<progress value=".5" max="1">A</progress><meter value=".5">B</meter><p>Seen</p>')
+        self.assertEqual(text.split(), ["Seen"])
+
     def test_math_hides(self):
         text, _ = sanitize.html_to_text("<math><mphantom><mtext>Code 654321</mtext></mphantom></math><p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
 
     def test_select_options_hide(self):
         text, _ = sanitize.html_to_text("<select><option>A</option><option>Code 654321</option></select><p>Seen</p>")
-        self.assertEqual(text.split(), ["Seen"])
-
-    def test_gauge_fallback_text_hides(self):
-        text, _ = sanitize.html_to_text('<progress value=".5" max="1">A</progress><meter value=".5">B</meter><p>Seen</p>')
         self.assertEqual(text.split(), ["Seen"])
 
     def test_end_tag_does_not_close_a_hidden_element_it_skips(self):
