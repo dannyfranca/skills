@@ -187,6 +187,14 @@ class SmtpProviderTests(unittest.TestCase):
             self.assertIn("withheld: label unparsable", screen.inspect(found))
             self.assertFalse(base.sender_matches(found.sender, "site.com"))
 
+    def test_sender_the_parser_cannot_read_is_held_and_other_mail_still_lists(self):
+        FakeImap.store[b"3"] = ("09-Nov-2026 12:00:00 +0000", b"From: ():\r\nSubject: Odd\r\n\r\nhi\r\n")
+        listed = {found.id: found for found in smtp.SmtpProvider().list()}
+        self.assertEqual(set(listed), {"1", "2", "3"})
+        for found in (listed["3"], smtp.SmtpProvider().read("3")):
+            self.assertEqual((found.subject, found.labels), ("Odd", ["unparsable"]))
+            self.assertIn("withheld: label unparsable", screen.inspect(found))
+
     def test_unknown_charset_still_gives_the_text(self):
         unknown = b"From: x@site.com\r\nSubject: Odd\r\nContent-Type: text/plain; charset=x-unknown\r\n\r\nCode 654321\r\n"
         FakeImap.store[b"3"] = ("09-Nov-2026 11:00:00 +0000", unknown)
