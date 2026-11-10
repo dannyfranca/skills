@@ -514,19 +514,22 @@ class _HtmlParser(HTMLParser):
 class _StyleCollector(_HtmlParser):
     def __init__(self):
         super().__init__()
-        self.inside, self.stylesheets = False, []
+        self.inside, self.stylesheets, self.templates = False, [], 0
         self.root_attributes = {tag: {} for tag in ROOT_TAGS}
 
     def handle_starttag(self, tag, attrs):
         self.inside = tag == "style"
+        self.templates += tag == "template"
         # A browser adds the attributes of each html or body tag to the one element, and the first value of each
-        # wins. A late tag also styles the content before it.
-        if tag in ROOT_TAGS:
+        # wins. A late tag also styles the content before it. Inside a template it ignores these tags.
+        if tag in ROOT_TAGS and not self.templates:
             for name, value in attrs:
                 self.root_attributes[tag].setdefault(name, value)
 
     def handle_endtag(self, tag):
         self.inside = False
+        if tag == "template":
+            self.templates = max(0, self.templates - 1)
 
     def handle_data(self, data):
         if self.inside:

@@ -574,6 +574,14 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text("<form></form><form style=font-size:4px><span style=font-size:.2em>A</span></form><p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
 
+    def test_root_tags_inside_a_template_leave_the_root_styles(self):
+        for html in (
+            "<template><html style=font-size:16px></template><html style=font-size:4px><p style=font-size:.2rem>Code 654321</p><p>Seen</p>",
+            "<template><body style=opacity:1></template><body style=opacity:.3><p style=opacity:.3>Code 654321</p><p>Seen</p>",
+        ):
+            text, _ = sanitize.html_to_text(html)
+            self.assertNotIn("654321", text, html)
+
     def test_end_tags_rejected_by_a_scope_barrier_stay_fast(self):
         start = time.monotonic()
         text, _ = sanitize.html_to_text("<div>" + "<span>" * 12000 + "<table>" + "</div>" * 12000 + "</table><p>Seen</p>")
