@@ -25,7 +25,11 @@ def parse_time(value):
 
 
 def address_of(header):
-    return parseaddr(header or "")[1].lower()
+    try:
+        return parseaddr(header or "")[1].lower()
+    # The parser reads nested comments by recursion. A sender nested deep enough to exhaust the stack has no address.
+    except RecursionError:
+        return ""
 
 
 def sender_matches(header, domain):

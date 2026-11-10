@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
-from inbox import screen, smtp  # noqa: E402
+from inbox import base, screen, smtp  # noqa: E402
 
 ENV = {
     "AGENT_EMAIL_ADDRESS": "agent@example.com",
@@ -183,6 +183,9 @@ class SmtpProviderTests(unittest.TestCase):
         message = smtp.SmtpProvider().read("3")
         for found in (listed, message):
             self.assertEqual((found.id, found.subject, found.labels), ("3", "Deep", ["unparsable"]))
+            self.assertIn("withheld: label unparsable", screen.listing(found))
+            self.assertIn("withheld: label unparsable", screen.inspect(found))
+            self.assertFalse(base.sender_matches(found.sender, "site.com"))
 
     def test_unknown_charset_still_gives_the_text(self):
         unknown = b"From: x@site.com\r\nSubject: Odd\r\nContent-Type: text/plain; charset=x-unknown\r\n\r\nCode 654321\r\n"
