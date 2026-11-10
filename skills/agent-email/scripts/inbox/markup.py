@@ -20,10 +20,12 @@ IMPORTANT = re.compile(r"\s*!\s*important\s*$")
 # HTML and CSS split on ASCII whitespace only. Any other character, such as a no-break space, is part of a name.
 WHITESPACE = r"[ \t\n\r\f]"
 CSS_ESCAPE = re.compile(rf"\\(?:([0-9a-f]{{1,6}}){WHITESPACE}?|(.))", re.I | re.S)
-ESCAPE = rf"\\(?:[0-9a-f]{{1,6}}{WHITESPACE}?|.)"
+# An escape takes all hex digits it can, so that its digits and the name characters after it split one way only.
+ESCAPE = rf"\\(?:[0-9a-f]{{1,6}}+{WHITESPACE}?|[^0-9a-f])"
 # A string ends at a newline, where a browser drops it as a bad string. A comment that never closes runs to the end.
 STRING = r"""(?:"(?:\\.|[^"\\\n])*"?|'(?:\\.|[^'\\\n])*'?)"""
-IDENTIFIER = rf"((?:[\w-]|[^\x00-\x7f]|{ESCAPE})+)"
+# One character class, so that no character matches two alternatives and a failing match does not backtrack.
+IDENTIFIER = rf"((?:[-\w\x80-\U0010ffff]|{ESCAPE})+)"
 # Strings, URLs, escapes, and comments can hold braces, semicolons, and comment marks that are no CSS syntax.
 CSS_TOKEN = re.compile(rf"""(/\*.*?(?:\*/|\Z))|{IDENTIFIER}(\()?|{STRING}|[{{}};]|[^{{}};"'\\/\w-]+|.""", re.I | re.S)
 # An unquoted url() runs to its ")" whatever it holds, and a bad one runs to the end. A quoted one is a function.
