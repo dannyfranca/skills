@@ -240,6 +240,12 @@ class HtmlToTextTests(unittest.TestCase):
             text, _ = sanitize.html_to_text(f'<p style="{style}">Seen</p>')
             self.assertEqual(text.split(), ["Seen"], style)
 
+    def test_selector_the_policy_cannot_reduce_hides_every_element(self):
+        for selector in ('p:not([data-note=") #other"])', "html|p", "*|p", "p:is(.x)"):
+            html = f"<style>{selector} {{display:none}}</style><div id='other'><p>A</p></div>"
+            text, _ = sanitize.html_to_text(html)
+            self.assertEqual(text.split(), [], selector)
+
     def test_end_tag_does_not_close_a_hidden_element_it_skips(self):
         text, _ = sanitize.html_to_text("<span><div hidden>A</span>Code 654321</div><p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
