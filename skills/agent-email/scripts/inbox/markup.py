@@ -46,6 +46,8 @@ COLOR_FUNCTION = re.compile(r"(?:rgb|hsl|hwb|lab|lch|oklab|oklch)a?\((.*)\)")
 PSEUDO_OR_ATTRIBUTE = rf"""::?[\w-]+(?:\([^)]*(?:\)|\Z))?|\[(?:{STRING}|\\.|[^\]"'\\])*(?:\]|\Z)"""
 # CSS 2 pseudo-elements also take a single colon.
 PSEUDO_ELEMENT = re.compile(r"::|:(?:before|after|first-line|first-letter)\Z", re.I)
+# These pseudo-elements are boxes of their own, so their styles leave the text of the element as it is.
+GENERATED_BOX = re.compile(r"::?(?:before|after|marker|placeholder|backdrop|file-selector-button)\Z", re.I)
 SELECTOR_TOKEN = re.compile(
     rf"({ESCAPE})|({PSEUDO_OR_ATTRIBUTE})|({WHITESPACE}*[ \t\n\r\f>+~]{WHITESPACE}*)|(,)|[^\\:\[ \t\n\r\f>+~,]+|.", re.I | re.S
 )
@@ -285,7 +287,7 @@ def selector_target(compounds, combinators):
 def selector_targets(selectors):
     """The (tag, id, classes) of each element that a CSS selector list picks, without its ancestors, and whether
     the selector picks a pseudo-element of it."""
-    compounds, combinators, compound, combinator, simple, pseudo_element = [], [], "", "", True, False
+    compounds, combinators, compound, combinator, simple, pseudo_element, box = [], [], "", "", True, False, False
     for match in SELECTOR_TOKEN.finditer(selectors + ","):
         escape, pseudo_or_attribute, next_combinator, comma = match.groups()
         if escape or not (pseudo_or_attribute or next_combinator is not None or comma):
@@ -296,6 +298,7 @@ def selector_targets(selectors):
             compound += "*"
             simple = simple and not (pseudo_or_attribute.startswith(":") and "(" in pseudo_or_attribute)
             pseudo_element = pseudo_element or bool(PSEUDO_ELEMENT.match(pseudo_or_attribute))
+            box = box or bool(GENERATED_BOX.match(pseudo_or_attribute))
             continue
         if compound:
             simple = simple and bool(SIMPLE_COMPOUND.fullmatch(compound))
@@ -306,9 +309,9 @@ def selector_targets(selectors):
         if comma:
             # Functional pseudo-classes and namespaces can pick elements that no tag, id, or class names.
             # Such a rule hides every element: the sender controls the selector, so it may not narrow the check.
-            if compounds or not simple:
+            if (compounds or not simple) and not box:
                 yield (selector_target(compounds, combinators) if simple else ANY_ELEMENT), pseudo_element
-            compounds, combinators, combinator, simple, pseudo_element = [], [], "", True, False
+            compounds, combinators, combinator, simple, pseudo_element, box = [], [], "", True, False, False
         else:
             combinator += next_combinator.strip()
 
