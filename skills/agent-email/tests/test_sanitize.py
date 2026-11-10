@@ -207,6 +207,12 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text(html)
         self.assertEqual(text.split(), ["Seen"])
 
+    def test_each_stylesheet_starts_with_fresh_token_state(self):
+        for start in ("/*", '.a {content:"x', "@media x {", ".a {background:url(x"):
+            html = f'<style>{start}</style><style>.hide {{display:none}}</style><p class="hide">A</p><p>Seen</p>'
+            text, _ = sanitize.html_to_text(html)
+            self.assertEqual(text.split(), ["Seen"], start)
+
     def test_end_tag_does_not_close_a_hidden_element_it_skips(self):
         text, _ = sanitize.html_to_text("<span><div hidden>A</span>Code 654321</div><p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])

@@ -238,7 +238,8 @@ def hiding_targets(stylesheets):
     # so the parser hides too much rather than too little.
     targets = {
         target
-        for selectors, declarations in css_rules(" ".join(stylesheets))
+        for stylesheet in stylesheets
+        for selectors, declarations in css_rules(stylesheet)
         if hides(declarations)
         for target in selector_targets(selectors)
     }
