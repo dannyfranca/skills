@@ -512,6 +512,15 @@ class HtmlToTextTests(unittest.TestCase):
             text, _ = sanitize.html_to_text(html)
             self.assertEqual(text.split(), ["Seen"], html)
 
+    def test_vendor_prefixed_properties_hide_as_their_standard_form(self):
+        for html in (
+            '<p style="-webkit-transform:scale(0)">A</p><p>Seen</p>',
+            "<style>.f {-WEBKIT-FILTER: opacity(.3)}</style><div style='opacity:.3'><p class='f'>A</p></div><p>Seen</p>",
+            '<p style="-moz-opacity:0">A</p><p style="-webkit-text-fill-color:#0000">B</p><p>Seen</p>',
+        ):
+            text, _ = sanitize.html_to_text(html)
+            self.assertEqual(text.split(), ["Seen"], html)
+
     def test_frameset_text_hides(self):
         text, _ = sanitize.html_to_text("<p>Seen</p><frameset><frame src=about:blank>A</frameset>")
         self.assertEqual(text.split(), ["Seen"])
