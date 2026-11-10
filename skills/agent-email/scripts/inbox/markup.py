@@ -641,6 +641,10 @@ class _TextExtractor(_HtmlParser):
         opened = self.positions[tag][-1]
         if any(found and found[-1] > opened for found in map(self.positions.get, barriers)):
             return
+        # A browser takes only the form out of the open elements, and those inside it stay open. To keep the form
+        # open as well can only hide more.
+        if tag == "form" and self.stack[-1][0] != "form":
+            return
         # A browser opens again each formatting element that the end tag of another element closes, so the text
         # after it still takes its styles. This stops at the start of a table cell or similar.
         reopened = []

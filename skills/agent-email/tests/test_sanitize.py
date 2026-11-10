@@ -556,6 +556,11 @@ class HtmlToTextTests(unittest.TestCase):
         self.assertLess(time.monotonic() - start, 0.5)
         self.assertEqual(text.split(), [])
 
+    def test_form_end_tag_keeps_the_elements_open_inside_the_form(self):
+        html = "<form style=font-size:2px><span></form><b style=font-size:.1em>Code 654321</b></span><p>Seen</p>"
+        text, _ = sanitize.html_to_text(html)
+        self.assertNotIn("654321", text)
+
     def test_end_tags_rejected_by_a_scope_barrier_stay_fast(self):
         start = time.monotonic()
         text, _ = sanitize.html_to_text("<div>" + "<span>" * 12000 + "<table>" + "</div>" * 12000 + "</table><p>Seen</p>")
