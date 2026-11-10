@@ -7,11 +7,13 @@ SKIPPED_TAGS = {"script", "style", "head", "title", "template", "noscript", "svg
 VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
 BLOCK_TAGS = {"p", "div", "br", "tr", "li", "table", "section", "article", "blockquote", "hr", "h1", "h2", "h3", "h4", "h5", "h6"}
 
-CSS_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+# A comment that never closes runs to the end of the stylesheet.
+CSS_COMMENT = re.compile(r"/\*.*?(?:\*/|\Z)", re.S)
 IMPORTANT = re.compile(r"\s*!\s*important\s*$")
 CSS_ESCAPE = re.compile(r"\\(?:([0-9a-f]{1,6})\s?|(.))", re.I | re.S)
-NUMBER = re.compile(r"([+-]?(?:\d+\.?\d*|\.\d+))([a-z%]*)")
+NUMBER = re.compile(r"([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([a-z%]*)")
 SCALE = re.compile(r"scale[xyz3d]*\(([^)]*)\)")
+OPACITY_FILTER = re.compile(r"opacity\(([^)]*)\)")
 HEX_ALPHA = re.compile(r"#(?:[0-9a-f]{3}([0-9a-f])|[0-9a-f]{6}([0-9a-f]{2}))")
 COLOR_FUNCTION = re.compile(r"(?:rgb|hsl)a?\((.*)\)")
 COMBINATOR = re.compile(r"\s*[\s>+~]\s*")
@@ -22,7 +24,7 @@ FAINT = 0.1
 FAR_PX = 500
 EM_PX = 16
 BOX_SIZES = ("height", "width", "max-height", "max-width")
-OFFSETS = ("left", "top", "right", "bottom", "text-indent", "margin-left", "margin-top")
+OFFSETS = ("left", "top", "right", "bottom", "inset", "text-indent", "margin", "margin-left", "margin-top")
 
 ANY_ELEMENT = (None, None, frozenset())
 # A real mail hides a few blocks. Thousands of distinct hiding rules only make every element check them all.
@@ -87,7 +89,9 @@ def far_away(value):
 # reads it as hidden: a lost code costs one retry, an unseen instruction can cost the account.
 def hiding(name, value):
     return (
-        (name == "display" and value == "none")
+        # A custom property can carry any value, and only a full cascade knows which one.
+        (name in VISIBILITY_PROPERTIES and "var(" in value)
+        or (name == "display" and value == "none")
         or (name == "visibility" and value in ("hidden", "collapse"))
         or (name in ("font-size", "font") and tiny(value))
         or (name == "opacity" and fraction(value) < FAINT)
@@ -96,8 +100,15 @@ def hiding(name, value):
         or (name == "clip" and value != "auto")
         or (name == "clip-path" and value != "none")
         or (name == "transform" and any(tiny(arguments) for arguments in SCALE.findall(value)))
+        or (name == "filter" and any(fraction(argument) < FAINT for argument in OPACITY_FILTER.findall(value)))
         or (name in OFFSETS + ("transform",) and far_away(value))
     )
+
+
+VISIBILITY_PROPERTIES = {
+    "display", "visibility", "font-size", "font", "opacity", "color", "-webkit-text-fill-color",
+    "clip", "clip-path", "transform", "filter", *BOX_SIZES, *OFFSETS,
+}
 
 
 def hides(css):

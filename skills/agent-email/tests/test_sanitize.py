@@ -95,6 +95,14 @@ class HtmlToTextTests(unittest.TestCase):
         self.assertLess(time.monotonic() - start, 0.5)
         self.assertEqual(text.split(), [])
 
+    def test_hides_what_a_style_can_hide_in_other_spellings(self):
+        html = (
+            "<p style='opacity:1e-3'>A</p><p style='filter:opacity(0)'>B</p><p style='--h:none;display:var(--h)'>C</p>"
+            "<p style='margin:-600px 0'>D</p><p style='display:none/*'>E</p>"
+        )
+        text, _ = sanitize.html_to_text(html)
+        self.assertEqual(text.split(), [])
+
     def test_first_duplicate_attribute_wins(self):
         html = (
             "<style>.hide { display: none }</style><p style='display:none' style=''>Code 999999</p>"
