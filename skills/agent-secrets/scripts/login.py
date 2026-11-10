@@ -35,9 +35,11 @@ def bws(*args):
 
 def meta(secret):
     try:
-        return json.loads(secret.get("note") or "{}")
+        note = json.loads(secret.get("note") or "{}")
     except ValueError:
         return {}
+    # The user can edit the note in the Bitwarden web app, so any JSON value can come back.
+    return note if isinstance(note, dict) else {}
 
 
 def logins(domain=None):
@@ -110,10 +112,12 @@ def cmd_new(args):
 
 
 def cmd_set_password(args):
-    entry = require_pending(args.domain, args.username)
-    password = sys.stdin.read().strip()
+    # Only the newline that echo adds goes: spaces can be part of the password the site accepted.
+    password = sys.stdin.read().removesuffix("\n").removesuffix("\r")
     if not password:
         fail("pipe the new password to stdin")
+    # The pending check runs after stdin is read, so a login activated while stdin waits stays unchanged.
+    entry = require_pending(args.domain, args.username)
     bws("secret", "edit", f"--value={password}", entry["id"])
     emit(summary(entry))
 
