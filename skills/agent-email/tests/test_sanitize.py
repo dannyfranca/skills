@@ -114,6 +114,7 @@ class HtmlToTextTests(unittest.TestCase):
     def test_unmatched_end_tags_stay_fast(self):
         start = time.monotonic()
         sanitize.html_to_text("<div>" * 10000 + "</span>" * 10000)
+        sanitize.html_to_text("<span><div hidden>" + "<div>" * 10000 + "</span>" * 10000)
         self.assertLess(time.monotonic() - start, 0.5)
 
     def test_unresolved_visibility_value_hides(self):
@@ -124,6 +125,14 @@ class HtmlToTextTests(unittest.TestCase):
         )
         text, _ = sanitize.html_to_text(html)
         self.assertEqual(text.split(), ["Seen", "Too"])
+
+    def test_end_tag_does_not_close_a_hidden_element_it_skips(self):
+        text, _ = sanitize.html_to_text("<span><div hidden>A</span>Code 654321</div><p>Seen</p>")
+        self.assertEqual(text.split(), ["Seen"])
+
+    def test_closed_details_shows_only_its_first_summary(self):
+        text, _ = sanitize.html_to_text("<details><summary>Title</summary><summary>Code 654321</summary></details>")
+        self.assertEqual(text.split(), ["Title"])
 
     def test_unterminated_selector_stays_fast(self):
         start = time.monotonic()
