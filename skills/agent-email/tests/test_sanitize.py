@@ -344,12 +344,26 @@ class HtmlToTextTests(unittest.TestCase):
             self.assertEqual(text.split(), ["Seen"], name)
         self.assertLess(time.monotonic() - start, 0.5)
 
-    def test_select_options_hide(self):
-        text, _ = sanitize.html_to_text("<select><option>A</option><option>Code 654321</option></select><p>Seen</p>")
-        self.assertEqual(text.split(), ["Seen"])
+    def test_relative_font_size_scales_the_computed_parent_size(self):
+        for html in (
+            '<div style="font-size:2px"><div style="font-size:.1em">A</div></div>',
+            '<style>.x {font-size:3px}</style><div class="x"><p style="font:50% serif">A</p></div>',
+        ):
+            text, _ = sanitize.html_to_text(html + "<p>Seen</p>")
+            self.assertEqual(text.split(), ["Seen"], html)
+        for html in (
+            '<div style="font-size:.15em"><p style="font-size:16px"><b style="font-size:.5em">Seen</b></p></div>',
+            '<div style="font-size:12px"><p style="font-size:.5em">Seen</p></div>',
+        ):
+            text, _ = sanitize.html_to_text(html)
+            self.assertEqual(text.split(), ["Seen"], html)
 
     def test_math_hides(self):
         text, _ = sanitize.html_to_text("<math><mphantom><mtext>Code 654321</mtext></mphantom></math><p>Seen</p>")
+        self.assertEqual(text.split(), ["Seen"])
+
+    def test_select_options_hide(self):
+        text, _ = sanitize.html_to_text("<select><option>A</option><option>Code 654321</option></select><p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
 
     def test_end_tag_does_not_close_a_hidden_element_it_skips(self):
