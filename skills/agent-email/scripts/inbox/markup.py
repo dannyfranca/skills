@@ -175,6 +175,11 @@ def text_alpha(value):
     return None if value in ("inherit", "unset", "currentcolor") else alpha(value)
 
 
+# A fill in the current colour paints the text colour, which the colour factor already holds.
+def fill_alpha(value):
+    return 1.0 if value == "currentcolor" else text_alpha(value)
+
+
 # A clipping ancestor hides text pushed out in either direction, and a page shows no more than a few hundred pixels.
 def far_away(value):
     return any(
@@ -360,7 +365,8 @@ FACTORS = {
     **dict.fromkeys(("font-size", "font"), {"font-size": font_factor, "font-px": font_px, "font-root": font_root}),
     **dict.fromkeys(("overflow", "overflow-x", "overflow-y", "overflow-block", "overflow-inline"), {"overflow": clips}),
     **dict.fromkeys(("height", "max-height", "block-size", "max-block-size"), {"height": bounds}),
-    **dict.fromkeys(("color", "-webkit-text-fill-color"), {"color": text_alpha}),
+    "color": {"color": text_alpha},
+    "-webkit-text-fill-color": {"fill": fill_alpha},
 }
 
 
@@ -388,8 +394,14 @@ def share(factors):
         return 0.0
     return math.prod(
         factor for group, factor in factors.items()
-        if group not in ("overflow", "height", "font-size", "font-px", "font-root", "color")
+        if group not in ("overflow", "height", "font-size", "font-px", "font-root", "color", "fill")
     )
+
+
+# The fill paints the text and hides its colour. A faint colour still counts, as the hides check also reads it.
+def painted(level):
+    presence, font, colour, fill = level
+    return presence * font * min(colour, fill)
 
 
 def font_scale(factors, parent, root):
@@ -476,11 +488,13 @@ class _TextExtractor(_HtmlParser):
             for (target_tag, target_id, target_classes), found in self.target_factors.items()
             if target_tag in (None, tag) and target_id in (None, attributes.get("id")) and target_classes <= classes
         )
-        inherited, parent_font, parent_colour = parent or (self.stack[-1][3] if self.stack else (1.0, 1.0, 1.0))
+        inherited, parent_font, parent_colour, parent_fill = parent or (
+            self.stack[-1][3] if self.stack else (1.0, 1.0, 1.0, 1.0)
+        )
         found = merged(factors(attributes.get("style") or ""), *styled)
-        # The text colour is inherited, and a colour on the element replaces it. Opacity then fades that colour.
-        colour = found.get("color", parent_colour)
-        return inherited * share(found), font_scale(found, parent_font, self.root_font), colour
+        # The text colour and fill are inherited each on its own, and a value on the element replaces it.
+        colour, fill = found.get("color", parent_colour), found.get("fill", parent_fill)
+        return inherited * share(found), font_scale(found, parent_font, self.root_font), colour, fill
 
     def hidden(self, tag, attributes, level):
         return (
@@ -493,7 +507,7 @@ class _TextExtractor(_HtmlParser):
             or attributes.get("aria-hidden") == "true"
             or hides(attributes.get("style") or "")
             or replaces(attributes.get("style") or "")
-            or math.prod(level) < FAINT
+            or painted(level) < FAINT
         )
 
     def handle_starttag(self, tag, attrs):

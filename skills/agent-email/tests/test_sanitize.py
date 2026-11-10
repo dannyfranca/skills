@@ -432,6 +432,15 @@ class HtmlToTextTests(unittest.TestCase):
             text, _ = sanitize.html_to_text(html)
             self.assertEqual(text.split(), ["Seen"], html)
 
+    def test_text_fill_alpha_survives_a_child_colour(self):
+        for html in (
+            '<div style="-webkit-text-fill-color:rgba(0 0 0 / .1)"><p style="color:#000;opacity:.1">A</p></div><p>Seen</p>',
+            '<div style="color:rgba(0,0,0,.1)"><p style="-webkit-text-fill-color:currentcolor;opacity:.1">A</p></div>'
+            "<p>Seen</p>",
+        ):
+            text, _ = sanitize.html_to_text(html)
+            self.assertEqual(text.split(), ["Seen"], html)
+
     def test_parent_font_units_scale_the_parent_size(self):
         text, _ = sanitize.html_to_text('<div style="font-size:2px"><span style="font-size:.5ex">A</span></div><p>Seen</p>')
         self.assertEqual(text.split(), ["Seen"])
