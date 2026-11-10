@@ -539,6 +539,11 @@ class HtmlToTextTests(unittest.TestCase):
             text, _ = sanitize.html_to_text(html)
             self.assertEqual(text.split(), ["Seen"], html)
 
+    def test_end_tags_rejected_by_a_scope_barrier_stay_fast(self):
+        start = time.monotonic()
+        text, _ = sanitize.html_to_text("<div>" + "<span>" * 12000 + "<table>" + "</div>" * 12000 + "</table><p>Seen</p>")
+        self.assertLess(time.monotonic() - start, 0.5)
+
     def test_generated_pseudo_element_rules_leave_the_element_shown(self):
         html = (
             "<style>*::before {display:none} .c:after {content:'.';visibility:hidden;height:0} p::MARKER{opacity:0}</style>"
