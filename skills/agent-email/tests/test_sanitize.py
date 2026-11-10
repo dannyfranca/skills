@@ -539,6 +539,23 @@ class HtmlToTextTests(unittest.TestCase):
             text, _ = sanitize.html_to_text(html)
             self.assertEqual(text.split(), ["Seen"], html)
 
+    def test_formatting_element_closed_by_another_end_tag_still_styles_later_text(self):
+        for html in (
+            "<div><i style=opacity:.3></div><span style=opacity:.3>Code 654321</span><p>Seen</p>",
+            "<b><font style=opacity:.3></b><span style=opacity:.3>Code 654321</span><p>Seen</p>",
+        ):
+            text, _ = sanitize.html_to_text(html)
+            self.assertEqual(text.split(), ["Seen"], html)
+        text, _ = sanitize.html_to_text("<table><tr><td><i style=opacity:.3>A</td></tr></table><b style=opacity:.3>Seen</b>")
+        self.assertEqual(text.split(), ["A", "Seen"])
+
+    def test_formatting_elements_opened_again_stay_fast(self):
+        start = time.monotonic()
+        html = ("<div>" + "".join(f"<b id={n}>" for n in range(150))) * 150 + "</div>" * 150 + "<p>Code 654321</p>"
+        text, _ = sanitize.html_to_text(html)
+        self.assertLess(time.monotonic() - start, 0.5)
+        self.assertEqual(text.split(), [])
+
     def test_end_tags_rejected_by_a_scope_barrier_stay_fast(self):
         start = time.monotonic()
         text, _ = sanitize.html_to_text("<div>" + "<span>" * 12000 + "<table>" + "</div>" * 12000 + "</table><p>Seen</p>")
