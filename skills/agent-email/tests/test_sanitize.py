@@ -65,10 +65,35 @@ class HtmlToTextTests(unittest.TestCase):
             "<p style='text-indent:-50em'>F</p><p style='font:0/0 a'>G</p><p style='-webkit-text-fill-color:transparent'>H</p>"
             "<p style='opacity:0.01'>I</p><p style='display:none !important;display:block'>J</p>"
             "<p style='height:20px;overflow:hidden'>Box</p><p style='position:relative;left:-5px'>Nudge</p>"
-            "<p style='display:none;display:block'>Shown</p><p style='transform:scale(1.5)'>Big</p>"
+            "<p style='transform:scale(1.5)'>Big</p>"
         )
         text, _ = sanitize.html_to_text(html)
-        self.assertEqual(text.split(), ["Box", "Nudge", "Shown", "Big"])
+        self.assertEqual(text.split(), ["Box", "Nudge", "Big"])
+
+    def test_a_later_declaration_does_not_unhide(self):
+        html = "<p style='display:none;display:banana'>A</p><p style='display:none;display:block'>B</p><p>Seen</p>"
+        text, _ = sanitize.html_to_text(html)
+        self.assertEqual(text.split(), ["Seen"])
+
+    def test_reads_css_escapes(self):
+        html = (
+            "<style>.n\\6f ne { display: none } .x { vis\\ibility: hidden }</style>"
+            "<p style='display:n\\6f ne'>A</p><p class='none'>B</p><p class='x'>C</p><p>Seen</p>"
+        )
+        text, _ = sanitize.html_to_text(html)
+        self.assertEqual(text.split(), ["Seen"])
+
+    def test_trailing_slash_does_not_end_a_stylesheet(self):
+        text, _ = sanitize.html_to_text("<style/>.hide { display: none }</style><p class='hide'>Code 987654</p><p>Seen</p>")
+        self.assertEqual(text.split(), ["Seen"])
+
+    def test_too_many_hiding_rules_hide_everything_fast(self):
+        rules = "".join(f".c{n} {{ display: none }}" for n in range(4000))
+        paragraphs = "".join(f"<p class='d{n}'>Code 123456</p>" for n in range(4000))
+        start = time.monotonic()
+        text, _ = sanitize.html_to_text(f"<style>{rules}</style>{paragraphs}")
+        self.assertLess(time.monotonic() - start, 0.5)
+        self.assertEqual(text.split(), [])
 
     def test_first_duplicate_attribute_wins(self):
         html = (
