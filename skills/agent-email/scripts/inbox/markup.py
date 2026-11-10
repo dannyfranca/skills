@@ -7,9 +7,12 @@ SKIPPED_TAGS = {"script", "style", "head", "title", "template", "noscript", "svg
 VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
 BLOCK_TAGS = {"p", "div", "br", "tr", "li", "table", "section", "article", "blockquote", "hr", "h1", "h2", "h3", "h4", "h5", "h6"}
 # Text that a human cannot see is the usual place for instructions aimed at an agent.
+ZERO_ALPHA = r"\s*0*\.?0+%?\s*\)"
 HIDDEN_STYLE = re.compile(
-    r"display\s*:\s*none|visibility\s*:\s*hidden|(?:font-size|opacity|max-height)\s*:\s*0(?![.\d]*[1-9])"
-    r"|(?<![\w-])color\s*:\s*transparent",
+    r"display\s*:\s*none|visibility\s*:\s*hidden|(?:font-size|opacity|max-height)\s*:\s*[+-]?\.?0(?![.\d]*[1-9])"
+    r"|(?<![\w-])color\s*:\s*(?:transparent"
+    rf"|(?:rgb|hsl)a?\((?:[^,)]*,){{3}}{ZERO_ALPHA}|(?:rgb|hsl)a?\([^)/]*/{ZERO_ALPHA}"
+    r"|#[0-9a-f]{3}0\b|#[0-9a-f]{6}00\b)",
     re.I,
 )
 
@@ -35,6 +38,8 @@ def selector_target(selector):
     """The (tag, id, classes) of the element that a CSS selector picks, without its ancestors."""
     selector = selector.strip()
     targets = [compound_target(compound) for compound in COMBINATOR.split(selector) if compound]
+    if not targets:
+        return None
     # "a *" hides what is inside "a", so hiding "a" hides the same text. Siblings of "a" are not inside it.
     if targets[-1] == ANY_ELEMENT and not SIBLING.search(selector):
         targets = [target for target in targets if target != ANY_ELEMENT] or [ANY_ELEMENT]
@@ -49,13 +54,13 @@ def hiding_targets(html):
     # Rules inside @media count too, and ancestors, pseudo-classes, and attributes are ignored:
     # the sender controls all of them, so the parser hides too much rather than too little.
     css = CSS_COMMENT.sub(" ", " ".join(STYLE_BLOCK.findall(html)))
-    return [
+    targets = [
         selector_target(selector)
         for selectors, declarations in CSS_RULE.findall(css)
         if hides(declarations)
         for selector in selectors.split(",")
-        if selector.strip()
     ]
+    return [target for target in targets if target]
 
 
 class _TextExtractor(HTMLParser):
@@ -101,13 +106,22 @@ class _TextExtractor(HTMLParser):
         while self.stack:
             open_tag, hidden = self.stack.pop()
             self.hidden_depth -= hidden
-            if open_tag == "a" and self.anchor:
-                self.anchors.append((self.anchor[0], "".join(self.anchor[1])))
-                self.anchor = None
+            if open_tag == "a":
+                self.finish_anchor()
             if open_tag == tag:
                 break
         if tag in BLOCK_TAGS:
             self.parts.append("\n")
+
+    def finish_anchor(self):
+        if self.anchor:
+            self.anchors.append((self.anchor[0], "".join(self.anchor[1])))
+            self.anchor = None
+
+    def close(self):
+        super().close()
+        # HTMLParser closes no tag at the end of input, and a browser still makes the open anchor a link.
+        self.finish_anchor()
 
     def handle_data(self, data):
         if self.hidden_depth:
