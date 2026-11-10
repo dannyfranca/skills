@@ -193,6 +193,12 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text(r"<style>d\69 v {display:none}</style><div>A</div><p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
 
+    def test_carriage_return_and_form_feed_end_a_string(self):
+        for end in ("\r", "\f", "\r\n"):
+            html = f'<style>.a {{content:"x{end}}} .hide {{display:none}}</style><p class="hide">A</p><p>Seen</p>'
+            text, _ = sanitize.html_to_text(html)
+            self.assertEqual(text.split(), ["Seen"], repr(end))
+
     def test_end_tag_does_not_close_a_hidden_element_it_skips(self):
         text, _ = sanitize.html_to_text("<span><div hidden>A</span>Code 654321</div><p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
