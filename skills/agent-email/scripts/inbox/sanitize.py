@@ -14,7 +14,8 @@ MAX_URL = 2000
 MAX_ATTACHMENTS = 10
 ATTACHMENT_NAME_LIMIT = 100
 
-URL = re.compile(r"https?://[^\s<>\"'()\[\]{}]+", re.I)
+# Browsers read "\" in a URL as "/", so "https://evil.net\@site.com" opens evil.net. A URL stops at "\".
+URL = re.compile(r"https?://[^\s<>\"'()\[\]{}\\]+", re.I)
 TRAILING_PUNCTUATION = ".,;:!?"
 DOMAIN_IN_TEXT = re.compile(r"\b(?:[a-z0-9-]+\.)+[a-z]{2,63}\b", re.I)
 CODE_KEYWORD = r"(?:code|otp|pin|passcode|password|token|verification|verify|c[óo]digo)"
@@ -79,8 +80,14 @@ def flag(host, label, sender_domain):
     return "same-domain" if site(host) == site(sender_domain) else "other-domain"
 
 
+def bare_urls(text):
+    return [match.rstrip(TRAILING_PUNCTUATION) for match in URL.findall(text)]
+
+
 def links(anchors, text, sender_domain):
-    candidates = list(anchors) + [(match.rstrip(TRAILING_PUNCTUATION), None) for match in URL.findall(text)]
+    # A URL shown as anchor text is not where the anchor goes. The anchor itself reports the mismatch.
+    labels = {url for _, label in anchors for url in bare_urls(label or "")}
+    candidates = list(anchors) + [(url, None) for url in bare_urls(text) if url not in labels]
     seen, result = set(), []
     for url, label in candidates:
         url = url.strip()
