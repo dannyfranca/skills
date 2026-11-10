@@ -126,6 +126,17 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text(html)
         self.assertEqual(text.split(), ["Seen", "Too"])
 
+    def test_functions_the_policy_does_not_evaluate_hide(self):
+        html = "".join(
+            f"<p style='{style}'>A</p>"
+            for style in (
+                "transform:matrix(0,0,0,0,0,0)", "transform:rotatex(90deg)", "transform:skewx(90deg)",
+                "transform:perspective(1px)", "filter:blur(100px)",
+            )
+        )
+        text, _ = sanitize.html_to_text(html + "<p style='transform:rotate(5deg) scale(1.2);filter:grayscale(1)'>Seen</p>")
+        self.assertEqual(text.split(), ["Seen"])
+
     def test_end_tag_does_not_close_a_hidden_element_it_skips(self):
         text, _ = sanitize.html_to_text("<span><div hidden>A</span>Code 654321</div><p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
