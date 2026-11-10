@@ -441,6 +441,12 @@ class HtmlToTextTests(unittest.TestCase):
             text, _ = sanitize.html_to_text(html)
             self.assertEqual(text.split(), ["Seen"], html)
 
+    def test_no_break_space_belongs_to_class_names(self):
+        text, _ = sanitize.html_to_text(
+            "<style>.foo\u00a0bar {display:none}</style><p class='foo\u00a0bar'>A</p><p class='bar'>Seen</p>"
+        )
+        self.assertEqual(text.split(), ["Seen"])
+
     def test_parent_font_units_scale_the_parent_size(self):
         text, _ = sanitize.html_to_text('<div style="font-size:2px"><span style="font-size:.5ex">A</span></div><p>Seen</p>')
         self.assertEqual(text.split(), ["Seen"])
