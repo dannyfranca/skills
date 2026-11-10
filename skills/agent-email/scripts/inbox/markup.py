@@ -540,6 +540,7 @@ class _TextExtractor(_HtmlParser):
         self.stack, self.hidden_depth, self.parts, self.anchors, self.anchor = [], 0, [], [], None
         self.positions, self.hidden_positions = defaultdict(list), []
         self.reopen_budget = MAX_REOPENED_SIZE
+        self.form_open = False
         self.root_font = 1.0
         # A browser makes the html and body elements even when the mail omits their tags, and stylesheets match them.
         for tag in ROOT_TAGS:
@@ -595,6 +596,11 @@ class _TextExtractor(_HtmlParser):
             return
         if tag in ROOT_TAGS and self.positions[tag]:
             return
+        # A browser ignores a form start while another form is open, except inside a template.
+        if tag == "form" and not self.positions["template"]:
+            if self.form_open:
+                return
+            self.form_open = True
         attributes = first_values(attrs)
         level = self.presence(tag, attributes)
         hidden = self.hidden(tag, attributes, level)
@@ -626,6 +632,9 @@ class _TextExtractor(_HtmlParser):
         self.hidden_depth += 1
 
     def handle_endtag(self, tag):
+        # The end tag of a form lets a later form start, also when the browser ignores the end tag itself.
+        if tag == "form" and not self.positions["template"]:
+            self.form_open = False
         # Content after the end tag of html or body still goes into body.
         if not self.positions[tag] or tag in ROOT_TAGS:
             return
