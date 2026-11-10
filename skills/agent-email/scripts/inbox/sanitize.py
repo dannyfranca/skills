@@ -21,8 +21,8 @@ URL = re.compile(r"https?://[^\s<>\"'()\[\]{}\\]+", re.I)
 TRAILING_PUNCTUATION = ".,;:!?"
 # A domain starts only where a dotted run starts. A start inside the run retries the whole run, which is quadratic
 # on a long run that ends without a top-level domain.
-# Labels and top-level domains can be in any script.
-DOMAIN_IN_TEXT = re.compile(r"(?<![\w-])(?<![\w-]\.)(?:(?:[^\W_]|-)+\.)+[^\W\d_]{2,63}\b", re.I)
+# Labels and top-level domains can be in any script, and a top-level domain can be in its ASCII form.
+DOMAIN_IN_TEXT = re.compile(r"(?<![\w-])(?<![\w-]\.)(?:(?:[^\W_]|-)+\.)+(?:xn--[a-z0-9-]+|[^\W\d_]{2,63})\b", re.I)
 CODE_KEYWORD = r"(?:code|otp|pin|passcode|password|token|verification|verify|c[óo]digo)"
 CODE_NEAR_KEYWORD = re.compile(
     rf"{CODE_KEYWORD}[^\n]{{0,40}}?\b((?=[A-Za-z0-9]*\d)[A-Za-z0-9]{{4,8}}|\d{{3}}[- ]\d{{3}})\b", re.I
