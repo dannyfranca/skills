@@ -58,11 +58,21 @@ def clean_line(text, limit=LINE_LIMIT):
     return clean((text or "").replace("\n", " "), limit)
 
 
+# Browsers keep these letters in a host, while the IDNA 2003 codec maps "ß" to "ss" and "ς" to "σ".
+DEVIATION_LETTERS = re.compile("[ßςẞ]")
+
+
+def ascii_label(label):
+    if DEVIATION_LETTERS.search(label):
+        return "xn--" + unicodedata.normalize("NFKC", label.lower()).encode("punycode").decode()
+    return label.encode("idna").decode()
+
+
 def site(host):
     # A label can show the Unicode form of a host and the URL its ASCII form. A host the codec rejects stays
     # as it is, so it differs from both forms.
     try:
-        host = (host or "").encode("idna").decode()
+        host = ".".join(map(ascii_label, (host or "").split(".")))
     except UnicodeError:
         pass
     labels = host.lower().rstrip(".").split(".")

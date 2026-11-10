@@ -621,6 +621,14 @@ class LinkTests(unittest.TestCase):
         found = sanitize.links([("https://example.xn--p1ai/v", "example.xn--p1ai")], "", "example.xn--p1ai")
         self.assertEqual(found[0]["flag"], "same-domain")
 
+    def test_sharp_s_hosts_keep_their_browser_form(self):
+        found = sanitize.links(
+            [("https://faß.de/v", "faß.de"), ("https://xn--fa-hia.de/w", "faß.de"), ("https://xn--fa-hia.de/x", "fass.de")],
+            "",
+            "fass.de",
+        )
+        self.assertEqual([f["flag"] for f in found], ["other-domain", "other-domain", "text-mismatch"])
+
     def test_drops_links_that_do_not_parse(self):
         found = sanitize.links([], "https://ｅxample.com：443/v https://site.com/v", "site.com")
         self.assertEqual([f["url"] for f in found], ["https://site.com/v"])
