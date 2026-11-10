@@ -1,4 +1,5 @@
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -55,6 +56,44 @@ class HtmlToTextTests(unittest.TestCase):
         )
         text, _ = sanitize.html_to_text(html)
         self.assertEqual(text.split(), ["Black", "Half"])
+
+    def test_drops_text_hidden_by_clipping_or_moving_it_away(self):
+        html = (
+            "<style>.c { max-height: 0; overflow: hidden }</style><p class='c'>A</p>"
+            "<p style='height:0;overflow:hidden'>B</p><p style='position:absolute;clip:rect(0 0 0 0)'>C</p>"
+            "<p style='transform:scale(1, 0)'>D</p><p style='position:absolute;left:-9999px'>E</p>"
+            "<p style='text-indent:-50em'>F</p><p style='font:0/0 a'>G</p><p style='-webkit-text-fill-color:transparent'>H</p>"
+            "<p style='opacity:0.01'>I</p><p style='display:none !important;display:block'>J</p>"
+            "<p style='height:20px;overflow:hidden'>Box</p><p style='position:relative;left:-5px'>Nudge</p>"
+            "<p style='display:none;display:block'>Shown</p><p style='transform:scale(1.5)'>Big</p>"
+        )
+        text, _ = sanitize.html_to_text(html)
+        self.assertEqual(text.split(), ["Box", "Nudge", "Shown", "Big"])
+
+    def test_first_duplicate_attribute_wins(self):
+        html = (
+            "<style>.hide { display: none }</style><p style='display:none' style=''>Code 999999</p>"
+            "<p class='hide' class=''>Ghost</p><a href='https://evil.net/v' href='https://site.com/v'>Go</a>"
+        )
+        text, anchors = sanitize.html_to_text(html)
+        self.assertEqual(text.split(), ["Go"])
+        self.assertEqual(anchors, [("https://evil.net/v", "Go")])
+
+    def test_trailing_slash_does_not_close_an_element(self):
+        text, _ = sanitize.html_to_text("<div style='display:none'/>Code 999999</div><p>Seen<br/>too</p>")
+        self.assertEqual(text.split(), ["Seen", "too"])
+
+    def test_stylesheet_without_rules_is_read_in_linear_time(self):
+        for css in (" " * 40000, "<style>" * 20000, "{" * 40000):
+            start = time.monotonic()
+            sanitize.html_to_text(f"<style>{css}</style><p>Code 123456</p>")
+            self.assertLess(time.monotonic() - start, 0.5)
+
+    def test_new_anchor_keeps_the_open_one(self):
+        _, anchors = sanitize.html_to_text(
+            "<a href='https://evil.net/v'>https://site.com/v<a href='https://evil.net/v'>Continue</a>"
+        )
+        self.assertEqual(anchors, [("https://evil.net/v", "https://site.com/v"), ("https://evil.net/v", "Continue")])
 
     def test_ignores_selectors_without_an_element(self):
         text, _ = sanitize.html_to_text("<style>> { display: none }</style><p>Code 123456</p>")
