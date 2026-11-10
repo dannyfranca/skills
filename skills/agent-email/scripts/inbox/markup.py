@@ -297,12 +297,17 @@ def scale_factor(arguments):
     return min((abs(number / 100 if unit == "%" else number) for number, unit in numbers(arguments)), default=1.0)
 
 
+# Only "em" and "%" sizes are relative to the parent font. Any other size is absolute and replaces it.
 def font_factor(value):
-    # Only "em" and "%" sizes are relative to the parent font. An absolute size is checked by tiny().
     if "smaller" in value:
         return 5 / 6
     relative = [number / 100 if unit == "%" else number for number, unit in numbers(value) if unit in ("em", "%")]
-    return relative[0] if relative else 1.0
+    return relative[0] if relative else None
+
+
+def font_px(value):
+    absolute = [length_px(number, unit, 0) for number, unit in numbers(value) if unit and unit not in ("em", "%")]
+    return absolute[0] / EM_PX if absolute else None
 
 
 def clips(value):
@@ -316,19 +321,17 @@ def bounds(value):
 # The share of a text that a reader sees comes from these properties. Opacity and shrinking multiply down the tree
 # and across properties, so elements or properties that are each readable can together be too faint or too small.
 # A growing element counts as no change. A box that clips and has a set height can hold its text below the box.
+# A font size is a share of the default size.
 FACTORS = {
-    "opacity": fraction,
-    "filter": lambda value: math.prod(map(fraction, OPACITY_FILTER.findall(value))),
-    "transform": lambda value: math.prod(map(scale_factor, SCALE.findall(value))),
-    "scale": scale_factor,
-    "zoom": fraction,
-    "font-size": font_factor,
-    "font": font_factor,
-    **dict.fromkeys(("overflow", "overflow-x", "overflow-y", "overflow-block", "overflow-inline"), clips),
-    **dict.fromkeys(("height", "max-height", "block-size", "max-block-size"), bounds),
+    "opacity": {"opacity": fraction},
+    "filter": {"filter": lambda value: math.prod(map(fraction, OPACITY_FILTER.findall(value)))},
+    "transform": {"transform": lambda value: math.prod(map(scale_factor, SCALE.findall(value)))},
+    "scale": {"scale": scale_factor},
+    "zoom": {"zoom": fraction},
+    **dict.fromkeys(("font-size", "font"), {"font-size": font_factor, "font-px": font_px}),
+    **dict.fromkeys(("overflow", "overflow-x", "overflow-y", "overflow-block", "overflow-inline"), {"overflow": clips}),
+    **dict.fromkeys(("height", "max-height", "block-size", "max-block-size"), {"height": bounds}),
 }
-GROUPS = {"font": "font-size", "overflow-x": "overflow", "overflow-y": "overflow", "overflow-block": "overflow",
-          "overflow-inline": "overflow", "max-height": "height", "block-size": "height", "max-block-size": "height"}
 
 
 def merged(*found):
@@ -341,17 +344,26 @@ def merged(*found):
 
 
 def factors(css):
-    return merged(*(
-        {GROUPS.get(name, name): min(max(FACTORS[name](value), 0.0), 1.0) if readable(value) else 0.0}
-        for name, value in declarations(css)
-        if name in FACTORS
-    ))
+    found = {}
+    for name, value in declarations(css):
+        for group, factor in FACTORS.get(name, {}).items():
+            share = factor(value) if readable(value) else 0.0
+            if share is not None:
+                found[group] = min(max(share, 0.0), 1.0, found.get(group, 1.0))
+    return found
 
 
 def share(factors):
     if factors.get("overflow", 1.0) == 0 and factors.get("height", 1.0) == 0:
         return 0.0
-    return math.prod(factor for group, factor in factors.items() if group not in ("overflow", "height"))
+    return math.prod(
+        factor for group, factor in factors.items() if group not in ("overflow", "height", "font-size", "font-px")
+    )
+
+
+def font_scale(factors, parent):
+    sizes = [parent * factors["font-size"]] if "font-size" in factors else []
+    return min(sizes + [factors["font-px"]] if "font-px" in factors else sizes, default=parent)
 
 
 def target_factors(stylesheets):
@@ -418,8 +430,9 @@ class _TextExtractor(_HtmlParser):
             for (target_tag, target_id, target_classes), found in self.target_factors.items()
             if target_tag in (None, tag) and target_id in (None, attributes.get("id")) and target_classes <= classes
         )
-        inherited = self.stack[-1][3] if self.stack else 1.0
-        return inherited * share(merged(factors(attributes.get("style") or ""), *styled))
+        inherited, parent_font = self.stack[-1][3] if self.stack else (1.0, 1.0)
+        found = merged(factors(attributes.get("style") or ""), *styled)
+        return inherited * share(found), font_scale(found, parent_font)
 
     def hidden(self, tag, attributes, level):
         return (
@@ -429,7 +442,7 @@ class _TextExtractor(_HtmlParser):
             or "hidden" in attributes
             or attributes.get("aria-hidden") == "true"
             or hides(attributes.get("style") or "")
-            or level < FAINT
+            or math.prod(level) < FAINT
         )
 
     def handle_starttag(self, tag, attrs):
