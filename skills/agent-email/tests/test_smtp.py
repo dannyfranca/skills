@@ -1,7 +1,7 @@
 import os
 import sys
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from pathlib import Path
 from unittest.mock import patch
@@ -129,7 +129,13 @@ class SmtpProviderTests(unittest.TestCase):
         after = datetime(2026, 11, 9, 10, 0, tzinfo=timezone.utc)
         found = smtp.SmtpProvider().list(after=after)
         self.assertEqual([m.id for m in found], ["2"])
-        self.assertEqual(FakeImap.last_search, ("SINCE", "09-Nov-2026"))
+        self.assertEqual(FakeImap.last_search, ("SINCE", "08-Nov-2026"))
+
+    def test_search_starts_a_day_early_for_server_time_zones(self):
+        FakeImap.store[b"3"] = ("08-Nov-2026 19:01:00 -0500", raw("x@site.com", "West", "Sun, 08 Nov 2026 19:01:00 -0500"))
+        found = smtp.SmtpProvider().list(after=datetime(2026, 11, 9, 2, 0, tzinfo=timezone(timedelta(hours=2))))
+        self.assertEqual(FakeImap.last_search, ("SINCE", "08-Nov-2026"))
+        self.assertIn("3", [m.id for m in found])
 
     def test_list_uses_the_server_receive_time_not_the_date_header(self):
         FakeImap.store[b"3"] = ("09-Nov-2026 10:01:00 +0000", raw("x@site.com", "Skewed", "Mon, 09 Nov 2026 10:05:00 -0000"))
@@ -157,6 +163,11 @@ class SmtpProviderTests(unittest.TestCase):
         self.assertIn("https://site.com/v", message.html)
         self.assertEqual(message.attachments, ["terms.pdf"])
         self.assertIsNone(message.armor)
+
+    def test_unknown_charset_still_gives_the_text(self):
+        unknown = b"From: x@site.com\r\nSubject: Odd\r\nContent-Type: text/plain; charset=x-unknown\r\n\r\nCode 654321\r\n"
+        FakeImap.store[b"3"] = ("09-Nov-2026 11:00:00 +0000", unknown)
+        self.assertIn("654321", smtp.SmtpProvider().read("3").text)
 
     def test_read_of_unknown_id_fails(self):
         with self.assertRaises(SystemExit) as error:
