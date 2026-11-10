@@ -472,6 +472,16 @@ class HtmlToTextTests(unittest.TestCase):
             text, _ = sanitize.html_to_text(html)
             self.assertEqual(text.split(), ["Seen"], html)
 
+    def test_all_inherit_takes_the_parent_value_of_each_property(self):
+        for html in (
+            '<div style="opacity:.2">' + '<div style="all:inherit">' * 6 + "A" + "</div>" * 7 + "<p>Seen</p>",
+            "<style>.i {ALL: inherit !important}</style><div style='transform:scale(.3)'>"
+            + "<div class='i'>" * 3 + "A" + "</div>" * 4 + "<p>Seen</p>",
+            '<div style="opacity:.5"><p style="all:inherit">Seen</p></div>',
+        ):
+            text, _ = sanitize.html_to_text(html)
+            self.assertEqual(text.split(), ["Seen"], html)
+
     def test_parent_font_units_scale_the_parent_size(self):
         text, _ = sanitize.html_to_text('<div style="font-size:2px"><span style="font-size:.5ex">A</span></div><p>Seen</p>')
         self.assertEqual(text.split(), ["Seen"])
