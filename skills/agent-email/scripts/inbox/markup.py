@@ -385,10 +385,17 @@ def merged(*found):
     return factors
 
 
+# A font size and a text colour pass to the children, so "inherit" on them keeps the parent value already.
+INHERITED_GROUPS = ("font-size", "font-px", "font-root", "color", "fill")
+
+
 def factors(css):
     found = {}
     for name, value in declarations(css):
         for group, factor in FACTORS.get(name, {}).items():
+            if value == "inherit" and group not in INHERITED_GROUPS:
+                found[("inherit", group)] = 0.0
+                continue
             share = factor(value) if readable(value) else 0.0
             if share is not None:
                 found[group] = min(max(share, 0.0), 1.0, found.get(group, 1.0))
@@ -406,7 +413,7 @@ def share(factors):
 
 # The fill paints the text and hides its colour. A faint colour still counts, as the hides check also reads it.
 def painted(level):
-    presence, font, colour, fill = level
+    presence, font, colour, fill, _ = level
     return presence * font * min(colour, fill)
 
 
@@ -499,13 +506,17 @@ class _TextExtractor(_HtmlParser):
             for (target_tag, target_id, target_classes), found in self.target_factors.items()
             if target_tag in (None, tag) and target_id in (None, attributes.get("id")) and target_classes <= classes
         )
-        inherited, parent_font, parent_colour, parent_fill = parent or (
-            self.stack[-1][3] if self.stack else (1.0, 1.0, 1.0, 1.0)
+        inherited, parent_font, parent_colour, parent_fill, parent_own = parent or (
+            self.stack[-1][3] if self.stack else (1.0, 1.0, 1.0, 1.0, {})
         )
         found = merged(factors(attributes.get("style") or ""), *styled)
+        # "inherit" on a property that does not inherit takes the value the parent itself sets.
+        for key in [key for key in found if isinstance(key, tuple)]:
+            del found[key]
+            found[key[1]] = min(found.get(key[1], 1.0), parent_own.get(key[1], 1.0))
         # The text colour and fill are inherited each on its own, and a value on the element replaces it.
         colour, fill = found.get("color", parent_colour), found.get("fill", parent_fill)
-        return inherited * share(found), font_scale(found, parent_font, self.root_font), colour, fill
+        return inherited * share(found), font_scale(found, parent_font, self.root_font), colour, fill, found
 
     def hidden(self, tag, attributes, level):
         return (
