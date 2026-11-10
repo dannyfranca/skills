@@ -521,6 +521,16 @@ class HtmlToTextTests(unittest.TestCase):
             text, _ = sanitize.html_to_text(html)
             self.assertEqual(text.split(), ["Seen"], html)
 
+    def test_end_tag_outside_scope_keeps_the_element_open(self):
+        for html in (
+            "<div hidden><table></div><tr><td>A</td></tr></table></div><p>Seen</p>",
+            "<div style='opacity:.3'><table><tr><td></div><p style='opacity:.3'>A</p></td></tr></table></div><p>Seen</p>",
+        ):
+            text, _ = sanitize.html_to_text(html)
+            self.assertEqual(text.split(), ["Seen"], html)
+        text, _ = sanitize.html_to_text("<div hidden><p>A</div><table><tr><td>Seen</td></tr></table>")
+        self.assertEqual(text.split(), ["Seen"])
+
     def test_frameset_text_hides(self):
         text, _ = sanitize.html_to_text("<p>Seen</p><frameset><frame src=about:blank>A</frameset>")
         self.assertEqual(text.split(), ["Seen"])
