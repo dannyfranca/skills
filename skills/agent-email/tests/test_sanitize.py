@@ -582,6 +582,18 @@ class HtmlToTextTests(unittest.TestCase):
             text, _ = sanitize.html_to_text(html)
             self.assertNotIn("654321", text, html)
 
+    def test_root_tags_after_svg_or_math_cannot_unhide_the_mail(self):
+        for html in (
+            "<svg><html style=font-size:16px></html></svg><html style=font-size:0><p>Code 654321</p><p>Seen</p>",
+            "<math><body style=opacity:1></body></math><body style=opacity:0><p>Code 654321</p><p>Seen</p>",
+            "<style>.h{font-size:0}</style><svg><html class=v></html></svg><html class=h><p>Code 654321</p>",
+            "<style>#h{font-size:0}</style><svg><html id=v></html></svg><html id=h><p>Code 654321</p>",
+        ):
+            text, _ = sanitize.html_to_text(html)
+            self.assertNotIn("654321", text, html)
+        text, _ = sanitize.html_to_text("<html style=font-size:16px><body><svg><title>Logo</title></svg><p>Seen</p>")
+        self.assertIn("Seen", text)
+
     def test_end_tags_rejected_by_a_scope_barrier_stay_fast(self):
         start = time.monotonic()
         text, _ = sanitize.html_to_text("<div>" + "<span>" * 12000 + "<table>" + "</div>" * 12000 + "</table><p>Seen</p>")

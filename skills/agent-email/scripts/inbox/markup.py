@@ -118,6 +118,7 @@ MAX_VALUE = 200
 
 ANY_ELEMENT = (None, None, frozenset())
 ROOT_TAGS = ("html", "body")
+FOREIGN_TAGS = {"svg", "math"}
 # A real mail hides a few blocks. Thousands of distinct hiding rules only make every element check them all.
 MAX_HIDING_TARGETS = 200
 
@@ -516,15 +517,31 @@ class _StyleCollector(_HtmlParser):
         super().__init__()
         self.inside, self.stylesheets, self.templates = False, [], 0
         self.root_attributes = {tag: {} for tag in ROOT_TAGS}
+        self.foreign, self.unresolved = False, False
 
     def handle_starttag(self, tag, attrs):
         self.inside = tag == "style"
         self.templates += tag == "template"
+        self.foreign |= tag in FOREIGN_TAGS and not self.templates
         # A browser adds the attributes of each html or body tag to the one element, and the first value of each
         # wins. A late tag also styles the content before it. Inside a template it ignores these tags.
         if tag in ROOT_TAGS and not self.templates:
             for name, value in attrs:
-                self.root_attributes[tag].setdefault(name, value)
+                self.add_root_attribute(self.root_attributes[tag], name, value)
+
+    def add_root_attribute(self, attributes, name, value):
+        if name not in attributes:
+            attributes[name] = value
+        elif not self.foreign or attributes[name] == value:
+            return
+        # In svg or math such a tag makes a foreign element and leaves the root alone. The policy does not track
+        # where foreign content ends, so it takes the styles of both tags, and the lowest value of each wins.
+        elif name == "style":
+            attributes[name] = f"{attributes[name] or ''};{value or ''}"
+        elif name == "class":
+            attributes[name] = f"{attributes[name] or ''} {value or ''}"
+        else:
+            self.unresolved = True
 
     def handle_endtag(self, tag):
         self.inside = False
@@ -725,6 +742,9 @@ def html_to_text(html):
     styles = _StyleCollector()
     styles.feed(html)
     styles.close()
+    # The policy cannot tell which element holds this id or other attribute, so it withholds the mail.
+    if styles.unresolved:
+        return "", []
     extractor = _TextExtractor(target_factors(styles.stylesheets), styles.root_attributes)
     extractor.feed(html)
     extractor.close()
