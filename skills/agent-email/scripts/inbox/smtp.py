@@ -8,6 +8,7 @@ import ssl
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from email.parser import BytesHeaderParser
+from email.policy import compat32
 from email.policy import default as default_policy
 from email.utils import make_msgid
 
@@ -18,19 +19,26 @@ TIMEOUT_SECONDS = 30
 INTERNALDATE = re.compile(rb'INTERNALDATE "([^"]+)"')
 
 
-def message_of(uid, received, raw, complete, with_body):
-    message = Message(
-        id=uid,
-        sender=str(raw["From"] or ""),
-        subject=str(raw["Subject"] or ""),
-        received=received,
-        labels=[] if complete else ["unparsable"],
-    )
-    if with_body and complete:
-        message.text = body(raw, "plain")
-        message.html = body(raw, "html")
-        message.attachments = [part.get_filename() or "unnamed" for part in raw.iter_attachments()]
-    return message
+def message_of(uid, received, data, with_body):
+    try:
+        raw = email.message_from_bytes(data, policy=default_policy)
+        message = Message(id=uid, sender=str(raw["From"] or ""), subject=str(raw["Subject"] or ""), received=received)
+        if with_body:
+            message.text = body(raw, "plain")
+            message.html = body(raw, "html")
+            message.attachments = [part.get_filename() or "unnamed" for part in raw.iter_attachments()]
+        return message
+    # The parser reads MIME parts and structured headers by recursion. Mail nested deep enough to exhaust the stack
+    # is no mail a person sends, and it must not stop each wait. The raw headers still name the mail.
+    except RecursionError:
+        headers = BytesHeaderParser(policy=compat32).parsebytes(data)
+        return Message(
+            id=uid,
+            sender=str(headers["From"] or ""),
+            subject=str(headers["Subject"] or ""),
+            received=received,
+            labels=["unparsable"],
+        )
 
 
 def body(raw, subtype):
@@ -50,15 +58,6 @@ def received_of(attributes):
     return datetime.strptime(found.group(1).decode().strip(), "%d-%b-%Y %H:%M:%S %z") if found else None
 
 
-def parsed(data):
-    try:
-        return email.message_from_bytes(data, policy=default_policy), True
-    # MIME nested deep enough to exhaust the stack is no mail a person sends, and it must not stop each wait.
-    # The headers still name the mail.
-    except RecursionError:
-        return BytesHeaderParser(policy=default_policy).parsebytes(data), False
-
-
 def fetched(response):
     for index, part in enumerate(response):
         if not isinstance(part, tuple):
@@ -68,7 +67,7 @@ def fetched(response):
         attributes = part[0] + after
         uid = re.search(rb"UID (\d+)", attributes)
         if uid:
-            yield uid.group(1).decode(), received_of(attributes), *parsed(part[1])
+            yield uid.group(1).decode(), received_of(attributes), part[1]
 
 
 def ok(reply, action):
@@ -121,8 +120,8 @@ class SmtpProvider(Provider):
     def fetch(self, message_id):
         with self.open_inbox() as mailbox:
             response = ok(mailbox.uid("FETCH", message_id, "(INTERNALDATE BODY.PEEK[])"), f"fetch message {message_id}")
-        for _, received, raw, complete in fetched(response):
-            return received, raw, complete
+        for _, received, data in fetched(response):
+            return received, data
         fail(f"no message with id {message_id}")
 
     def read(self, message_id):
@@ -154,7 +153,7 @@ class SmtpProvider(Provider):
         return self.deliver(to, subject, text)
 
     def reply(self, message_id, text):
-        _, original, _ = self.fetch(message_id)
+        original = email.message_from_bytes(self.fetch(message_id)[1], policy=default_policy)
         subject = str(original["Subject"] or "")
         if not subject.lower().startswith("re:"):
             subject = f"Re: {subject}"
