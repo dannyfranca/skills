@@ -137,6 +137,18 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text(html + "<p style='transform:rotate(5deg) scale(1.2);filter:grayscale(1)'>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
 
+    def test_other_hiding_properties_hide(self):
+        html = "".join(
+            f"<p style='{style}'>A</p>"
+            for style in (
+                "content-visibility:hidden", "scale:0", "translate:-9999px", "rotate:x 90deg", "zoom:0.01",
+                "mask-image:linear-gradient(transparent,transparent)", "-webkit-mask:url(#m)", "offset-path:path('M -9999 0')",
+            )
+        )
+        visible = "content-visibility:auto;scale:1.1;translate:5px;rotate:10deg;zoom:1.2;mask:none;offset-path:none"
+        text, _ = sanitize.html_to_text(html + f"<p style='{visible}'>Seen</p>")
+        self.assertEqual(text.split(), ["Seen"])
+
     def test_end_tag_does_not_close_a_hidden_element_it_skips(self):
         text, _ = sanitize.html_to_text("<span><div hidden>A</span>Code 654321</div><p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
