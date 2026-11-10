@@ -21,7 +21,8 @@ URL = re.compile(r"https?://[^\s<>\"'()\[\]{}\\]+", re.I)
 TRAILING_PUNCTUATION = ".,;:!?"
 # A domain starts only where a dotted run starts. A start inside the run retries the whole run, which is quadratic
 # on a long run that ends without a top-level domain.
-DOMAIN_IN_TEXT = re.compile(r"(?<![\w-])(?<![\w-]\.)(?:[a-z0-9-]+\.)+[a-z]{2,63}\b", re.I)
+# Labels and top-level domains can be in any script.
+DOMAIN_IN_TEXT = re.compile(r"(?<![\w-])(?<![\w-]\.)(?:(?:[^\W_]|-)+\.)+[^\W\d_]{2,63}\b", re.I)
 CODE_KEYWORD = r"(?:code|otp|pin|passcode|password|token|verification|verify|c[óo]digo)"
 CODE_NEAR_KEYWORD = re.compile(
     rf"{CODE_KEYWORD}[^\n]{{0,40}}?\b((?=[A-Za-z0-9]*\d)[A-Za-z0-9]{{4,8}}|\d{{3}}[- ]\d{{3}})\b", re.I
@@ -58,7 +59,13 @@ def clean_line(text, limit=LINE_LIMIT):
 
 
 def site(host):
-    labels = (host or "").lower().rstrip(".").split(".")
+    # A label can show the Unicode form of a host and the URL its ASCII form. A host the codec rejects stays
+    # as it is, so it differs from both forms.
+    try:
+        host = (host or "").encode("idna").decode()
+    except UnicodeError:
+        pass
+    labels = host.lower().rstrip(".").split(".")
     keep = 3 if len(labels) >= 3 and len(labels[-1]) == 2 and len(labels[-2]) <= 3 else 2
     return ".".join(labels[-keep:])
 

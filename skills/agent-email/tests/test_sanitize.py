@@ -574,6 +574,14 @@ class LinkTests(unittest.TestCase):
         )
         self.assertEqual([f["flag"] for f in found], ["text-mismatch", "other-domain"])
 
+    def test_flags_international_domain_labels(self):
+        found = sanitize.links(
+            [("https://evil.net/v", "bücher.de"), ("https://evil.net/w", "trusted.みんな"), ("https://xn--bcher-kva.de/v", "BÜCHER.de")],
+            "",
+            "evil.net",
+        )
+        self.assertEqual([f["flag"] for f in found], ["text-mismatch", "text-mismatch", "other-domain"])
+
     def test_drops_links_that_do_not_parse(self):
         found = sanitize.links([], "https://ｅxample.com：443/v https://site.com/v", "site.com")
         self.assertEqual([f["url"] for f in found], ["https://site.com/v"])
