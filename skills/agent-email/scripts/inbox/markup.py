@@ -289,7 +289,7 @@ def css_rules(css):
 def opacity(css):
     # Each opacity multiplies down the tree, so nested elements that are each readable can together be too faint.
     # The lowest value of each kind counts: a browser drops a value it cannot parse, and only it knows which.
-    found = declarations(css)
+    found = list(declarations(css))
     levels = [fraction(value) for name, value in found if name == "opacity"]
     filters = [math.prod(map(fraction, OPACITY_FILTER.findall(value))) for name, value in found if name == "filter"]
     return min(max(min(levels, default=1.0), 0.0), 1.0) * min(max(min(filters, default=1.0), 0.0), 1.0)

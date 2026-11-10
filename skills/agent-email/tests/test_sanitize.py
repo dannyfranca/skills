@@ -272,6 +272,13 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text('<div style="opacity:.5"><div style="opacity:.5">Seen</div></div>')
         self.assertEqual(text.split(), ["Seen"])
 
+    def test_opacity_filters_compound(self):
+        chain = '<div style="filter:opacity(.5) opacity(.5) opacity(.3)">A</div>'
+        nested = '<div style="filter:opacity(.3)">' * 3 + "A" + "</div>" * 3
+        for html in (chain, nested):
+            text, _ = sanitize.html_to_text(html + "<p>Seen</p>")
+            self.assertEqual(text.split(), ["Seen"], html)
+
     def test_end_tag_does_not_close_a_hidden_element_it_skips(self):
         text, _ = sanitize.html_to_text("<span><div hidden>A</span>Code 654321</div><p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
