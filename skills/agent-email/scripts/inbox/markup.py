@@ -289,28 +289,50 @@ def css_rules(css):
         yield selectors[-1], "".join(declarations)
 
 
-def opacity(css):
-    # Each opacity multiplies down the tree, so nested elements that are each readable can together be too faint.
-    # The lowest value of each kind counts: a browser drops a value it cannot parse, and only it knows which.
+def scale_factor(arguments):
+    return min((abs(number / 100 if unit == "%" else number) for number, unit in numbers(arguments)), default=1.0)
+
+
+def font_factor(value):
+    # Only "em" and "%" sizes are relative to the parent font. An absolute size is checked by tiny().
+    if "smaller" in value:
+        return 5 / 6
+    relative = [number / 100 if unit == "%" else number for number, unit in numbers(value) if unit in ("em", "%")]
+    return relative[0] if relative else 1.0
+
+
+def presence(css):
+    # The share of a text that a reader sees. Opacity and shrinking multiply down the tree, so nested elements that
+    # are each readable can together be too faint or too small. The lowest value of each property counts: a browser
+    # drops a value it cannot parse, and only it knows which. A growing element counts as no change.
     found = list(declarations(css))
-    levels = [fraction(value) for name, value in found if name == "opacity"]
-    filters = [math.prod(map(fraction, OPACITY_FILTER.findall(value))) for name, value in found if name == "filter"]
-    return min(max(min(levels, default=1.0), 0.0), 1.0) * min(max(min(filters, default=1.0), 0.0), 1.0)
+
+    def lowest(names, factor):
+        return min(max(min((factor(value) for name, value in found if name in names), default=1.0), 0.0), 1.0)
+
+    return math.prod((
+        lowest(("opacity",), fraction),
+        lowest(("filter",), lambda value: math.prod(map(fraction, OPACITY_FILTER.findall(value)))),
+        lowest(("transform",), lambda value: math.prod(map(scale_factor, SCALE.findall(value)))),
+        lowest(("scale",), scale_factor),
+        lowest(("zoom",), fraction),
+        lowest(("font-size", "font"), font_factor),
+    ))
 
 
-def target_opacities(stylesheets):
+def target_presences(stylesheets):
     # Ancestors, pseudo-classes, and attributes are ignored: the sender controls all of them,
-    # so the parser hides too much rather than too little. A hiding rule gives no opacity at all.
-    opacities = {}
+    # so the parser hides too much rather than too little. A hiding rule leaves nothing to see.
+    presences = {}
     for stylesheet in stylesheets:
         for selectors, declarations in css_rules(stylesheet):
-            level = 0.0 if hides(declarations) else opacity(declarations)
+            level = 0.0 if hides(declarations) else presence(declarations)
             if level < 1:
                 for target in selector_targets(selectors):
-                    opacities[target] = min(level, opacities.get(target, 1.0))
-    if len(opacities) > MAX_HIDING_TARGETS:
-        return {ANY_ELEMENT: min(opacities.values())}
-    return opacities
+                    presences[target] = min(level, presences.get(target, 1.0))
+    if len(presences) > MAX_HIDING_TARGETS:
+        return {ANY_ELEMENT: min(presences.values())}
+    return presences
 
 
 def first_values(attrs):
@@ -350,24 +372,24 @@ class _StyleCollector(_HtmlParser):
 
 
 class _TextExtractor(_HtmlParser):
-    def __init__(self, opacities):
+    def __init__(self, presences):
         super().__init__()
-        self.opacities = opacities
+        self.presences = presences
         self.stack, self.hidden_depth, self.parts, self.anchors, self.anchor = [], 0, [], [], None
         self.positions, self.hidden_positions = defaultdict(list), []
 
-    def opacity(self, tag, attributes):
+    def presence(self, tag, attributes):
         classes = set((attributes.get("class") or "").split())
         styled = min(
             (
                 level
-                for (target_tag, target_id, target_classes), level in self.opacities.items()
+                for (target_tag, target_id, target_classes), level in self.presences.items()
                 if target_tag in (None, tag) and target_id in (None, attributes.get("id")) and target_classes <= classes
             ),
             default=1.0,
         )
         inherited = self.stack[-1][3] if self.stack else 1.0
-        return inherited * styled * opacity(attributes.get("style") or "")
+        return inherited * styled * presence(attributes.get("style") or "")
 
     def hidden(self, tag, attributes, level):
         return (
@@ -386,7 +408,7 @@ class _TextExtractor(_HtmlParser):
         if tag in VOID_TAGS:
             return
         attributes = first_values(attrs)
-        level = self.opacity(tag, attributes)
+        level = self.presence(tag, attributes)
         hidden = self.hidden(tag, attributes, level)
         if self.in_closed_details() and tag == "summary":
             self.stack[-1][2]["summary_shown"] = True
@@ -453,7 +475,7 @@ def html_to_text(html):
     styles = _StyleCollector()
     styles.feed(html)
     styles.close()
-    extractor = _TextExtractor(target_opacities(styles.stylesheets))
+    extractor = _TextExtractor(target_presences(styles.stylesheets))
     extractor.feed(html)
     extractor.close()
     return "".join(extractor.parts), extractor.anchors

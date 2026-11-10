@@ -297,6 +297,17 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text('<p style="animation:none">Seen</p>')
         self.assertEqual(text.split(), ["Seen"])
 
+    def test_shrinking_styles_compound(self):
+        for style in ("transform:scale(.4)", "scale:.4", "zoom:.4", "font-size:.4em", "font-size:40%", "font-size:smaller"):
+            html = f'<div style="{style}">' * 15 + "A" + "</div>" * 15
+            text, _ = sanitize.html_to_text(html + "<p>Seen</p>")
+            self.assertEqual(text.split(), ["Seen"], style)
+        for style in ("transform:scale(.4) scale(.2)", "opacity:.5;transform:scale(.15)"):
+            text, _ = sanitize.html_to_text(f'<p style="{style}">A</p><p>Seen</p>')
+            self.assertEqual(text.split(), ["Seen"], style)
+        text, _ = sanitize.html_to_text('<div style="font-size:.8em"><p style="transform:scale(.5)">Seen</p></div>')
+        self.assertEqual(text.split(), ["Seen"])
+
     def test_end_tag_does_not_close_a_hidden_element_it_skips(self):
         text, _ = sanitize.html_to_text("<span><div hidden>A</span>Code 654321</div><p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
