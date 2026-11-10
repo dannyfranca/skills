@@ -26,6 +26,11 @@ SPECIAL = SCOPE | TABLE_TAGS | {
     "p", "param", "plaintext", "pre", "script", "search", "section", "select", "source", "style", "summary", "textarea",
     "title", "track", "ul", "wbr", "xmp",
 }
+FORMATTING_TAGS = {"a", "b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong", "tt", "u"}
+# A browser does not open formatting elements again past the start of one of these elements.
+FORMATTING_MARKERS = {"applet", "caption", "marquee", "object", "td", "template", "th"}
+# A real mail leaves a few formatting elements open. Thousands only make each end tag open them all again.
+MAX_REOPENED = 1000
 VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
 BLOCK_TAGS = {
     "p", "div", "br", "tr", "li", "table", "section", "article", "blockquote", "dialog", "details", "summary", "hr",
@@ -532,6 +537,7 @@ class _TextExtractor(_HtmlParser):
         self.target_factors = target_factors
         self.stack, self.hidden_depth, self.parts, self.anchors, self.anchor = [], 0, [], [], None
         self.positions, self.hidden_positions = defaultdict(list), []
+        self.reopen_budget = MAX_REOPENED
         self.root_font = 1.0
         # A browser makes the html and body elements even when the mail omits their tags, and stylesheets match them.
         for tag in ROOT_TAGS:
@@ -600,7 +606,7 @@ class _TextExtractor(_HtmlParser):
         self.positions[tag].append(len(self.stack))
         if hidden:
             self.hidden_positions.append(len(self.stack))
-        self.stack.append((tag, hidden, details, level, (len(self.parts), len(self.anchors))))
+        self.stack.append((tag, hidden, details, level, (len(self.parts), len(self.anchors)), attributes))
         self.hidden_depth += hidden
         if tag == "a" and not self.hidden_depth:
             # A browser closes an open anchor when the next one starts.
@@ -610,10 +616,10 @@ class _TextExtractor(_HtmlParser):
     # A declarative shadow root replaces the content of its host, and its slots can show any part of that content.
     # The policy does not evaluate slots, so the host and its earlier content are hidden.
     def hide_shadow_host(self):
-        host, _, details, level, (parts, anchors) = self.stack[-1]
+        host, _, details, level, (parts, anchors), attributes = self.stack[-1]
         del self.parts[parts:], self.anchors[anchors:]
         self.anchor = None
-        self.stack[-1] = (host, True, details, level, (parts, anchors))
+        self.stack[-1] = (host, True, details, level, (parts, anchors), attributes)
         self.hidden_positions.append(len(self.stack) - 1)
         self.hidden_depth += 1
 
@@ -635,8 +641,11 @@ class _TextExtractor(_HtmlParser):
         opened = self.positions[tag][-1]
         if any(found and found[-1] > opened for found in map(self.positions.get, barriers)):
             return
+        # A browser opens again each formatting element that the end tag of another element closes, so the text
+        # after it still takes its styles. This stops at the start of a table cell or similar.
+        reopened = []
         while self.stack:
-            open_tag, hidden, *_ = self.stack.pop()
+            open_tag, hidden, _, _, _, attributes = self.stack.pop()
             self.positions[open_tag].pop()
             if hidden:
                 self.hidden_positions.pop()
@@ -645,8 +654,23 @@ class _TextExtractor(_HtmlParser):
                 self.finish_anchor()
             if open_tag == tag:
                 break
+            if open_tag in FORMATTING_MARKERS:
+                reopened.clear()
+            elif open_tag in FORMATTING_TAGS:
+                reopened.append((open_tag, attributes))
         if tag in BLOCK_TAGS:
             self.parts.append("\n")
+        if tag in FORMATTING_MARKERS:
+            reopened.clear()
+        if not reopened or self.reopen_budget < 0:
+            return
+        self.reopen_budget -= len(reopened)
+        if self.reopen_budget < 0:
+            # The policy cannot tell the styles of the rest of the mail without that work, so it withholds it.
+            self.hidden_depth += 1
+            return
+        for open_tag, attributes in reversed(reopened):
+            self.handle_starttag(open_tag, attributes.items())
 
     def in_closed_details(self):
         # A closed <details> shows only its <summary>.
