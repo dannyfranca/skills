@@ -98,9 +98,15 @@ def host_of(url):
 IDEOGRAPHIC_DOTS = str.maketrans("\u3002\uff61", "..")
 
 
+def domains_in_text(text):
+    # Many scripts write vowels as combining marks, which "\w" does not match. The scan reads each mark as a letter.
+    letters = "".join("a" if unicodedata.category(ch)[0] == "M" else ch for ch in text)
+    return [text[match.start():match.end()] for match in DOMAIN_IN_TEXT.finditer(letters)]
+
+
 def named_sites(label):
     label = label.translate(IDEOGRAPHIC_DOTS)
-    hosts = [host_of(url) for url in URL.findall(label)] + DOMAIN_IN_TEXT.findall(URL.sub(" ", label))
+    hosts = [host_of(url) for url in URL.findall(label)] + domains_in_text(URL.sub(" ", label))
     return {site(host) for host in hosts if host}
 
 
