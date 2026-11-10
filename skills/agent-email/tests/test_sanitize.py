@@ -422,6 +422,16 @@ class HtmlToTextTests(unittest.TestCase):
             text, _ = sanitize.html_to_text(html)
             self.assertEqual(text.split(), [], html)
 
+    def test_faint_text_colour_combines_with_opacity(self):
+        for html in (
+            '<p style="color:rgb(0 0 0 / .1);opacity:.1">A</p><p>Seen</p>',
+            "<style>.x{color:#0000001a}</style><div style='opacity:.1'><p class='x'>A</p></div><p>Seen</p>",
+            '<div style="color:rgba(0,0,0,.1)"><p style="opacity:.1">A</p><p style="color:inherit;opacity:.1">B</p></div><p>Seen</p>',
+            '<div style="color:rgba(0,0,0,.1)"><p style="color:#000;opacity:.1">Seen</p></div>',
+        ):
+            text, _ = sanitize.html_to_text(html)
+            self.assertEqual(text.split(), ["Seen"], html)
+
     def test_parent_font_units_scale_the_parent_size(self):
         text, _ = sanitize.html_to_text('<div style="font-size:2px"><span style="font-size:.5ex">A</span></div><p>Seen</p>')
         self.assertEqual(text.split(), ["Seen"])
