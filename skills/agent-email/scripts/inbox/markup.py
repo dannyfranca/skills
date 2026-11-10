@@ -9,6 +9,7 @@ from html.parser import HTMLParser
 SKIPPED_TAGS = {
     "script", "style", "head", "title", "template", "noscript", "svg", "math",
     "datalist", "select", "meter", "progress", "object", "iframe", "canvas", "audio", "video", "noembed", "noframes", "rp",
+    "frameset",
 }
 VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
 BLOCK_TAGS = {
