@@ -4,11 +4,14 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import timezone
+from datetime import timedelta, timezone
 
 from .base import Armor, Message, Provider, env, fail, parse_time
 
 DEFAULT_BASE_URL = "https://api.agentmail.to"
+# The API filters on "timestamp", the send time that the sender's clock sets. The wider window keeps mail
+# from a sender whose clock runs late, and the exact cutoff applies to the server receive time.
+CLOCK_SKEW = timedelta(days=1)
 
 
 def armor_of(raw):
@@ -22,7 +25,7 @@ def message_of(raw):
         id=raw["message_id"],
         sender=raw.get("from") or "",
         subject=raw.get("subject") or "",
-        received=parse_time(raw["timestamp"]) if raw.get("timestamp") else None,
+        received=parse_time(received) if (received := raw.get("created_at") or raw.get("timestamp")) else None,
         labels=raw.get("labels") or [],
         armor=armor_of(raw.get("agent_armor")),
         # extracted_* drops quoted replies, so an old thread cannot smuggle text into the new message.
@@ -66,10 +69,13 @@ class AgentMailProvider(Provider):
         query = {"limit": limit, "include_spam": "true", "include_unauthenticated": "true"}
         if after:
             # The API accepts only UTC times with a "Z" suffix, not "+00:00".
-            query["after"] = after.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            window = (after - CLOCK_SKEW).astimezone(timezone.utc)
+            query["after"] = window.isoformat(timespec="milliseconds").replace("+00:00", "Z")
         found = self.call("GET", "/messages", query)["messages"]
         # Mail sent to the own address carries both "sent" and "received", so only "received" means inbound.
-        return [message_of(raw) for raw in found if "received" in (raw.get("labels") or [])]
+        inbound = [message_of(raw) for raw in found if "received" in (raw.get("labels") or [])]
+        inbound = [m for m in inbound if not after or (m.received and m.received > after)]
+        return sorted(inbound, key=lambda m: m.received.timestamp() if m.received else 0, reverse=True)
 
     def read(self, message_id):
         return message_of(self.call("GET", self.message_path(message_id)))
