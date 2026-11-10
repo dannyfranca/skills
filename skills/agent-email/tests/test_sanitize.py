@@ -312,6 +312,15 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text("<select><option>A</option><option>Code 654321</option></select><p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
 
+    def test_properties_compound_across_rules(self):
+        for html in (
+            "<style>.x {scale:.3} .x {zoom:.3}</style><p class='x'>A</p>",
+            "<style>p {scale:.3} .x {zoom:.3}</style><p class='x'>A</p>",
+            "<style>.x {scale:.3}</style><p class='x' style='zoom:.3'>A</p>",
+        ):
+            text, _ = sanitize.html_to_text(html + "<div>Seen</div>")
+            self.assertEqual(text.split(), ["Seen"], html)
+
     def test_end_tag_does_not_close_a_hidden_element_it_skips(self):
         text, _ = sanitize.html_to_text("<span><div hidden>A</span>Code 654321</div><p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
