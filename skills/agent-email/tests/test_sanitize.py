@@ -348,6 +348,10 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text("<select><option>A</option><option>Code 654321</option></select><p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
 
+    def test_math_hides(self):
+        text, _ = sanitize.html_to_text("<math><mphantom><mtext>Code 654321</mtext></mphantom></math><p>Seen</p>")
+        self.assertEqual(text.split(), ["Seen"])
+
     def test_end_tag_does_not_close_a_hidden_element_it_skips(self):
         text, _ = sanitize.html_to_text("<span><div hidden>A</span>Code 654321</div><p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
