@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -106,11 +107,76 @@ class LoginTest(unittest.TestCase):
         run(self.fake, "delete", "example.com", "agent")
         self.assertEqual(self.fake.secrets, [])
 
+    def test_set_password_keeps_spaces_and_drops_only_the_newline(self):
+        self.fake.add("example.com/agent", "pw", "pending")
+
+        run(self.fake, "set-password", "example.com", "agent", stdin=" Site1! \r\n")
+
+        self.assertEqual(self.fake.secrets[0]["value"], " Site1! ")
+
+    def test_set_password_checks_status_after_reading_stdin(self):
+        self.fake.add("example.com/agent", "pw", "pending")
+
+        class ActivateOnRead(io.StringIO):
+            def read(stream):
+                note = json.loads(self.fake.secrets[0]["note"])
+                self.fake.secrets[0]["note"] = json.dumps({**note, "status": "active"})
+                return "new"
+
+        with patch.dict(os.environ, ENV), patch.object(login, "bws", self.fake), patch.object(login.sys, "stdin", ActivateOnRead()):
+            with self.assertRaises(SystemExit):
+                login.main(["set-password", "example.com", "agent"])
+        self.assertEqual(self.fake.secrets[0]["value"], "pw")
+
+    def test_note_that_is_not_an_object_counts_as_empty(self):
+        self.fake.add("example.com/agent", "pw", "pending")
+        for note in ("null", "[]", '"text"'):
+            self.fake.secrets[0]["note"] = note
+            with self.subTest(note=note):
+                self.assertEqual(run(self.fake, "list")[0]["status"], None)
+                self.assertEqual(run(self.fake, "get", "example.com", "agent")["password"], "pw")
+
     def test_missing_env_points_to_setup(self):
         with patch.dict(os.environ, {}, clear=True), self.assertRaises(SystemExit) as error:
             login.project_id()
 
         self.assertIn("setup.md", str(error.exception.code))
+
+
+class BwsProcessTest(unittest.TestCase):
+    def run_with(self, process, *argv):
+        out = io.StringIO()
+        with patch.dict(os.environ, ENV), patch.object(login.subprocess, "run", process), contextlib.redirect_stdout(out):
+            login.main(list(argv))
+        return out.getvalue()
+
+    def test_secret_output_of_bws_stays_captured(self):
+        stored = {"id": "1", "key": "example.com/agent", "value": "hunter2", "note": json.dumps({"status": "pending"})}
+
+        def process(command, **options):
+            self.assertTrue(options["capture_output"])
+            stdout = json.dumps([stored]) if command[3:5] == ["secret", "list"] else json.dumps(stored)
+            return subprocess.CompletedProcess(command, 0, stdout, "")
+
+        for argv in (["activate", "example.com", "agent"], ["delete", "example.com", "agent"], ["list"]):
+            with self.subTest(argv=argv):
+                self.assertNotIn("hunter2", self.run_with(process, *argv))
+
+    def test_bws_failure_reports_stderr(self):
+        def process(command, **_):
+            return subprocess.CompletedProcess(command, 1, "", "invalid token")
+
+        with self.assertRaises(SystemExit) as error:
+            self.run_with(process, "list")
+        self.assertEqual(error.exception.code, "login: invalid token")
+
+    def test_missing_bws_points_to_setup(self):
+        def process(command, **_):
+            raise FileNotFoundError(command[0])
+
+        with self.assertRaises(SystemExit) as error:
+            self.run_with(process, "list")
+        self.assertIn("bws is not installed", error.exception.code)
 
 
 if __name__ == "__main__":
