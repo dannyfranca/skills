@@ -1,11 +1,12 @@
 """Visible text and links of untrusted HTML mail."""
 
 import re
+from collections import Counter
 from html.parser import HTMLParser
 
 SKIPPED_TAGS = {"script", "style", "head", "title", "template", "noscript", "svg"}
 VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
-BLOCK_TAGS = {"p", "div", "br", "tr", "li", "table", "section", "article", "blockquote", "hr", "h1", "h2", "h3", "h4", "h5", "h6"}
+BLOCK_TAGS = {"p", "div", "br", "tr", "li", "table", "section", "article", "blockquote", "dialog", "details", "summary", "hr", "h1", "h2", "h3", "h4", "h5", "h6"}
 
 # A comment that never closes runs to the end of the stylesheet.
 CSS_COMMENT = re.compile(r"/\*.*?(?:\*/|\Z)", re.S)
@@ -198,6 +199,7 @@ class _TextExtractor(_HtmlParser):
         super().__init__()
         self.hiding = hiding
         self.stack, self.hidden_depth, self.parts, self.anchors, self.anchor = [], 0, [], [], None
+        self.open_tags = Counter()
 
     def hidden(self, tag, attributes):
         classes = set((attributes.get("class") or "").split())
@@ -207,6 +209,8 @@ class _TextExtractor(_HtmlParser):
         )
         return (
             tag in SKIPPED_TAGS
+            or (tag == "dialog" and "open" not in attributes)
+            or (self.in_closed_details() and tag != "summary")
             or "hidden" in attributes
             or attributes.get("aria-hidden") == "true"
             or hides(attributes.get("style") or "")
@@ -220,7 +224,8 @@ class _TextExtractor(_HtmlParser):
             return
         attributes = first_values(attrs)
         hidden = self.hidden(tag, attributes)
-        self.stack.append((tag, hidden))
+        self.stack.append((tag, hidden, tag == "details" and "open" not in attributes))
+        self.open_tags[tag] += 1
         self.hidden_depth += hidden
         if tag == "a" and not self.hidden_depth:
             # A browser closes an open anchor when the next one starts.
@@ -228,10 +233,11 @@ class _TextExtractor(_HtmlParser):
             self.anchor = (attributes.get("href") or "", [])
 
     def handle_endtag(self, tag):
-        if not any(open_tag == tag for open_tag, _ in self.stack):
+        if not self.open_tags[tag]:
             return
         while self.stack:
-            open_tag, hidden = self.stack.pop()
+            open_tag, hidden, _ = self.stack.pop()
+            self.open_tags[open_tag] -= 1
             self.hidden_depth -= hidden
             if open_tag == "a":
                 self.finish_anchor()
@@ -239,6 +245,10 @@ class _TextExtractor(_HtmlParser):
                 break
         if tag in BLOCK_TAGS:
             self.parts.append("\n")
+
+    def in_closed_details(self):
+        # A closed <details> shows only its <summary>.
+        return bool(self.stack) and self.stack[-1][2]
 
     def finish_anchor(self):
         if self.anchor:
@@ -251,7 +261,7 @@ class _TextExtractor(_HtmlParser):
         self.finish_anchor()
 
     def handle_data(self, data):
-        if self.hidden_depth:
+        if self.hidden_depth or self.in_closed_details():
             return
         self.parts.append(data)
         if self.anchor:
