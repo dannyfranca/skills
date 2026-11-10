@@ -389,10 +389,15 @@ def merged(*found):
 INHERITED_GROUPS = ("font-size", "font-px", "font-root", "color", "fill")
 
 
+INHERITING_ALL = {group: None for groups in FACTORS.values() for group in groups if group not in INHERITED_GROUPS}
+
+
 def factors(css):
     found = {}
     for name, value in declarations(css):
-        for group, factor in FACTORS.get(name, {}).items():
+        # "all: inherit" sets each property to "inherit". Its other values reset to the initial value, which shows text.
+        groups = INHERITING_ALL if name == "all" and value == "inherit" else FACTORS.get(name, {})
+        for group, factor in groups.items():
             if value == "inherit" and group not in INHERITED_GROUPS:
                 found[("inherit", group)] = 0.0
                 continue
