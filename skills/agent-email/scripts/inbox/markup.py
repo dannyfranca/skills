@@ -345,7 +345,7 @@ def factors(css):
 
 
 def share(factors):
-    if "overflow" in factors and "height" in factors:
+    if factors.get("overflow", 1.0) == 0 and factors.get("height", 1.0) == 0:
         return 0.0
     return math.prod(factor for group, factor in factors.items() if group not in ("overflow", "height"))
 
