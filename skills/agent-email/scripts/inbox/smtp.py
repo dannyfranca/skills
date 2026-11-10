@@ -116,7 +116,8 @@ class SmtpProvider(Provider):
             # INTERNALDATE has whole seconds, so mail from the second of the start time counts as later.
             cutoff = after.replace(microsecond=0)
             messages = [m for m in messages if m.received and m.received >= cutoff]
-        messages.sort(key=lambda m: m.received.timestamp() if m.received else 0, reverse=True)
+        # A server gives each new mail a higher UID, which orders the mail that arrives in the same second.
+        messages.sort(key=lambda m: (m.received.timestamp() if m.received else 0, int(m.id)), reverse=True)
         return messages[:limit]
 
     def fetch(self, message_id):
