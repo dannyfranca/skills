@@ -326,6 +326,9 @@ class HtmlToTextTests(unittest.TestCase):
             self.assertEqual(text.split(), ["Seen"], html)
         text, _ = sanitize.html_to_text('<div style="overflow:hidden">Seen</div><div style="height:50px">Too</div>')
         self.assertEqual(text.split(), ["Seen", "Too"])
+        for style in ("height:auto;overflow:visible", "height:80px;overflow:visible", "height:auto;overflow:hidden"):
+            text, _ = sanitize.html_to_text(f'<p style="{style}">Seen</p>')
+            self.assertEqual(text.split(), ["Seen"], style)
 
     def test_select_options_hide(self):
         text, _ = sanitize.html_to_text("<select><option>A</option><option>Code 654321</option></select><p>Seen</p>")
