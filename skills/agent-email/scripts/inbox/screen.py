@@ -15,6 +15,8 @@ def hold(message):
     for label in HELD_LABELS:
         if label in message.labels:
             return f"label {label}"
+    if len(message.html or "") > sanitize.MAX_HTML:
+        return "html too large to screen"
     armor = message.armor
     if armor is None or (armor.status == "complete" and armor.verdict == "clear"):
         return None

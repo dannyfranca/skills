@@ -41,6 +41,10 @@ class HoldTests(unittest.TestCase):
         self.assertIn("shown (armor: clear, guard: off)", text)
         self.assertIn("<codes>123456</codes>", text)
 
+    def test_html_too_large_to_screen_is_withheld(self):
+        oversized = Message("1", "noreply@site.com", "Code", None, html="<p>Code 123456</p>" + " " * screen.sanitize.MAX_HTML)
+        self.assertEqual(screen.hold(oversized), "html too large to screen")
+
     def test_listing_never_shows_codes(self):
         self.assertNotIn("123456", screen.listing(message()))
 
