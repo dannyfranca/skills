@@ -207,6 +207,12 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text(html)
         self.assertEqual(text.split(), ["Seen"])
 
+    def test_url_keeps_its_bounds_in_each_spelling(self):
+        for url in ('url( "x)")', r"u\72l(https://site.com/{)", r"u\72 l(https://site.com/{)", "URL(\n'x;}')"):
+            html = f'<style>.a {{background:{url};}} .hide {{display:none}}</style><p class="hide">A</p><p>Seen</p>'
+            text, _ = sanitize.html_to_text(html)
+            self.assertEqual(text.split(), ["Seen"], url)
+
     def test_each_stylesheet_starts_with_fresh_token_state(self):
         for start in ("/*", '.a {content:"x', "@media x {", ".a {background:url(x"):
             html = f'<style>{start}</style><style>.hide {{display:none}}</style><p class="hide">A</p><p>Seen</p>'

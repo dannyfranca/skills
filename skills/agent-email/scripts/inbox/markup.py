@@ -20,10 +20,11 @@ CSS_ESCAPE = re.compile(r"\\(?:([0-9a-f]{1,6})\s?|(.))", re.I | re.S)
 ESCAPE = r"\\(?:[0-9a-f]{1,6}\s?|.)"
 # A string ends at a newline, where a browser drops it as a bad string. A comment that never closes runs to the end.
 STRING = r"""(?:"(?:\\.|[^"\\\n])*"?|'(?:\\.|[^'\\\n])*'?)"""
-# An unquoted url() runs to its ")" whatever it holds, and a bad one runs to the end.
-URL = r"""(?<![\w-])url\(\s*(?!["'])(?:\\.|[^)\\])*\)?"""
+IDENTIFIER = rf"((?:[\w-]|{ESCAPE})+)"
 # Strings, URLs, escapes, and comments can hold braces, semicolons, and comment marks that are no CSS syntax.
-CSS_TOKEN = re.compile(rf"""(/\*.*?(?:\*/|\Z))|{URL}|{STRING}|{ESCAPE}|[{{}};]|[^{{}};"'\\/u]+|.""", re.I | re.S)
+CSS_TOKEN = re.compile(rf"""(/\*.*?(?:\*/|\Z))|{IDENTIFIER}(\()?|{STRING}|[{{}};]|[^{{}};"'\\/\w-]+|.""", re.I | re.S)
+# An unquoted url() runs to its ")" whatever it holds, and a bad one runs to the end. A quoted one is a function.
+UNQUOTED_URL = re.compile(r"""\s*+(?!["'])(?:\\.|[^)\\])*\)?""", re.S)
 NUMBER = re.compile(r"([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([a-z%]*)")
 SCALE = re.compile(r"scale[xyz3d]*\(([^)]*)\)")
 OPACITY_FILTER = re.compile(r"opacity\(([^)]*)\)")
@@ -32,7 +33,6 @@ COLOR_FUNCTION = re.compile(r"(?:rgb|hsl|hwb|lab|lch|oklab|oklch)a?\((.*)\)")
 # An unclosed bracket runs to the end, so a long run of "[" is one token and not one rescan per bracket.
 PSEUDO_OR_ATTRIBUTE = rf"""::?[\w-]+(?:\([^)]*(?:\)|\Z))?|\[(?:{STRING}|\\.|[^\]"'\\])*(?:\]|\Z)"""
 SELECTOR_TOKEN = re.compile(rf"({ESCAPE})|({PSEUDO_OR_ATTRIBUTE})|(\s*[\s>+~]\s*)|(,)|[^\\:\[\s>+~,]+|.", re.I | re.S)
-IDENTIFIER = rf"((?:[\w-]|{ESCAPE})+)"
 TAG = re.compile(IDENTIFIER, re.I | re.S)
 # One scan, so that the "." of an escaped "\." starts no class.
 COMPOUND_PART = re.compile(rf"#{IDENTIFIER}|\.{IDENTIFIER}|{ESCAPE}|.", re.I | re.S)
@@ -78,7 +78,18 @@ def unescape(css):
 def css_tokens(css):
     # CSS preprocessing makes CR, CRLF, and form feed a newline, so each one also ends a string.
     css = css.replace("\r\n", "\n").replace("\r", "\n").replace("\f", "\n")
-    return (" " if match.group(1) else match.group(0) for match in CSS_TOKEN.finditer(css))
+    position = 0
+    while position < len(css):
+        match = CSS_TOKEN.match(css, position)
+        position = match.end()
+        if match.group(1):
+            yield " "
+        elif match.group(3) and unescape(match.group(2)).lower() == "url":
+            url = UNQUOTED_URL.match(css, position)
+            position = url.end() if url else position
+            yield match.group(0) + (url.group(0) if url else "")
+        else:
+            yield match.group(0)
 
 
 def declarations(css):
