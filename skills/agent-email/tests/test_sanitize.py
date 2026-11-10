@@ -404,6 +404,15 @@ class HtmlToTextTests(unittest.TestCase):
             text, _ = sanitize.html_to_text(html)
             self.assertEqual(text.split(), ["Seen"], html)
 
+    def test_declarative_shadow_host_hides(self):
+        for html in (
+            '<div><template shadowrootmode="open"><p>A</p></template><p>B</p></div><p>Seen</p>',
+            '<div><p>B</p><a href="https://example.com/x">B</a><template shadowroot="open"></template></div><p>Seen</p>',
+        ):
+            text, anchors = sanitize.html_to_text(html)
+            self.assertEqual(text.split(), ["Seen"], html)
+            self.assertEqual(anchors, [], html)
+
     def test_parent_font_units_scale_the_parent_size(self):
         text, _ = sanitize.html_to_text('<div style="font-size:2px"><span style="font-size:.5ex">A</span></div><p>Seen</p>')
         self.assertEqual(text.split(), ["Seen"])
