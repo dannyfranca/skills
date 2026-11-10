@@ -631,6 +631,12 @@ class LinkTests(unittest.TestCase):
         found = sanitize.links([("https://example.xn--p1ai/v", "example.xn--p1ai")], "", "example.xn--p1ai")
         self.assertEqual(found[0]["flag"], "same-domain")
 
+    def test_flags_labels_with_ideographic_dots(self):
+        found = sanitize.links(
+            [("https://evil.net/v", "trusted\u3002com"), ("https://evil.net/w", "trusted\uff61com")], "", "evil.net"
+        )
+        self.assertEqual([f["flag"] for f in found], ["text-mismatch", "text-mismatch"])
+
     def test_sharp_s_hosts_keep_their_browser_form(self):
         found = sanitize.links(
             [("https://faß.de/v", "faß.de"), ("https://xn--fa-hia.de/w", "faß.de"), ("https://xn--fa-hia.de/x", "fass.de")],
