@@ -34,6 +34,14 @@ FORMATTING_MARKERS = {"applet", "caption", "marquee", "object", "td", "template"
 MAX_REOPENED_SIZE = 100_000
 REOPENED_ELEMENT_SIZE = 100
 VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
+# A browser ends an open paragraph before each of these elements starts. In quirks mode a table stays inside it, and
+# to keep it there can only hide more.
+PARAGRAPH_CLOSERS = {
+    "address", "article", "aside", "blockquote", "center", "details", "dialog", "dir", "div", "dl", "fieldset",
+    "figcaption", "figure", "footer", "header", "hgroup", "main", "menu", "nav", "ol", "p", "search", "section",
+    "summary", "ul", "h1", "h2", "h3", "h4", "h5", "h6", "pre", "listing", "form", "li", "dd", "dt", "plaintext", "hr",
+    "xmp",
+}
 BLOCK_TAGS = {
     "p", "div", "br", "tr", "li", "table", "section", "article", "blockquote", "dialog", "details", "summary", "hr",
     "h1", "h2", "h3", "h4", "h5", "h6",
@@ -614,6 +622,9 @@ class _TextExtractor(_HtmlParser):
         )
 
     def handle_starttag(self, tag, attrs):
+        ignored_form = tag == "form" and self.form_open and not self.positions["template"]
+        if tag in PARAGRAPH_CLOSERS and not ignored_form:
+            self.handle_endtag("p")
         if tag in BLOCK_TAGS and not self.hidden_depth:
             self.parts.append("\n")
         if tag in VOID_TAGS:
@@ -621,9 +632,9 @@ class _TextExtractor(_HtmlParser):
         if tag in ROOT_TAGS and self.positions[tag]:
             return
         # A browser ignores a form start while another form is open, except inside a template.
+        if ignored_form:
+            return
         if tag == "form" and not self.positions["template"]:
-            if self.form_open:
-                return
             self.form_open = True
         attributes = first_values(attrs)
         level = self.presence(tag, attributes)
