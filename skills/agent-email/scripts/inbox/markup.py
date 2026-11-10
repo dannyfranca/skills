@@ -74,6 +74,8 @@ def unescape(css):
 
 
 def css_tokens(css):
+    # CSS preprocessing makes CR, CRLF, and form feed a newline, so each one also ends a string.
+    css = css.replace("\r\n", "\n").replace("\r", "\n").replace("\f", "\n")
     return (" " if match.group(1) else match.group(0) for match in CSS_TOKEN.finditer(css))
 
 
