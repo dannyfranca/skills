@@ -25,6 +25,16 @@ class HtmlToTextTests(unittest.TestCase):
         for hidden in ("evil", "p{}", "forward", "tiny", "attr", "aria"):
             self.assertNotIn(hidden, text)
 
+    def test_drops_content_hidden_by_stylesheet_rules(self):
+        html = (
+            "<style>/* x */ .hide, #ghost { display: none } @media screen { div.tiny span { font-size: 0 } }"
+            " .note:hover { color: red }</style>"
+            "<p class='mail hide'>Hidden 111111</p><p id='ghost'>Ghost</p><div class='tiny'><span>Small</span></div>"
+            "<p class='note'>Code 123456</p><div class='tiny'>Seen</div>"
+        )
+        text, _ = sanitize.html_to_text(html)
+        self.assertEqual(text.split(), ["Code", "123456", "Seen"])
+
     def test_unclosed_void_tags_do_not_hide_later_text(self):
         text, _ = sanitize.html_to_text("<div style='display:none'><br>x</div><p>after<img src=a></p>")
         self.assertIn("after", text)
@@ -46,6 +56,9 @@ class CleanTests(unittest.TestCase):
 
     def test_strips_invisible_and_direction_characters(self):
         self.assertEqual(sanitize.clean("a​b‮c⁦d\x07e"), "abcde")
+
+    def test_strips_invisible_marks_outside_control_characters(self):
+        self.assertEqual(sanitize.clean("12\u034f34\ufe0f56\u180e"), "123456")
 
     def test_caps_length(self):
         cleaned = sanitize.clean("x" * 5000)
@@ -78,9 +91,23 @@ class LinkTests(unittest.TestCase):
         found = sanitize.links([("https://evil.net/x", "https://site.com/verify")], "", "site.com")
         self.assertEqual(found[0]["flag"], "text-mismatch")
 
+    def test_flags_label_with_any_top_level_domain(self):
+        found = sanitize.links(
+            [("https://evil.net/v", "https://trusted.online/v"), ("https://site.com/v?n=a.bc", "https://site.com/v?n=a.bc")],
+            "",
+            "evil.net",
+        )
+        self.assertEqual([f["flag"] for f in found], ["text-mismatch", "other-domain"])
+
+    def test_drops_links_that_do_not_parse(self):
+        found = sanitize.links([], "https://ｅxample.com：443/v https://site.com/v", "site.com")
+        self.assertEqual([f["url"] for f in found], ["https://site.com/v"])
+
     def test_keeps_only_web_links_without_invisible_characters(self):
         found = sanitize.links(
-            [("javascript:alert(1)", "x"), ("https://site.com/a‮", "x")], "See https://site.com/b.", "site.com"
+            [("javascript:alert(1)", "x"), ("https://site.com/a‮", "x"), ("https://site.com/c\u034f", "x")],
+            "See https://site.com/b.",
+            "site.com",
         )
         self.assertEqual([f["url"] for f in found], ["https://site.com/b"])
 
