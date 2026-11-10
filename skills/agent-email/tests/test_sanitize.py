@@ -487,6 +487,17 @@ class HtmlToTextTests(unittest.TestCase):
             text, _ = sanitize.html_to_text(html)
             self.assertEqual(text.split(), ["Seen"], html)
 
+    def test_unset_and_revert_inherit_a_property_that_inherits(self):
+        for html in (
+            '<div style="font-size:2px"><div style="font-size:16px;font-size:unset"><p style="font-size:.1em">A</p></div></div><p>Seen</p>',
+            '<div style="font-size:2px"><div style="font-size:16px;font:revert"><p style="font-size:.1em">A</p></div></div><p>Seen</p>',
+            '<div style="color:#fff0"><div style="color:#000;all:unset">A</div></div><p>Seen</p>',
+            "<style>.u {color:unset}</style><div style='color:#fff0'><p style='color:#000' class='u'>A</p></div><p>Seen</p>",
+            '<div style="opacity:.9"><div style="all:unset;font-size:16px;color:#000">Seen</div></div>',
+        ):
+            text, _ = sanitize.html_to_text(html)
+            self.assertEqual(text.split(), ["Seen"], html)
+
     def test_parent_font_units_scale_the_parent_size(self):
         text, _ = sanitize.html_to_text('<div style="font-size:2px"><span style="font-size:.5ex">A</span></div><p>Seen</p>')
         self.assertEqual(text.split(), ["Seen"])

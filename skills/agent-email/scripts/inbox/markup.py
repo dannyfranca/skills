@@ -386,17 +386,24 @@ def merged(*found):
 
 
 FONT_GROUPS = ("font-size", "font-px", "font-root")
-INHERITING_ALL = {group: None for groups in FACTORS.values() for group in groups}
+INHERITED_GROUPS = FONT_GROUPS + ("color", "fill")
+ALL_GROUPS = {group: None for groups in FACTORS.values() for group in groups}
+
+
+# "unset" and "revert" inherit a property that inherits. On any other property they set a value that shows text.
+def inherits(group, value):
+    return value == "inherit" or (value in ("unset", "revert", "revert-layer") and group in INHERITED_GROUPS)
 
 
 def factors(css):
     found = {}
     for name, value in declarations(css):
-        # "all: inherit" sets each property to "inherit". Its other values reset to the initial value, which shows text.
-        groups = INHERITING_ALL if name == "all" and value == "inherit" else FACTORS.get(name, {})
-        for group, factor in groups.items():
-            if value == "inherit":
+        # "all" takes only keywords. Those that do not inherit reset each property to a value that shows text.
+        for group, factor in (ALL_GROUPS if name == "all" else FACTORS.get(name, {})).items():
+            if inherits(group, value):
                 found[("inherit", group)] = 0.0
+                continue
+            if not factor:
                 continue
             share = factor(value) if readable(value) else 0.0
             if share is not None:
@@ -517,7 +524,7 @@ class _TextExtractor(_HtmlParser):
         inheriting = {key[1] for key in found if isinstance(key, tuple)}
         for group in inheriting:
             del found[("inherit", group)]
-            if group not in FONT_GROUPS + ("color", "fill"):
+            if group not in INHERITED_GROUPS:
                 found[group] = min(found.get(group, 1.0), parent_own.get(group, 1.0))
         font = font_scale(found, parent_font, self.root_font)
         if inheriting.intersection(FONT_GROUPS):
