@@ -6,7 +6,10 @@ from html.parser import HTMLParser
 
 SKIPPED_TAGS = {"script", "style", "head", "title", "template", "noscript", "svg"}
 VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
-BLOCK_TAGS = {"p", "div", "br", "tr", "li", "table", "section", "article", "blockquote", "dialog", "details", "summary", "hr", "h1", "h2", "h3", "h4", "h5", "h6"}
+BLOCK_TAGS = {
+    "p", "div", "br", "tr", "li", "table", "section", "article", "blockquote", "dialog", "details", "summary", "hr",
+    "h1", "h2", "h3", "h4", "h5", "h6",
+}
 
 # A comment that never closes runs to the end of the stylesheet.
 CSS_COMMENT = re.compile(r"/\*.*?(?:\*/|\Z)", re.S)
@@ -16,16 +19,31 @@ NUMBER = re.compile(r"([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([a-z%]*)")
 SCALE = re.compile(r"scale[xyz3d]*\(([^)]*)\)")
 OPACITY_FILTER = re.compile(r"opacity\(([^)]*)\)")
 HEX_ALPHA = re.compile(r"#(?:[0-9a-f]{3}([0-9a-f])|[0-9a-f]{6}([0-9a-f]{2}))")
-COLOR_FUNCTION = re.compile(r"(?:rgb|hsl)a?\((.*)\)")
+COLOR_FUNCTION = re.compile(r"(?:rgb|hsl|hwb|lab|lch|oklab|oklch)a?\((.*)\)")
 COMBINATOR = re.compile(r"\s*[\s>+~]\s*")
 SIBLING = re.compile(r"[+~]\s*\*\s*$")
-PSEUDO_OR_ATTRIBUTE = re.compile(r"::?[\w-]+(?:\([^)]*\))?|\[[^\]]*\]")
+# An unclosed bracket runs to the end, so a long run of "[" is one match and not one rescan per bracket.
+PSEUDO_OR_ATTRIBUTE = re.compile(r"::?[\w-]+(?:\([^)]*(?:\)|\Z))?|\[[^\]]*(?:\]|\Z)")
 
 FAINT = 0.1
 FAR_PX = 500
 EM_PX = 16
 BOX_SIZES = ("height", "width", "max-height", "max-width")
 OFFSETS = ("left", "top", "right", "bottom", "inset", "text-indent", "margin", "margin-left", "margin-top")
+
+# The values a visibility property may have for the policy to read them: words, numbers, hex colours, strings,
+# and functions of those. Any other value, such as calc() or var(), counts as hiding.
+NUMBER_TOKEN = r"[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?[a-z%]*"
+ATOM = rf"(?:{NUMBER_TOKEN}|-?[^\W\d][\w-]*|#[0-9a-f]{{3,8}}|\"[^\"]*\"|'[^']*')"
+SEPARATOR = r"\s*[\s,/]\s*"
+FUNCTION = (
+    r"(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|scale[xyz3d]*|translate[xyz3d]*|rotate[xyz3d]*|skew[xy]?|matrix(?:3d)?"
+    rf"|perspective|opacity|blur|brightness|contrast|grayscale|sepia|saturate|hue-rotate|invert|drop-shadow|rect)"
+    rf"\(\s*(?:{ATOM}(?:{SEPARATOR}{ATOM})*)?\s*\)"
+)
+TERM = rf"(?:{FUNCTION}|{ATOM})"
+READABLE_VALUE = re.compile(rf"{TERM}(?:{SEPARATOR}{TERM})*")
+MAX_VALUE = 200
 
 ANY_ELEMENT = (None, None, frozenset())
 # A real mail hides a few blocks. Thousands of distinct hiding rules only make every element check them all.
@@ -45,7 +63,7 @@ def unescape(css):
 def declarations(css):
     for declaration in CSS_COMMENT.sub("", css).split(";"):
         name, colon, value = declaration.partition(":")
-        name, value = unescape(name).strip().lower(), IMPORTANT.sub("", unescape(value).strip().lower())
+        name, value = unescape(name).strip().lower(), IMPORTANT.sub("", " ".join(unescape(value).lower().split()))
         if colon and name:
             yield name, value
 
@@ -89,10 +107,12 @@ def far_away(value):
 # reaches the agent inside the untrusted envelope and through the guard. Where a style can hide text, the check
 # reads it as hidden: a lost code costs one retry, an unseen instruction can cost the account.
 def hiding(name, value):
+    if name not in VISIBILITY_PROPERTIES:
+        return False
+    if len(value) > MAX_VALUE or not READABLE_VALUE.fullmatch(value):
+        return True
     return (
-        # A custom property can carry any value, and only a full cascade knows which one.
-        (name in VISIBILITY_PROPERTIES and "var(" in value)
-        or (name == "display" and value == "none")
+        (name == "display" and value == "none")
         or (name == "visibility" and value in ("hidden", "collapse"))
         or (name in ("font-size", "font") and tiny(value))
         or (name == "opacity" and fraction(value) < FAINT)
