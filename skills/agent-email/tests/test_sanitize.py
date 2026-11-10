@@ -719,6 +719,12 @@ class ContentTests(unittest.TestCase):
         details = sanitize.content(message(html="<a href='https://evil.net/verify'>https://site.com/verify</a>"), "site.com")
         self.assertEqual(details["links"], [{"url": "https://evil.net/verify", "flag": "text-mismatch"}])
 
+    def test_anchor_keeps_uri_punctuation_that_prose_ends_on(self):
+        details = sanitize.content(message(html="<a href='https://site.com/verify?token=ab(cd)[e]'>Verify</a>"), "site.com")
+        self.assertEqual(details["links"], [{"url": "https://site.com/verify?token=ab(cd)[e]", "flag": "same-domain"}])
+        details = sanitize.content(message(text="(see https://site.com/v)"), "site.com")
+        self.assertEqual(details["links"], [{"url": "https://site.com/v", "flag": "same-domain"}])
+
     def test_attachment_names_are_capped_and_cleaned(self):
         details = sanitize.content(message(attachments=["<a>.pdf"] * 12), "site.com")
         self.assertEqual(details["attachment_count"], 12)
