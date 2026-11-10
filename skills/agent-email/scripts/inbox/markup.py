@@ -20,8 +20,10 @@ CSS_ESCAPE = re.compile(r"\\(?:([0-9a-f]{1,6})\s?|(.))", re.I | re.S)
 ESCAPE = r"\\(?:[0-9a-f]{1,6}\s?|.)"
 # A string ends at a newline, where a browser drops it as a bad string. A comment that never closes runs to the end.
 STRING = r"""(?:"(?:\\.|[^"\\\n])*"?|'(?:\\.|[^'\\\n])*'?)"""
-# Strings, escapes, and comments can hold braces, semicolons, and comment marks that are no CSS syntax.
-CSS_TOKEN = re.compile(rf"""(/\*.*?(?:\*/|\Z))|{STRING}|{ESCAPE}|[{{}};]|[^{{}};"'\\/]+|.""", re.I | re.S)
+# An unquoted url() runs to its ")" whatever it holds, and a bad one runs to the end.
+URL = r"""(?<![\w-])url\(\s*(?!["'])(?:\\.|[^)\\])*\)?"""
+# Strings, URLs, escapes, and comments can hold braces, semicolons, and comment marks that are no CSS syntax.
+CSS_TOKEN = re.compile(rf"""(/\*.*?(?:\*/|\Z))|{URL}|{STRING}|{ESCAPE}|[{{}};]|[^{{}};"'\\/u]+|.""", re.I | re.S)
 NUMBER = re.compile(r"([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([a-z%]*)")
 SCALE = re.compile(r"scale[xyz3d]*\(([^)]*)\)")
 OPACITY_FILTER = re.compile(r"opacity\(([^)]*)\)")
