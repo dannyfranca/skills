@@ -149,6 +149,14 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text(html + f"<p style='{visible}'>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
 
+    def test_attribute_selector_with_spaces_hides_its_element(self):
+        html = (
+            "<style>div[data-note=\"a b\"] {display:none}</style>"
+            "<div data-note='a b'>Code 123456</div><p>Seen</p>"
+        )
+        text, _ = sanitize.html_to_text(html)
+        self.assertEqual(text.split(), ["Seen"])
+
     def test_end_tag_does_not_close_a_hidden_element_it_skips(self):
         text, _ = sanitize.html_to_text("<span><div hidden>A</span>Code 654321</div><p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
