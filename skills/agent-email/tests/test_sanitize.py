@@ -47,6 +47,23 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text(html)
         self.assertEqual(text.split(), ["Seen"])
 
+    def test_drops_text_hidden_by_zero_numbers_and_zero_alpha_colors(self):
+        html = (
+            "<style>.a { color: rgba(0, 0, 0, 0) } .b { color: hsl(0 0% 0% / 0%) }</style>"
+            "<p class='a'>A</p><p class='b'>B</p><p style='font-size:.0px'>C</p><p style='color:#fff0'>D</p>"
+            "<p style='color:#ffffff00'>E</p><p style='color: rgb(0,0,0)'>Black</p><p style='opacity:.5'>Half</p>"
+        )
+        text, _ = sanitize.html_to_text(html)
+        self.assertEqual(text.split(), ["Black", "Half"])
+
+    def test_ignores_selectors_without_an_element(self):
+        text, _ = sanitize.html_to_text("<style>> { display: none }</style><p>Code 123456</p>")
+        self.assertEqual(text.split(), ["Code", "123456"])
+
+    def test_keeps_an_anchor_left_open_at_the_end(self):
+        _, anchors = sanitize.html_to_text("<a href='https://evil.net/v'>https://site.com/v")
+        self.assertEqual(anchors, [("https://evil.net/v", "https://site.com/v")])
+
     def test_universal_selector_hides_only_under_its_ancestor(self):
         html = (
             "<style>.mobile-only * { display: none }</style>"
