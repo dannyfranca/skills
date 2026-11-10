@@ -29,7 +29,9 @@ FAINT = 0.1
 FAR_PX = 500
 EM_PX = 16
 BOX_SIZES = ("height", "width", "max-height", "max-width")
-OFFSETS = ("left", "top", "right", "bottom", "inset", "text-indent", "margin", "margin-left", "margin-top")
+OFFSETS = ("left", "top", "right", "bottom", "inset", "text-indent", "margin", "margin-left", "margin-top", "translate")
+# A mask or a motion path can hide or move text in ways the policy does not compute.
+NONE_OR_HIDING = ("mask", "mask-image", "-webkit-mask", "-webkit-mask-image", "offset", "offset-path")
 
 # The values a visibility property may have for the policy to read them: words, numbers, hex colours, strings,
 # and the functions the policy evaluates or that cannot hide text. Any other value, such as calc(), var(),
@@ -121,7 +123,13 @@ def hiding(name, value):
         or (name in BOX_SIZES and tiny(value))
         or (name == "clip" and value != "auto")
         or (name == "clip-path" and value != "none")
+        or (name == "content-visibility" and value not in ("visible", "auto"))
+        or (name in NONE_OR_HIDING and value != "none")
         or (name == "transform" and any(tiny(arguments) for arguments in SCALE.findall(value)))
+        or (name == "scale" and tiny(value))
+        or (name == "zoom" and fraction(value) < FAINT)
+        # Only a turn about the z axis keeps text facing the reader.
+        or (name == "rotate" and len(value.split()) > 1 and not value.startswith("z "))
         or (name == "filter" and any(fraction(argument) < FAINT for argument in OPACITY_FILTER.findall(value)))
         or (name in OFFSETS + ("transform",) and far_away(value))
     )
@@ -129,7 +137,8 @@ def hiding(name, value):
 
 VISIBILITY_PROPERTIES = {
     "display", "visibility", "font-size", "font", "opacity", "color", "-webkit-text-fill-color",
-    "clip", "clip-path", "transform", "filter", *BOX_SIZES, *OFFSETS,
+    "clip", "clip-path", "transform", "filter", "content-visibility", "scale", "zoom", "rotate",
+    *BOX_SIZES, *OFFSETS, *NONE_OR_HIDING,
 }
 
 
