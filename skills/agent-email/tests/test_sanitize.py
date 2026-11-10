@@ -531,6 +531,14 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text("<div hidden><p>A</div><table><tr><td>Seen</td></tr></table>")
         self.assertEqual(text.split(), ["Seen"])
 
+    def test_end_tag_of_an_element_outside_a_special_element_keeps_both_open(self):
+        for html in (
+            "<span style=font-size:2px><div></span><p style=font-size:.1em>Code 654321</p></div><p>Seen</p>",
+            "<b style=opacity:.3><p></b><i style=opacity:.3>Code 654321</i></p><p>Seen</p>",
+        ):
+            text, _ = sanitize.html_to_text(html)
+            self.assertEqual(text.split(), ["Seen"], html)
+
     def test_generated_pseudo_element_rules_leave_the_element_shown(self):
         html = (
             "<style>*::before {display:none} .c:after {content:'.';visibility:hidden;height:0} p::MARKER{opacity:0}</style>"
