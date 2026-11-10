@@ -249,11 +249,16 @@ def replaces(css):
 KEPT_CONTENT = ("normal", "none", "initial", "inherit", "unset", "revert", "revert-layer")
 
 
+# A mail without a doctype renders in quirks mode, where class and ID selectors ignore ASCII case. The policy cannot
+# trust the doctype the sender writes, so it matches them in any ASCII case.
+ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+
+
 def compound_target(compound):
     tag = TAG.match(compound)
     parts = COMPOUND_PART.findall(compound)
-    ids = [unescape(id) for id, _ in parts if id]
-    classes = frozenset(unescape(name) for _, name in parts if name)
+    ids = [unescape(id).translate(ASCII_LOWER) for id, _ in parts if id]
+    classes = frozenset(unescape(name).translate(ASCII_LOWER) for _, name in parts if name)
     return unescape(tag.group(0)).lower() if tag else None, ids[0] if ids else None, classes
 
 
@@ -509,11 +514,12 @@ class _TextExtractor(_HtmlParser):
             self.handle_starttag(tag, root_attributes[tag].items())
 
     def presence(self, tag, attributes, parent=None):
-        classes = set(re.split(WHITESPACE, attributes.get("class") or ""))
+        classes = set(re.split(WHITESPACE, (attributes.get("class") or "").translate(ASCII_LOWER)))
+        element_id = (attributes.get("id") or "").translate(ASCII_LOWER) or None
         styled = (
             found
             for (target_tag, target_id, target_classes), found in self.target_factors.items()
-            if target_tag in (None, tag) and target_id in (None, attributes.get("id")) and target_classes <= classes
+            if target_tag in (None, tag) and target_id in (None, element_id) and target_classes <= classes
         )
         inherited, parent_font, parent_colour, parent_fill, parent_own = parent or (
             self.stack[-1][3] if self.stack else (1.0, 1.0, 1.0, 1.0, {})

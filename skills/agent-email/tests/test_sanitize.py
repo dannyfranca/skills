@@ -504,6 +504,14 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text('<div style="font-size:12px"><span style="font-size:2ch">Seen</span></div>')
         self.assertEqual(text.split(), ["Seen"])
 
+    def test_class_and_id_selectors_match_in_any_ascii_case(self):
+        for html in (
+            "<style>.HIDE{display:none}</style><p class=hide>A</p><p>Seen</p>",
+            "<style>#Hide{display:none}</style><p id=hIDE>A</p><p>Seen</p>",
+        ):
+            text, _ = sanitize.html_to_text(html)
+            self.assertEqual(text.split(), ["Seen"], html)
+
     def test_object_fallback_hides(self):
         text, _ = sanitize.html_to_text('<object data="data:text/html,Visible">A</object><p>Seen</p>')
         self.assertEqual(text.split(), ["Seen"])
