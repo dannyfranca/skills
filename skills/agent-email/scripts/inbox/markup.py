@@ -125,13 +125,18 @@ def css_tokens(css):
             yield match.group(0)
 
 
+VENDOR_PREFIX = re.compile(r"^-(?:webkit|moz|ms|o)-")
+
+
 def declarations(css):
     # A semicolon inside a string splits it too, which can only add declarations and never hide a real one.
     for declaration in "".join(css_tokens(css)).split(";"):
         name, colon, value = declaration.partition(":")
         name, value = unescape(name).strip().lower(), IMPORTANT.sub("", " ".join(unescape(value).lower().split()))
+        # Browsers still read some prefixed names as the standard property. Reading all of them so can only hide more.
+        standard = VENDOR_PREFIX.sub("", name)
         if colon and name:
-            yield name, value
+            yield standard if standard in VISIBILITY_PROPERTIES or standard in FACTORS else name, value
 
 
 def numbers(value):
