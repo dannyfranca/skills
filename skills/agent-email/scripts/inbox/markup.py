@@ -301,9 +301,17 @@ def font_factor(value):
     return relative[0] if relative else 1.0
 
 
+def clips(value):
+    return 0.0 if value in ("hidden", "clip") else 1.0
+
+
+def bounds(value):
+    return 1.0 if value in ("auto", "none") else 0.0
+
+
 # The share of a text that a reader sees comes from these properties. Opacity and shrinking multiply down the tree
 # and across properties, so elements or properties that are each readable can together be too faint or too small.
-# A growing element counts as no change.
+# A growing element counts as no change. A box that clips and has a set height can hold its text below the box.
 FACTORS = {
     "opacity": fraction,
     "filter": lambda value: math.prod(map(fraction, OPACITY_FILTER.findall(value))),
@@ -312,8 +320,11 @@ FACTORS = {
     "zoom": fraction,
     "font-size": font_factor,
     "font": font_factor,
+    **dict.fromkeys(("overflow", "overflow-x", "overflow-y", "overflow-block", "overflow-inline"), clips),
+    **dict.fromkeys(("height", "max-height", "block-size", "max-block-size"), bounds),
 }
-GROUPS = {"font": "font-size"}
+GROUPS = {"font": "font-size", "overflow-x": "overflow", "overflow-y": "overflow", "overflow-block": "overflow",
+          "overflow-inline": "overflow", "max-height": "height", "block-size": "height", "max-block-size": "height"}
 
 
 def merged(*found):
@@ -334,7 +345,9 @@ def factors(css):
 
 
 def share(factors):
-    return math.prod(factors.values())
+    if "overflow" in factors and "height" in factors:
+        return 0.0
+    return math.prod(factor for group, factor in factors.items() if group not in ("overflow", "height"))
 
 
 def target_factors(stylesheets):
