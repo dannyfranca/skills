@@ -285,6 +285,18 @@ class HtmlToTextTests(unittest.TestCase):
             text, _ = sanitize.html_to_text(html)
             self.assertEqual(text.split(), ["Seen"], style)
 
+    def test_animated_text_hides(self):
+        keyframes = "<style>@keyframes hide {from {opacity:0} to {opacity:0}}</style>"
+        for html in (
+            '<p style="animation:hide 1s infinite">A</p>',
+            '<p style="animation-name:hide">A</p>',
+            "<style>.a {animation:hide 1s}</style><p class='a'>A</p>",
+        ):
+            text, _ = sanitize.html_to_text(keyframes + html + "<p>Seen</p>")
+            self.assertEqual(text.split(), ["Seen"], html)
+        text, _ = sanitize.html_to_text('<p style="animation:none">Seen</p>')
+        self.assertEqual(text.split(), ["Seen"])
+
     def test_end_tag_does_not_close_a_hidden_element_it_skips(self):
         text, _ = sanitize.html_to_text("<span><div hidden>A</span>Code 654321</div><p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])

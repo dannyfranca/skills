@@ -63,8 +63,10 @@ OFFSETS = (
     "inset-inline", "inset-block", "inset-inline-start", "inset-inline-end", "inset-block-start", "inset-block-end",
     "margin-inline", "margin-block", "margin-inline-start", "margin-block-start",
 )
-# A mask or a motion path can hide or move text in ways the policy does not compute.
-NONE_OR_HIDING = ("mask", "mask-image", "-webkit-mask", "-webkit-mask-image", "offset", "offset-path")
+# A mask, a motion path, or an animation can hide or move text in ways the policy does not compute.
+NONE_OR_HIDING = (
+    "mask", "mask-image", "-webkit-mask", "-webkit-mask-image", "offset", "offset-path", "animation", "animation-name",
+)
 
 # The values a visibility property may have for the policy to read them: words, numbers, hex colours, strings,
 # and the functions the policy evaluates or that cannot hide text. Any other value, such as calc(), var(),
