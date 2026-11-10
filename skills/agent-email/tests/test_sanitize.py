@@ -133,6 +133,10 @@ class LinkTests(unittest.TestCase):
         )
         self.assertEqual([f["url"] for f in found], ["https://site.com/b"])
 
+    def test_drops_links_with_backslashes(self):
+        found = sanitize.links([("https://evil.net\\@site.com/verify", "x")], "Go https://evil.net\\@site.com/v", "site.com")
+        self.assertEqual(found, [{"url": "https://evil.net", "flag": "other-domain"}])
+
     def test_site_keeps_country_second_level(self):
         self.assertEqual(sanitize.site("www.shop.co.uk"), "shop.co.uk")
         self.assertNotEqual(sanitize.site("a.co.uk"), sanitize.site("b.co.uk"))
@@ -149,6 +153,10 @@ class ContentTests(unittest.TestCase):
             message(text="Go https://evil.net/x", html="<a href='https://evil.net/x'>site.com</a>"), "site.com"
         )
         self.assertEqual(details["links"][0]["flag"], "text-mismatch")
+
+    def test_anchor_label_is_not_a_second_link(self):
+        details = sanitize.content(message(html="<a href='https://evil.net/verify'>https://site.com/verify</a>"), "site.com")
+        self.assertEqual(details["links"], [{"url": "https://evil.net/verify", "flag": "text-mismatch"}])
 
     def test_attachment_names_are_capped_and_cleaned(self):
         details = sanitize.content(message(attachments=["<a>.pdf"] * 12), "site.com")
