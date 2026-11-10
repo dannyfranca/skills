@@ -447,6 +447,11 @@ class HtmlToTextTests(unittest.TestCase):
         )
         self.assertEqual(text.split(), ["Seen"])
 
+    def test_failing_non_ascii_selectors_stay_fast(self):
+        start = time.monotonic()
+        text, _ = sanitize.html_to_text("<style>." + "é" * 40 + "|x {display:none}</style><p>Seen</p>")
+        self.assertLess(time.monotonic() - start, 0.5)
+
     def test_parent_font_units_scale_the_parent_size(self):
         text, _ = sanitize.html_to_text('<div style="font-size:2px"><span style="font-size:.5ex">A</span></div><p>Seen</p>')
         self.assertEqual(text.split(), ["Seen"])
