@@ -16,6 +16,16 @@ SCOPE = {"applet", "caption", "html", "table", "td", "th", "marquee", "object", 
 EXTRA_BARRIERS = {"li": {"ol", "ul"}, "p": {"button"}}
 TABLE_TAGS = {"table", "tbody", "thead", "tfoot", "tr", "td", "th", "caption", "colgroup"}
 TABLE_SCOPE = {"html", "table", "template"}
+# The end tag of any other element closes it only when no element of these kinds is open inside it. For a formatting
+# element the parser moves such an element out instead, and keeping both open can only hide more.
+SPECIAL = SCOPE | TABLE_TAGS | {
+    "address", "area", "article", "aside", "base", "basefont", "bgsound", "blockquote", "body", "br", "button",
+    "center", "col", "dd", "details", "dir", "div", "dl", "dt", "embed", "fieldset", "figcaption", "figure", "footer",
+    "form", "frame", "frameset", "h1", "h2", "h3", "h4", "h5", "h6", "head", "header", "hgroup", "hr", "iframe", "img",
+    "input", "keygen", "li", "link", "listing", "main", "menu", "meta", "nav", "noembed", "noframes", "noscript", "ol",
+    "p", "param", "plaintext", "pre", "script", "search", "section", "select", "source", "style", "summary", "textarea",
+    "title", "track", "ul", "wbr", "xmp",
+}
 VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
 BLOCK_TAGS = {
     "p", "div", "br", "tr", "li", "table", "section", "article", "blockquote", "dialog", "details", "summary", "hr",
@@ -616,7 +626,12 @@ class _TextExtractor(_HtmlParser):
         if self.hidden_positions and self.hidden_positions[-1] > self.positions[tag][-1]:
             return
         # A browser also ignores an end tag whose element is outside the scope that a table cell or similar opens.
-        barriers = TABLE_SCOPE if tag in TABLE_TAGS else SCOPE | EXTRA_BARRIERS.get(tag, set())
+        if tag in TABLE_TAGS:
+            barriers = TABLE_SCOPE
+        elif tag in SPECIAL:
+            barriers = SCOPE | EXTRA_BARRIERS.get(tag, set())
+        else:
+            barriers = SPECIAL
         if any(open_tag in barriers for open_tag, *_ in self.stack[self.positions[tag][-1] + 1:]):
             return
         while self.stack:
