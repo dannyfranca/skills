@@ -35,6 +35,28 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text(html)
         self.assertEqual(text.split(), ["Code", "123456", "Seen"])
 
+    def test_css_comments_do_not_unhide_inline_styles(self):
+        text, _ = sanitize.html_to_text("<div style='display:/**/none'>Hidden 123456</div><p>Seen</p>")
+        self.assertEqual(text.split(), ["Seen"])
+
+    def test_drops_transparent_text_but_not_transparent_backgrounds(self):
+        html = (
+            "<style>.hide { color: transparent }</style><p class='hide'>Code 999999</p>"
+            "<p style='color:TRANSPARENT'>Ghost</p><p style='background-color: transparent'>Seen</p>"
+        )
+        text, _ = sanitize.html_to_text(html)
+        self.assertEqual(text.split(), ["Seen"])
+
+    def test_universal_selector_hides_only_under_its_ancestor(self):
+        html = (
+            "<style>.mobile-only * { display: none }</style>"
+            "<p>Code 123456</p><div class='mobile-only'><span>Hidden</span></div>"
+        )
+        text, _ = sanitize.html_to_text(html)
+        self.assertEqual(text.split(), ["Code", "123456"])
+        text, _ = sanitize.html_to_text("<style>.gone ~ * { display: none }</style><p class='gone'>a</p><p>b</p>")
+        self.assertEqual(text.split(), [])
+
     def test_unclosed_void_tags_do_not_hide_later_text(self):
         text, _ = sanitize.html_to_text("<div style='display:none'><br>x</div><p>after<img src=a></p>")
         self.assertIn("after", text)
