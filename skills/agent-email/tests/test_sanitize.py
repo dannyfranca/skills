@@ -512,6 +512,10 @@ class HtmlToTextTests(unittest.TestCase):
             text, _ = sanitize.html_to_text(html)
             self.assertEqual(text.split(), ["Seen"], html)
 
+    def test_frameset_text_hides(self):
+        text, _ = sanitize.html_to_text("<p>Seen</p><frameset><frame src=about:blank>A</frameset>")
+        self.assertEqual(text.split(), ["Seen"])
+
     def test_object_fallback_hides(self):
         text, _ = sanitize.html_to_text('<object data="data:text/html,Visible">A</object><p>Seen</p>')
         self.assertEqual(text.split(), ["Seen"])
