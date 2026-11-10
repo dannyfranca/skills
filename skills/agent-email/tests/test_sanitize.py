@@ -379,6 +379,20 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text("<html><body><p>Seen</p></body></html><p>Too</p>")
         self.assertEqual(text.split(), ["Seen", "Too"])
 
+    def test_late_document_element_attributes_style_earlier_content(self):
+        for html in (
+            '<p>Code 654321</p><body style="display:none">',
+            "<style>.x{display:none}</style><p>Code 654321</p><html class='x'>",
+        ):
+            text, _ = sanitize.html_to_text(html)
+            self.assertEqual(text.split(), [], html)
+
+    def test_repeated_document_elements_stay_fast(self):
+        start = time.monotonic()
+        text, _ = sanitize.html_to_text("".join(f"<body a{n}=x>" for n in range(32000)) + "<p>Seen</p>")
+        self.assertEqual(text.split(), ["Seen"])
+        self.assertLess(time.monotonic() - start, 1)
+
     def test_parent_font_units_scale_the_parent_size(self):
         text, _ = sanitize.html_to_text('<div style="font-size:2px"><span style="font-size:.5ex">A</span></div><p>Seen</p>')
         self.assertEqual(text.split(), ["Seen"])

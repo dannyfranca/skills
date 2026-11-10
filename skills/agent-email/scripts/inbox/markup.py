@@ -1,6 +1,5 @@
 """Visible text and links of untrusted HTML mail."""
 
-import bisect
 import math
 import re
 from collections import defaultdict
@@ -419,9 +418,15 @@ class _StyleCollector(_HtmlParser):
     def __init__(self):
         super().__init__()
         self.inside, self.stylesheets = False, []
+        self.root_attributes = {tag: {} for tag in ROOT_TAGS}
 
     def handle_starttag(self, tag, attrs):
         self.inside = tag == "style"
+        # A browser adds the attributes of each html or body tag to the one element, and the first value of each
+        # wins. A late tag also styles the content before it.
+        if tag in ROOT_TAGS:
+            for name, value in attrs:
+                self.root_attributes[tag].setdefault(name, value)
 
     def handle_endtag(self, tag):
         self.inside = False
@@ -432,16 +437,15 @@ class _StyleCollector(_HtmlParser):
 
 
 class _TextExtractor(_HtmlParser):
-    def __init__(self, target_factors):
+    def __init__(self, target_factors, root_attributes):
         super().__init__()
         self.target_factors = target_factors
         self.stack, self.hidden_depth, self.parts, self.anchors, self.anchor = [], 0, [], [], None
         self.positions, self.hidden_positions = defaultdict(list), []
         self.root_font = 1.0
         # A browser makes the html and body elements even when the mail omits their tags, and stylesheets match them.
-        self.root_attributes = {tag: {} for tag in ROOT_TAGS}
         for tag in ROOT_TAGS:
-            self.handle_starttag(tag, [])
+            self.handle_starttag(tag, root_attributes[tag].items())
 
     def presence(self, tag, attributes, parent=None):
         classes = set((attributes.get("class") or "").split())
@@ -470,10 +474,9 @@ class _TextExtractor(_HtmlParser):
             self.parts.append("\n")
         if tag in VOID_TAGS:
             return
-        attributes = first_values(attrs)
         if tag in ROOT_TAGS and self.positions[tag]:
-            self.merge_root(tag, attributes)
             return
+        attributes = first_values(attrs)
         level = self.presence(tag, attributes)
         hidden = self.hidden(tag, attributes, level)
         if tag == "html":
@@ -490,22 +493,6 @@ class _TextExtractor(_HtmlParser):
             # A browser closes an open anchor when the next one starts.
             self.finish_anchor()
             self.anchor = (attributes.get("href") or "", [])
-
-    # A browser adds the attributes of an html or body tag to the one element, and the first value of each wins.
-    def merge_root(self, tag, attributes):
-        self.root_attributes[tag] = {**attributes, **self.root_attributes[tag]}
-        self.root_font = 1.0
-        for position, root in enumerate(ROOT_TAGS):
-            _, was_hidden, details, _ = self.stack[position]
-            attributes = self.root_attributes[root]
-            level = self.presence(root, attributes, self.stack[position - 1][3] if position else (1.0, 1.0))
-            hidden = self.hidden(root, attributes, level)
-            if hidden and not was_hidden:
-                bisect.insort(self.hidden_positions, position)
-                self.hidden_depth += 1
-            self.stack[position] = (root, was_hidden or hidden, details, level)
-            if root == "html":
-                self.root_font = level[1]
 
     def handle_endtag(self, tag):
         # Content after the end tag of html or body still goes into body.
@@ -560,7 +547,7 @@ def html_to_text(html):
     styles = _StyleCollector()
     styles.feed(html)
     styles.close()
-    extractor = _TextExtractor(target_factors(styles.stylesheets))
+    extractor = _TextExtractor(target_factors(styles.stylesheets), styles.root_attributes)
     extractor.feed(html)
     extractor.close()
     return "".join(extractor.parts), extractor.anchors
