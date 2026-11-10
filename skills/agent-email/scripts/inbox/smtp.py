@@ -7,6 +7,7 @@ import smtplib
 import ssl
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
+from email.parser import BytesHeaderParser
 from email.policy import default as default_policy
 from email.utils import make_msgid
 
@@ -17,14 +18,15 @@ TIMEOUT_SECONDS = 30
 INTERNALDATE = re.compile(rb'INTERNALDATE "([^"]+)"')
 
 
-def message_of(uid, received, raw, with_body):
+def message_of(uid, received, raw, complete, with_body):
     message = Message(
         id=uid,
         sender=str(raw["From"] or ""),
         subject=str(raw["Subject"] or ""),
         received=received,
+        labels=[] if complete else ["unparsable"],
     )
-    if with_body:
+    if with_body and complete:
         message.text = body(raw, "plain")
         message.html = body(raw, "html")
         message.attachments = [part.get_filename() or "unnamed" for part in raw.iter_attachments()]
@@ -48,6 +50,15 @@ def received_of(attributes):
     return datetime.strptime(found.group(1).decode().strip(), "%d-%b-%Y %H:%M:%S %z") if found else None
 
 
+def parsed(data):
+    try:
+        return email.message_from_bytes(data, policy=default_policy), True
+    # MIME nested deep enough to exhaust the stack is no mail a person sends, and it must not stop each wait.
+    # The headers still name the mail.
+    except RecursionError:
+        return BytesHeaderParser(policy=default_policy).parsebytes(data), False
+
+
 def fetched(response):
     for index, part in enumerate(response):
         if not isinstance(part, tuple):
@@ -57,7 +68,7 @@ def fetched(response):
         attributes = part[0] + after
         uid = re.search(rb"UID (\d+)", attributes)
         if uid:
-            yield uid.group(1).decode(), received_of(attributes), email.message_from_bytes(part[1], policy=default_policy)
+            yield uid.group(1).decode(), received_of(attributes), *parsed(part[1])
 
 
 def ok(reply, action):
@@ -101,7 +112,7 @@ class SmtpProvider(Provider):
                 mailbox.uid("FETCH", b",".join(uids), "(INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM SUBJECT)])"),
                 "fetch mail",
             )
-        messages = [message_of(uid, received, raw, with_body=False) for uid, received, raw in fetched(response)]
+        messages = [message_of(*found, with_body=False) for found in fetched(response)]
         if after:
             messages = [m for m in messages if m.received and m.received > after]
         messages.sort(key=lambda m: m.received.timestamp() if m.received else 0, reverse=True)
@@ -110,8 +121,8 @@ class SmtpProvider(Provider):
     def fetch(self, message_id):
         with self.open_inbox() as mailbox:
             response = ok(mailbox.uid("FETCH", message_id, "(INTERNALDATE BODY.PEEK[])"), f"fetch message {message_id}")
-        for _, received, raw in fetched(response):
-            return received, raw
+        for _, received, raw, complete in fetched(response):
+            return received, raw, complete
         fail(f"no message with id {message_id}")
 
     def read(self, message_id):
@@ -143,7 +154,7 @@ class SmtpProvider(Provider):
         return self.deliver(to, subject, text)
 
     def reply(self, message_id, text):
-        _, original = self.fetch(message_id)
+        _, original, _ = self.fetch(message_id)
         subject = str(original["Subject"] or "")
         if not subject.lower().startswith("re:"):
             subject = f"Re: {subject}"

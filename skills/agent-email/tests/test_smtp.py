@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
-from inbox import smtp  # noqa: E402
+from inbox import screen, smtp  # noqa: E402
 
 ENV = {
     "AGENT_EMAIL_ADDRESS": "agent@example.com",
@@ -167,6 +167,14 @@ class SmtpProviderTests(unittest.TestCase):
         self.assertIn("https://site.com/v", message.html)
         self.assertEqual(message.attachments, ["terms.pdf"])
         self.assertIsNone(message.armor)
+
+    def test_mime_too_deep_to_parse_is_held_with_its_headers(self):
+        nested = b"".join(b'Content-Type: multipart/mixed; boundary="b%d"\r\n\r\n--b%d\r\n' % (n, n) for n in range(1100))
+        FakeImap.store[b"3"] = ("09-Nov-2026 11:00:00 +0000", b"From: x@site.com\r\nSubject: Deep\r\n" + nested)
+        message = smtp.SmtpProvider().read("3")
+        self.assertEqual((message.sender, message.subject, message.labels), ("x@site.com", "Deep", ["unparsable"]))
+        self.assertIsNone(message.html)
+        self.assertEqual(screen.hold(message), "label unparsable")
 
     def test_unknown_charset_still_gives_the_text(self):
         unknown = b"From: x@site.com\r\nSubject: Odd\r\nContent-Type: text/plain; charset=x-unknown\r\n\r\nCode 654321\r\n"

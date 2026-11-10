@@ -3,7 +3,7 @@
 from . import envelope, guard, sanitize
 from .base import address_of
 
-HELD_LABELS = ("spam", "unauthenticated", "agent-armor-held")
+HELD_LABELS = ("spam", "unauthenticated", "agent-armor-held", "unparsable")
 
 
 def pending(message):
