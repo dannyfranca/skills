@@ -103,6 +103,19 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text(html)
         self.assertEqual(text.split(), [])
 
+    def test_closed_dialog_and_details_hide_their_content(self):
+        html = (
+            "<dialog>A</dialog><dialog open>Seen</dialog>"
+            "<details><summary>Title</summary>B<p>C</p></details><details open><summary>More</summary>Shown</details>"
+        )
+        text, _ = sanitize.html_to_text(html)
+        self.assertEqual(text.split(), ["Seen", "Title", "More", "Shown"])
+
+    def test_unmatched_end_tags_stay_fast(self):
+        start = time.monotonic()
+        sanitize.html_to_text("<div>" * 10000 + "</span>" * 10000)
+        self.assertLess(time.monotonic() - start, 0.5)
+
     def test_first_duplicate_attribute_wins(self):
         html = (
             "<style>.hide { display: none }</style><p style='display:none' style=''>Code 999999</p>"
