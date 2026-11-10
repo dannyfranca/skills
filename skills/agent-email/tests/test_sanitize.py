@@ -255,6 +255,14 @@ class HtmlToTextTests(unittest.TestCase):
             text, _ = sanitize.html_to_text(f'<p style="position:absolute;{style}">A</p><p>Seen</p>')
             self.assertEqual(text.split(), ["Seen"], style)
 
+    def test_logical_and_adjusting_properties_hide(self):
+        for style in (
+            "inset-inline-start:-9999px", "inset-block:-9999px", "margin-inline-start:-9999px",
+            "max-block-size:0", "inline-size:0", "font-size-adjust:0",
+        ):
+            text, _ = sanitize.html_to_text(f'<p style="position:absolute;overflow:hidden;{style}">A</p><p>Seen</p>')
+            self.assertEqual(text.split(), ["Seen"], style)
+
     def test_end_tag_does_not_close_a_hidden_element_it_skips(self):
         text, _ = sanitize.html_to_text("<span><div hidden>A</span>Code 654321</div><p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
