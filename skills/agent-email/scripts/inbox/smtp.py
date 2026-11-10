@@ -113,7 +113,9 @@ class SmtpProvider(Provider):
             )
         messages = [message_of(*found, with_body=False) for found in fetched(response)]
         if after:
-            messages = [m for m in messages if m.received and m.received > after]
+            # INTERNALDATE has whole seconds, so mail from the second of the start time counts as later.
+            cutoff = after.replace(microsecond=0)
+            messages = [m for m in messages if m.received and m.received >= cutoff]
         messages.sort(key=lambda m: m.received.timestamp() if m.received else 0, reverse=True)
         return messages[:limit]
 
