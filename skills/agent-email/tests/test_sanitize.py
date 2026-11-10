@@ -366,6 +366,10 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text("<select><option>A</option><option>Code 654321</option></select><p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
 
+    def test_gauge_fallback_text_hides(self):
+        text, _ = sanitize.html_to_text('<progress value=".5" max="1">A</progress><meter value=".5">B</meter><p>Seen</p>')
+        self.assertEqual(text.split(), ["Seen"])
+
     def test_end_tag_does_not_close_a_hidden_element_it_skips(self):
         text, _ = sanitize.html_to_text("<span><div hidden>A</span>Code 654321</div><p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
