@@ -531,6 +531,16 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text("<div hidden><p>A</div><table><tr><td>Seen</td></tr></table>")
         self.assertEqual(text.split(), ["Seen"])
 
+    def test_generated_pseudo_element_rules_leave_the_element_shown(self):
+        html = (
+            "<style>*::before {display:none} .c:after {content:'.';visibility:hidden;height:0} p::MARKER{opacity:0}</style>"
+            "<p class='c'>Seen</p>"
+        )
+        text, _ = sanitize.html_to_text(html)
+        self.assertEqual(text.split(), ["Seen"])
+        text, _ = sanitize.html_to_text("<style>p::first-line {color:transparent}</style><p>A</p>")
+        self.assertEqual(text.split(), [])
+
     def test_frameset_text_hides(self):
         text, _ = sanitize.html_to_text("<p>Seen</p><frameset><frame src=about:blank>A</frameset>")
         self.assertEqual(text.split(), ["Seen"])
