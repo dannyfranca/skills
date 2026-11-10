@@ -9,6 +9,7 @@ BLOCK_TAGS = {"p", "div", "br", "tr", "li", "table", "section", "article", "bloc
 
 CSS_COMMENT = re.compile(r"/\*.*?\*/", re.S)
 IMPORTANT = re.compile(r"\s*!\s*important\s*$")
+CSS_ESCAPE = re.compile(r"\\(?:([0-9a-f]{1,6})\s?|(.))", re.I | re.S)
 NUMBER = re.compile(r"([+-]?(?:\d+\.?\d*|\.\d+))([a-z%]*)")
 SCALE = re.compile(r"scale[xyz3d]*\(([^)]*)\)")
 HEX_ALPHA = re.compile(r"#(?:[0-9a-f]{3}([0-9a-f])|[0-9a-f]{6}([0-9a-f]{2}))")
@@ -24,23 +25,26 @@ BOX_SIZES = ("height", "width", "max-height", "max-width")
 OFFSETS = ("left", "top", "right", "bottom", "text-indent", "margin-left", "margin-top")
 
 ANY_ELEMENT = (None, None, frozenset())
+# A real mail hides a few blocks. Thousands of distinct hiding rules only make every element check them all.
+MAX_HIDING_TARGETS = 200
+
+
+def unescape(css):
+    def character(match):
+        if match.group(2) is not None:
+            return match.group(2)
+        code = int(match.group(1), 16)
+        return chr(code) if 0 < code <= 0x10FFFF and not 0xD800 <= code <= 0xDFFF else "\ufffd"
+
+    return CSS_ESCAPE.sub(character, css)
 
 
 def declarations(css):
-    """The value of each property, as a browser picks it: the last one, unless an earlier one is !important."""
-    values, important = {}, set()
     for declaration in CSS_COMMENT.sub("", css).split(";"):
         name, colon, value = declaration.partition(":")
-        name, value = name.strip().lower(), value.strip().lower()
-        if not colon or not name:
-            continue
-        is_important = bool(IMPORTANT.search(value))
-        if name in important and not is_important:
-            continue
-        values[name] = IMPORTANT.sub("", value)
-        if is_important:
-            important.add(name)
-    return values
+        name, value = unescape(name).strip().lower(), IMPORTANT.sub("", unescape(value).strip().lower())
+        if colon and name:
+            yield name, value
 
 
 def numbers(value):
@@ -81,22 +85,25 @@ def far_away(value):
 # depth, not the boundary: text in the colour of its background needs a renderer to detect, so every mail still
 # reaches the agent inside the untrusted envelope and through the guard. Where a style can hide text, the check
 # reads it as hidden: a lost code costs one retry, an unseen instruction can cost the account.
-def hides(css):
-    style = declarations(css)
+def hiding(name, value):
     return (
-        style.get("display") == "none"
-        or style.get("visibility") in ("hidden", "collapse")
-        or tiny(style.get("font-size", "1"))
-        or tiny(style.get("font", "1"))
-        or fraction(style.get("opacity", "1")) < FAINT
-        or alpha(style.get("color", "")) < FAINT
-        or alpha(style.get("-webkit-text-fill-color", "")) < FAINT
-        or any(tiny(style.get(size, "1")) for size in BOX_SIZES)
-        or style.get("clip", "auto") != "auto"
-        or style.get("clip-path", "none") != "none"
-        or any(tiny(arguments) for arguments in SCALE.findall(style.get("transform", "")))
-        or any(far_away(style.get(offset, "")) for offset in OFFSETS + ("transform",))
+        (name == "display" and value == "none")
+        or (name == "visibility" and value in ("hidden", "collapse"))
+        or (name in ("font-size", "font") and tiny(value))
+        or (name == "opacity" and fraction(value) < FAINT)
+        or (name in ("color", "-webkit-text-fill-color") and alpha(value) < FAINT)
+        or (name in BOX_SIZES and tiny(value))
+        or (name == "clip" and value != "auto")
+        or (name == "clip-path" and value != "none")
+        or (name == "transform" and any(tiny(arguments) for arguments in SCALE.findall(value)))
+        or (name in OFFSETS + ("transform",) and far_away(value))
     )
+
+
+def hides(css):
+    # Any hiding declaration counts, also one that a later declaration overrides: a browser drops a later
+    # value it cannot parse, and only a full CSS parser knows which values those are.
+    return any(hiding(name, value) for name, value in declarations(css))
 
 
 def compound_target(compound):
@@ -130,13 +137,13 @@ def hiding_targets(stylesheets):
     # Rules inside @media count too, and ancestors, pseudo-classes, and attributes are ignored:
     # the sender controls all of them, so the parser hides too much rather than too little.
     css = CSS_COMMENT.sub(" ", " ".join(stylesheets))
-    targets = [
-        selector_target(selector)
+    targets = {
+        selector_target(unescape(selector))
         for selectors, body in css_rules(css)
         if hides(body)
         for selector in selectors.split(",")
-    ]
-    return [target for target in targets if target]
+    } - {None}
+    return [ANY_ELEMENT] if len(targets) > MAX_HIDING_TARGETS else list(targets)
 
 
 def first_values(attrs):
@@ -147,9 +154,21 @@ def first_values(attrs):
     return attributes
 
 
-class _StyleCollector(HTMLParser):
+class _HtmlParser(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
+
+    def handle_startendtag(self, tag, attrs):
+        # HTML ignores "/>" on elements that are not void: <div style="display:none"/> stays open,
+        # and <style/> still starts a stylesheet.
+        self.handle_starttag(tag, attrs)
+        if tag in self.CDATA_CONTENT_ELEMENTS:
+            self.set_cdata_mode(tag)
+
+
+class _StyleCollector(_HtmlParser):
+    def __init__(self):
+        super().__init__()
         self.inside, self.stylesheets = False, []
 
     def handle_starttag(self, tag, attrs):
@@ -163,9 +182,9 @@ class _StyleCollector(HTMLParser):
             self.stylesheets.append(data)
 
 
-class _TextExtractor(HTMLParser):
+class _TextExtractor(_HtmlParser):
     def __init__(self, hiding):
-        super().__init__(convert_charrefs=True)
+        super().__init__()
         self.hiding = hiding
         self.stack, self.hidden_depth, self.parts, self.anchors, self.anchor = [], 0, [], [], None
 
@@ -196,10 +215,6 @@ class _TextExtractor(HTMLParser):
             # A browser closes an open anchor when the next one starts.
             self.finish_anchor()
             self.anchor = (attributes.get("href") or "", [])
-
-    def handle_startendtag(self, tag, attrs):
-        # HTML ignores "/>" on elements that are not void, so <div style="display:none"/> stays open.
-        self.handle_starttag(tag, attrs)
 
     def handle_endtag(self, tag):
         if not any(open_tag == tag for open_tag, _ in self.stack):
