@@ -18,6 +18,8 @@ ATTACHMENT_NAME_LIMIT = 100
 
 # Browsers read "\" in a URL as "/", so "https://evil.net\@site.com" opens evil.net. A URL stops at "\".
 URL = re.compile(r"https?://[^\s<>\"'()\[\]{}\\]+", re.I)
+# Prose puts brackets around a URL, but in an href they are part of it.
+HREF = re.compile(r"https?://[^\s<>\"'\\]+", re.I)
 TRAILING_PUNCTUATION = ".,;:!?"
 # A domain starts only where a dotted run starts. A start inside the run retries the whole run, which is quadratic
 # on a long run that ends without a top-level domain.
@@ -125,13 +127,14 @@ def bare_urls(text):
 def links(anchors, text, sender_domain):
     # A URL shown as anchor text is not where the anchor goes. The anchor itself reports the mismatch.
     labels = {url for _, label in anchors for url in bare_urls(label or "")}
-    candidates = list(anchors) + [(url, None) for url in bare_urls(text) if url not in labels]
+    candidates = [(url, label, HREF) for url, label in anchors]
+    candidates += [(url, None, URL) for url in bare_urls(text) if url not in labels]
     found = {}
-    for url, label in candidates:
+    for url, label, pattern in candidates:
         url = url.strip()
         # Invisible or direction marks inside a URL make the shown link differ from the one that opens.
         host = host_of(url)
-        if len(url) > MAX_URL or any(map(invisible, url)) or not URL.fullmatch(url) or not host:
+        if len(url) > MAX_URL or any(map(invisible, url)) or not pattern.fullmatch(url) or not host:
             continue
         # One mismatched label is enough: the sender picks which copy of the link comes first.
         if found.get(url) != "text-mismatch":
