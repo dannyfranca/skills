@@ -170,7 +170,11 @@ def alpha(color):
         return fraction(channels[3]) if len(channels) == 4 and numbers(channels[3]) else 0.0
     return 1.0
 
-# A clipping ancestor hides text pushed out in either direction.
+
+def text_alpha(value):
+    return None if value in ("inherit", "unset", "currentcolor") else alpha(value)
+
+
 # A clipping ancestor hides text pushed out in either direction, and a page shows no more than a few hundred pixels.
 def far_away(value):
     return any(
@@ -356,6 +360,7 @@ FACTORS = {
     **dict.fromkeys(("font-size", "font"), {"font-size": font_factor, "font-px": font_px, "font-root": font_root}),
     **dict.fromkeys(("overflow", "overflow-x", "overflow-y", "overflow-block", "overflow-inline"), {"overflow": clips}),
     **dict.fromkeys(("height", "max-height", "block-size", "max-block-size"), {"height": bounds}),
+    **dict.fromkeys(("color", "-webkit-text-fill-color"), {"color": text_alpha}),
 }
 
 
@@ -382,7 +387,8 @@ def share(factors):
     if factors.get("overflow", 1.0) == 0 and factors.get("height", 1.0) == 0:
         return 0.0
     return math.prod(
-        factor for group, factor in factors.items() if group not in ("overflow", "height", "font-size", "font-px", "font-root")
+        factor for group, factor in factors.items()
+        if group not in ("overflow", "height", "font-size", "font-px", "font-root", "color")
     )
 
 
@@ -470,9 +476,11 @@ class _TextExtractor(_HtmlParser):
             for (target_tag, target_id, target_classes), found in self.target_factors.items()
             if target_tag in (None, tag) and target_id in (None, attributes.get("id")) and target_classes <= classes
         )
-        inherited, parent_font = parent or (self.stack[-1][3] if self.stack else (1.0, 1.0))
+        inherited, parent_font, parent_colour = parent or (self.stack[-1][3] if self.stack else (1.0, 1.0, 1.0))
         found = merged(factors(attributes.get("style") or ""), *styled)
-        return inherited * share(found), font_scale(found, parent_font, self.root_font)
+        # The text colour is inherited, and a colour on the element replaces it. Opacity then fades that colour.
+        colour = found.get("color", parent_colour)
+        return inherited * share(found), font_scale(found, parent_font, self.root_font), colour
 
     def hidden(self, tag, attributes, level):
         return (
