@@ -61,6 +61,7 @@ class FakeImap:
     store = {}
     select_reply = ("OK", [b"2"])
     attributes_after_body = False
+    failing = None
 
     def __init__(self, host, port, **options):
         FakeImap.options = options
@@ -79,6 +80,8 @@ class FakeImap:
         return FakeImap.select_reply
 
     def uid(self, command, *args):
+        if command == FakeImap.failing:
+            return "NO", [b"Temporary failure"]
         if command == "SEARCH":
             FakeImap.last_search = args[1:]
             return "OK", [b" ".join(FakeImap.store)]
@@ -102,6 +105,7 @@ class SmtpProviderTests(unittest.TestCase):
         FakeSmtp.instances = []
         FakeImap.select_reply = ("OK", [b"2"])
         FakeImap.attributes_after_body = False
+        FakeImap.failing = None
         FakeImap.store = {
             b"1": (" 9-Nov-2026 09:00:00 +0000", raw("old@site.com", "Old", "Mon, 09 Nov 2026 09:00:00 +0000")),
             b"2": (
@@ -203,6 +207,14 @@ class SmtpProviderTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as error:
             smtp.SmtpProvider().list()
         self.assertIn("missing permission", str(error.exception))
+
+    def test_failed_search_or_fetch_reports_the_server_reason(self):
+        for command, call in (("SEARCH", "list"), ("FETCH", "list"), ("FETCH", "read")):
+            FakeImap.failing = command
+            provider = smtp.SmtpProvider()
+            with self.assertRaises(SystemExit) as error:
+                provider.read("2") if call == "read" else provider.list()
+            self.assertIn("Temporary failure", str(error.exception))
 
     def test_missing_setting_names_the_variable(self):
         with patch.dict(os.environ, {}, clear=True), self.assertRaises(SystemExit) as error:
