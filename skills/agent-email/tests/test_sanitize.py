@@ -189,6 +189,10 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text("".join(f"<{tag}>A</{tag}>" for tag in tags) + "<p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
 
+    def test_escaped_tag_names_their_element(self):
+        text, _ = sanitize.html_to_text(r"<style>d\69 v {display:none}</style><div>A</div><p>Seen</p>")
+        self.assertEqual(text.split(), ["Seen"])
+
     def test_end_tag_does_not_close_a_hidden_element_it_skips(self):
         text, _ = sanitize.html_to_text("<span><div hidden>A</span>Code 654321</div><p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])

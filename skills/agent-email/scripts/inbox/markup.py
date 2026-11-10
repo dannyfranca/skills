@@ -30,8 +30,8 @@ COLOR_FUNCTION = re.compile(r"(?:rgb|hsl|hwb|lab|lch|oklab|oklch)a?\((.*)\)")
 # An unclosed bracket runs to the end, so a long run of "[" is one token and not one rescan per bracket.
 PSEUDO_OR_ATTRIBUTE = rf"""::?[\w-]+(?:\([^)]*(?:\)|\Z))?|\[(?:{STRING}|\\.|[^\]"'\\])*(?:\]|\Z)"""
 SELECTOR_TOKEN = re.compile(rf"({ESCAPE})|({PSEUDO_OR_ATTRIBUTE})|(\s*[\s>+~]\s*)|(,)|[^\\:\[\s>+~,]+|.", re.I | re.S)
-TAG = re.compile(r"[a-z][a-z0-9]*", re.I)
 IDENTIFIER = rf"((?:[\w-]|{ESCAPE})+)"
+TAG = re.compile(IDENTIFIER, re.I | re.S)
 # One scan, so that the "." of an escaped "\." starts no class.
 COMPOUND_PART = re.compile(rf"#{IDENTIFIER}|\.{IDENTIFIER}|{ESCAPE}|.", re.I | re.S)
 
@@ -168,7 +168,7 @@ def compound_target(compound):
     parts = COMPOUND_PART.findall(compound)
     ids = [unescape(id) for id, _ in parts if id]
     classes = frozenset(unescape(name) for _, name in parts if name)
-    return tag.group(0).lower() if tag else None, ids[0] if ids else None, classes
+    return unescape(tag.group(0)).lower() if tag else None, ids[0] if ids else None, classes
 
 
 def selector_target(compounds, combinators):
