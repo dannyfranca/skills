@@ -1,5 +1,6 @@
 """Visible text and links of untrusted HTML mail."""
 
+import bisect
 import math
 import re
 from collections import defaultdict
@@ -84,6 +85,7 @@ READABLE_VALUE = re.compile(rf"{TERM}(?:{SEPARATOR}{TERM})*")
 MAX_VALUE = 200
 
 ANY_ELEMENT = (None, None, frozenset())
+ROOT_TAGS = ("html", "body")
 # A real mail hides a few blocks. Thousands of distinct hiding rules only make every element check them all.
 MAX_HIDING_TARGETS = 200
 
@@ -436,15 +438,19 @@ class _TextExtractor(_HtmlParser):
         self.stack, self.hidden_depth, self.parts, self.anchors, self.anchor = [], 0, [], [], None
         self.positions, self.hidden_positions = defaultdict(list), []
         self.root_font = 1.0
+        # A browser makes the html and body elements even when the mail omits their tags, and stylesheets match them.
+        self.root_attributes = {tag: {} for tag in ROOT_TAGS}
+        for tag in ROOT_TAGS:
+            self.handle_starttag(tag, [])
 
-    def presence(self, tag, attributes):
+    def presence(self, tag, attributes, parent=None):
         classes = set((attributes.get("class") or "").split())
         styled = (
             found
             for (target_tag, target_id, target_classes), found in self.target_factors.items()
             if target_tag in (None, tag) and target_id in (None, attributes.get("id")) and target_classes <= classes
         )
-        inherited, parent_font = self.stack[-1][3] if self.stack else (1.0, 1.0)
+        inherited, parent_font = parent or (self.stack[-1][3] if self.stack else (1.0, 1.0))
         found = merged(factors(attributes.get("style") or ""), *styled)
         return inherited * share(found), font_scale(found, parent_font, self.root_font)
 
@@ -465,11 +471,13 @@ class _TextExtractor(_HtmlParser):
         if tag in VOID_TAGS:
             return
         attributes = first_values(attrs)
+        if tag in ROOT_TAGS and self.positions[tag]:
+            self.merge_root(tag, attributes)
+            return
         level = self.presence(tag, attributes)
         hidden = self.hidden(tag, attributes, level)
         if tag == "html":
-            # A browser merges the style of a repeated html tag into the one root, and only it knows which wins.
-            self.root_font = min(self.root_font, level[1])
+            self.root_font = level[1]
         if self.in_closed_details() and tag == "summary":
             self.stack[-1][2]["summary_shown"] = True
         details = {"summary_shown": False} if tag == "details" and "open" not in attributes else None
@@ -483,8 +491,25 @@ class _TextExtractor(_HtmlParser):
             self.finish_anchor()
             self.anchor = (attributes.get("href") or "", [])
 
+    # A browser adds the attributes of an html or body tag to the one element, and the first value of each wins.
+    def merge_root(self, tag, attributes):
+        self.root_attributes[tag] = {**attributes, **self.root_attributes[tag]}
+        self.root_font = 1.0
+        for position, root in enumerate(ROOT_TAGS):
+            _, was_hidden, details, _ = self.stack[position]
+            attributes = self.root_attributes[root]
+            level = self.presence(root, attributes, self.stack[position - 1][3] if position else (1.0, 1.0))
+            hidden = self.hidden(root, attributes, level)
+            if hidden and not was_hidden:
+                bisect.insort(self.hidden_positions, position)
+                self.hidden_depth += 1
+            self.stack[position] = (root, was_hidden or hidden, details, level)
+            if root == "html":
+                self.root_font = level[1]
+
     def handle_endtag(self, tag):
-        if not self.positions[tag]:
+        # Content after the end tag of html or body still goes into body.
+        if not self.positions[tag] or tag in ROOT_TAGS:
             return
         # A browser ignores some end tags that would close other open elements. Which ones depends on the
         # element kinds, so an end tag that would close a hidden element on the way is ignored here.
