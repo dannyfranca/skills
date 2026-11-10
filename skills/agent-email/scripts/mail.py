@@ -32,7 +32,7 @@ def matches(message, domain, subject):
 def find(inbox, args):
     after = parse_time(args.after) if args.after else None
     filtered = args.from_domain or args.subject
-    found = inbox.list(after=after, limit=SCAN_LIMIT if filtered else args.limit)
+    found = inbox.list(after=after, limit=max(SCAN_LIMIT, args.limit) if filtered else args.limit)
     return [m for m in found if matches(m, args.from_domain, args.subject)][: args.limit]
 
 

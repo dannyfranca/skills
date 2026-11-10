@@ -75,6 +75,11 @@ class MailTests(unittest.TestCase):
         for other in ("2", "3"):
             self.assertNotIn(f'id="{envelope.encode_id(other)}"', out)
 
+    def test_filtered_list_honours_a_limit_above_the_scan_window(self):
+        inbox = FakeProvider([[message(str(n), "noreply@site.com") for n in range(80)]])
+        out = self.run_mail(inbox, "list", "--from", "site.com", "--limit", "70")
+        self.assertEqual(out.count("<message "), 70)
+
     def test_read_decodes_the_token(self):
         inbox = FakeProvider([[message("<a@b>", "noreply@site.com")]])
         out = self.run_mail(inbox, "read", envelope.encode_id("<a@b>"), "--body")
