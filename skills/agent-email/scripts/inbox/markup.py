@@ -149,7 +149,6 @@ def hides(css):
 
 
 def compound_target(compound):
-    compound = PSEUDO_OR_ATTRIBUTE.sub("", compound)
     tag = re.match(r"[a-z][a-z0-9]*", compound, re.I)
     ids = re.findall(r"#([\w-]+)", compound)
     return tag.group(0).lower() if tag else None, ids[0] if ids else None, frozenset(re.findall(r"\.([\w-]+)", compound))
@@ -157,7 +156,8 @@ def compound_target(compound):
 
 def selector_target(selector):
     """The (tag, id, classes) of the element that a CSS selector picks, without its ancestors."""
-    selector = selector.strip()
+    # An attribute value can hold a combinator, so brackets go before the split. A bracket alone picks any element.
+    selector = PSEUDO_OR_ATTRIBUTE.sub("*", selector.strip())
     targets = [compound_target(compound) for compound in COMBINATOR.split(selector) if compound]
     if not targets:
         return None
