@@ -29,8 +29,10 @@ SPECIAL = SCOPE | TABLE_TAGS | {
 FORMATTING_TAGS = {"a", "b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong", "tt", "u"}
 # A browser does not open formatting elements again past the start of one of these elements.
 FORMATTING_MARKERS = {"applet", "caption", "marquee", "object", "td", "template", "th"}
-# A real mail leaves a few formatting elements open. Thousands only make each end tag open them all again.
-MAX_REOPENED = 1000
+# A real mail leaves a few small formatting elements open. Thousands, or large ones, only make each end tag parse them
+# all again. Each element counts as at least this size.
+MAX_REOPENED_SIZE = 100_000
+REOPENED_ELEMENT_SIZE = 100
 VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
 BLOCK_TAGS = {
     "p", "div", "br", "tr", "li", "table", "section", "article", "blockquote", "dialog", "details", "summary", "hr",
@@ -537,7 +539,7 @@ class _TextExtractor(_HtmlParser):
         self.target_factors = target_factors
         self.stack, self.hidden_depth, self.parts, self.anchors, self.anchor = [], 0, [], [], None
         self.positions, self.hidden_positions = defaultdict(list), []
-        self.reopen_budget = MAX_REOPENED
+        self.reopen_budget = MAX_REOPENED_SIZE
         self.root_font = 1.0
         # A browser makes the html and body elements even when the mail omits their tags, and stylesheets match them.
         for tag in ROOT_TAGS:
@@ -668,7 +670,10 @@ class _TextExtractor(_HtmlParser):
             reopened.clear()
         if not reopened or self.reopen_budget < 0:
             return
-        self.reopen_budget -= len(reopened)
+        self.reopen_budget -= sum(
+            max(REOPENED_ELEMENT_SIZE, sum(len(name) + len(value or "") for name, value in attributes.items()))
+            for _, attributes in reopened
+        )
         if self.reopen_budget < 0:
             # The policy cannot tell the styles of the rest of the mail without that work, so it withholds it.
             self.hidden_depth += 1
