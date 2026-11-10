@@ -60,9 +60,10 @@ class FakeSmtp:
 class FakeImap:
     store = {}
     select_reply = ("OK", [b"2"])
+    attributes_after_body = False
 
-    def __init__(self, host, port, **_):
-        pass
+    def __init__(self, host, port, **options):
+        FakeImap.options = options
 
     def __enter__(self):
         return self
@@ -82,9 +83,17 @@ class FakeImap:
             FakeImap.last_search = args[1:]
             return "OK", [b" ".join(FakeImap.store)]
         uids = args[0] if isinstance(args[0], bytes) else args[0].encode()
-        return "OK", [
-            (b"1 (UID " + uid + b" BODY[] {1}", FakeImap.store[uid]) for uid in uids.split(b",") if uid in FakeImap.store
-        ]
+        response = []
+        for uid in uids.split(b","):
+            if uid not in FakeImap.store:
+                continue
+            internal_date, message = FakeImap.store[uid]
+            attributes = b"UID " + uid + b' INTERNALDATE "' + internal_date.encode() + b'"'
+            if FakeImap.attributes_after_body:
+                response += [(b"1 (BODY[] {1}", message), b" " + attributes + b")"]
+            else:
+                response += [(b"1 (" + attributes + b" BODY[] {1}", message), b")"]
+        return "OK", response
 
 
 @patch.dict(os.environ, ENV, clear=True)
@@ -92,15 +101,19 @@ class SmtpProviderTests(unittest.TestCase):
     def setUp(self):
         FakeSmtp.instances = []
         FakeImap.select_reply = ("OK", [b"2"])
+        FakeImap.attributes_after_body = False
         FakeImap.store = {
-            b"1": raw("old@site.com", "Old", "Mon, 09 Nov 2026 09:00:00 +0000"),
-            b"2": raw(
-                "Site <noreply@site.com>",
-                "Code",
-                "Mon, 09 Nov 2026 10:05:00 +0000",
-                text="Code 123456",
-                html="<a href='https://site.com/v'>v</a>",
-                attachment="terms.pdf",
+            b"1": (" 9-Nov-2026 09:00:00 +0000", raw("old@site.com", "Old", "Mon, 09 Nov 2026 09:00:00 +0000")),
+            b"2": (
+                "09-Nov-2026 11:05:00 +0100",
+                raw(
+                    "Site <noreply@site.com>",
+                    "Code",
+                    "not a date",
+                    text="Code 123456",
+                    html="<a href='https://site.com/v'>v</a>",
+                    attachment="terms.pdf",
+                ),
             ),
         }
         patches = [
@@ -117,6 +130,21 @@ class SmtpProviderTests(unittest.TestCase):
         found = smtp.SmtpProvider().list(after=after)
         self.assertEqual([m.id for m in found], ["2"])
         self.assertEqual(FakeImap.last_search, ("SINCE", "09-Nov-2026"))
+
+    def test_list_uses_the_server_receive_time_not_the_date_header(self):
+        FakeImap.store[b"3"] = ("09-Nov-2026 10:01:00 +0000", raw("x@site.com", "Skewed", "Mon, 09 Nov 2026 10:05:00 -0000"))
+        found = smtp.SmtpProvider().list(after=datetime(2026, 11, 9, 10, 0, tzinfo=timezone.utc))
+        self.assertEqual([m.id for m in found], ["2", "3"])
+        self.assertEqual(found[0].received, datetime(2026, 11, 9, 10, 5, tzinfo=timezone.utc))
+
+    def test_reads_uid_sent_after_the_message_body(self):
+        FakeImap.attributes_after_body = True
+        self.assertEqual([m.id for m in smtp.SmtpProvider().list()], ["2", "1"])
+        self.assertIn("123456", smtp.SmtpProvider().read("2").text)
+
+    def test_imap_connection_has_a_timeout(self):
+        smtp.SmtpProvider().list()
+        self.assertEqual(FakeImap.options["timeout"], smtp.TIMEOUT_SECONDS)
 
     def test_list_is_newest_first_without_bodies(self):
         found = smtp.SmtpProvider().list()
@@ -149,8 +177,9 @@ class SmtpProviderTests(unittest.TestCase):
         self.assertTrue(FakeSmtp.instances[0].tls)
 
     def test_reply_goes_to_reply_to_and_threads(self):
-        FakeImap.store[b"3"] = raw(
-            "noreply@site.com", "Welcome", "Mon, 09 Nov 2026 11:00:00 +0000", reply_to="Help <help@site.com>"
+        FakeImap.store[b"3"] = (
+            "09-Nov-2026 11:00:00 +0000",
+            raw("noreply@site.com", "Welcome", "Mon, 09 Nov 2026 11:00:00 +0000", reply_to="Help <help@site.com>"),
         )
         smtp.SmtpProvider().reply("3", "Thanks")
         sent = FakeSmtp.instances[0].sent[0]
