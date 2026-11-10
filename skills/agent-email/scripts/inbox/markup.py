@@ -124,7 +124,11 @@ def alpha(color):
         return int(match.group(1) * 2 if match.group(1) else match.group(2), 16) / 255
     if match := COLOR_FUNCTION.fullmatch(color):
         channels = re.split(r"\s*[,/]\s*|\s+", match.group(1).strip())
-        return fraction(channels[3]) if len(channels) == 4 else 1.0
+        if len(channels) == 3:
+            return 1.0
+        # A missing alpha renders as zero. Any other form, such as a relative colour, has an alpha the policy
+        # does not compute.
+        return fraction(channels[3]) if len(channels) == 4 and numbers(channels[3]) else 0.0
     return 1.0
 
 

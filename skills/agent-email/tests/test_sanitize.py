@@ -219,6 +219,11 @@ class HtmlToTextTests(unittest.TestCase):
             text, _ = sanitize.html_to_text(html)
             self.assertEqual(text.split(), ["Seen"], start)
 
+    def test_alpha_the_policy_cannot_read_hides(self):
+        for color in ("rgb(0 0 0 / none)", "rgb(from red r g b / 0)"):
+            text, _ = sanitize.html_to_text(f'<p style="color:{color}">A</p><p>Seen</p>')
+            self.assertEqual(text.split(), ["Seen"], color)
+
     def test_end_tag_does_not_close_a_hidden_element_it_skips(self):
         text, _ = sanitize.html_to_text("<span><div hidden>A</span>Code 654321</div><p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
