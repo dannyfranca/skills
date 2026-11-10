@@ -25,7 +25,8 @@ IDENTIFIER = rf"((?:[\w-]|{ESCAPE})+)"
 CSS_TOKEN = re.compile(rf"""(/\*.*?(?:\*/|\Z))|{IDENTIFIER}(\()?|{STRING}|[{{}};]|[^{{}};"'\\/\w-]+|.""", re.I | re.S)
 # An unquoted url() runs to its ")" whatever it holds, and a bad one runs to the end. A quoted one is a function.
 UNQUOTED_URL = re.compile(r"""\s*+(?!["'])(?:\\.|[^)\\])*\)?""", re.S)
-NUMBER = re.compile(r"([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([a-z%]*)")
+# A number starts no word, so the "-2" of a font named "Roboto-2x" is no size.
+NUMBER = re.compile(r"(?<![\w.#-])([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([a-z%]*)")
 SCALE = re.compile(r"scale[xyz3d]*\(([^)]*)\)")
 OPACITY_FILTER = re.compile(r"opacity\(([^)]*)\)")
 HEX_ALPHA = re.compile(r"#(?:[0-9a-f]{3}([0-9a-f])|[0-9a-f]{6}([0-9a-f]{2}))")
@@ -40,6 +41,17 @@ COMPOUND_PART = re.compile(rf"#{IDENTIFIER}|\.{IDENTIFIER}|{ESCAPE}|.", re.I | r
 FAINT = 0.1
 FAR_PX = 500
 EM_PX = 16
+# Font-relative units count at the default font size, and viewport and container units at a 320px phone screen.
+UNIT_PX = {
+    "px": 1, "em": EM_PX, "rem": EM_PX, "lh": EM_PX, "rlh": EM_PX, "ic": EM_PX, "ric": EM_PX,
+    "ex": EM_PX / 2, "rex": EM_PX / 2, "ch": EM_PX / 2, "rch": EM_PX / 2, "cap": EM_PX / 2, "rcap": EM_PX / 2,
+    "pt": 96 / 72, "pc": 16, "in": 96, "cm": 96 / 2.54, "mm": 96 / 25.4, "q": 96 / 101.6,
+}
+VIEWPORT_UNIT = re.compile(r"(?:[sld]?v|cq)(?:w|h|i|b|min|max)")
+VIEWPORT_UNIT_PX = 3.2
+# A percentage font size is of the parent font. A percentage box size is of a 600px mail column.
+FONT_PERCENT_PX = EM_PX / 100
+BOX_PERCENT_PX = 6
 BOX_SIZES = ("height", "width", "max-height", "max-width")
 OFFSETS = ("left", "top", "right", "bottom", "inset", "text-indent", "margin", "margin-left", "margin-top", "translate")
 # A mask or a motion path can hide or move text in ways the policy does not compute.
@@ -105,8 +117,21 @@ def numbers(value):
     return [(float(number), unit) for number, unit in NUMBER.findall(value)]
 
 
-def tiny(value):
-    return any(number <= 0 or (number <= 1 and unit == "px") for number, unit in numbers(value))
+def length_px(number, unit, percent_px):
+    if unit == "%":
+        return number * percent_px
+    if VIEWPORT_UNIT.fullmatch(unit):
+        return number * VIEWPORT_UNIT_PX
+    # A unit the policy does not know gives no size, so the length reads as too small to see.
+    return number * UNIT_PX.get(unit, 0)
+
+
+def tiny(value, percent_px):
+    return any(number <= 0 or (unit and length_px(number, unit, percent_px) <= 1) for number, unit in numbers(value))
+
+
+def small_factor(value):
+    return any(abs(number / 100 if unit == "%" else number) < FAINT for number, unit in numbers(value))
 
 
 def fraction(value):
@@ -151,16 +176,16 @@ def hiding(name, value):
     return (
         (name == "display" and value == "none")
         or (name == "visibility" and value in ("hidden", "collapse"))
-        or (name in ("font-size", "font") and tiny(value))
+        or (name in ("font-size", "font") and tiny(value, FONT_PERCENT_PX))
         or (name == "opacity" and fraction(value) < FAINT)
         or (name in ("color", "-webkit-text-fill-color") and alpha(value) < FAINT)
-        or (name in BOX_SIZES and tiny(value))
+        or (name in BOX_SIZES and tiny(value, BOX_PERCENT_PX))
         or (name == "clip" and value != "auto")
         or (name == "clip-path" and value != "none")
         or (name == "content-visibility" and value not in ("visible", "auto"))
         or (name in NONE_OR_HIDING and value != "none")
-        or (name == "transform" and any(tiny(arguments) for arguments in SCALE.findall(value)))
-        or (name == "scale" and tiny(value))
+        or (name == "transform" and any(small_factor(arguments) for arguments in SCALE.findall(value)))
+        or (name == "scale" and small_factor(value))
         or (name == "zoom" and fraction(value) < FAINT)
         # Only a turn about the z axis keeps text facing the reader.
         or (name == "rotate" and len(value.split()) > 1 and not value.startswith("z "))

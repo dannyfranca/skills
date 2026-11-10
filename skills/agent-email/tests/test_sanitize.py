@@ -224,6 +224,22 @@ class HtmlToTextTests(unittest.TestCase):
             text, _ = sanitize.html_to_text(f'<p style="color:{color}">A</p><p>Seen</p>')
             self.assertEqual(text.split(), ["Seen"], color)
 
+    def test_positive_sizes_too_small_to_read_hide(self):
+        for style in (
+            "font-size:.0001em", "font-size:.01pt", "font-size:1%", "font-size:1foo", "width:.001vw",
+            "transform:scale(.00001)", "scale:.001", "scale:1%",
+        ):
+            text, _ = sanitize.html_to_text(f'<p style="{style}">A</p><p>Seen</p>')
+            self.assertEqual(text.split(), ["Seen"], style)
+
+    def test_readable_sizes_stay_visible(self):
+        for style in (
+            "font-size:1.2em", "font-size:80%", "width:5%", "transform:scale(1.5)", "scale:.5",
+            "font:bold 12px/1.5 'Roboto-2x'",
+        ):
+            text, _ = sanitize.html_to_text(f'<p style="{style}">Seen</p>')
+            self.assertEqual(text.split(), ["Seen"], style)
+
     def test_end_tag_does_not_close_a_hidden_element_it_skips(self):
         text, _ = sanitize.html_to_text("<span><div hidden>A</span>Code 654321</div><p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
