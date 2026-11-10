@@ -157,6 +157,11 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text(html)
         self.assertEqual(text.split(), ["Seen"])
 
+    def test_non_rendered_containers_hide(self):
+        tags = ("datalist", "iframe", "canvas", "audio", "video", "noembed", "noframes", "rp")
+        text, _ = sanitize.html_to_text("".join(f"<{tag}>A</{tag}>" for tag in tags) + "<p>Seen</p>")
+        self.assertEqual(text.split(), ["Seen"])
+
     def test_end_tag_does_not_close_a_hidden_element_it_skips(self):
         text, _ = sanitize.html_to_text("<span><div hidden>A</span>Code 654321</div><p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
