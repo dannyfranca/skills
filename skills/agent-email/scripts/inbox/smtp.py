@@ -5,7 +5,7 @@ import imaplib
 import re
 import smtplib
 import ssl
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from email.policy import default as default_policy
 from email.utils import make_msgid
@@ -33,7 +33,13 @@ def message_of(uid, received, raw, with_body):
 
 def body(raw, subtype):
     part = raw.get_body(preferencelist=(subtype,))
-    return part.get_content() if part else None
+    if not part:
+        return None
+    try:
+        return part.get_content()
+    # The sender names the charset. An unknown one must not stop the screening of the mail.
+    except (LookupError, UnicodeError):
+        return (part.get_payload(decode=True) or b"").decode("utf-8", "replace")
 
 
 # The server sets INTERNALDATE on delivery. The Date header is whatever the sender wrote.
@@ -74,8 +80,10 @@ class SmtpProvider(Provider):
         return mailbox
 
     def list(self, after=None, limit=10):
-        # IMAP SINCE has day granularity, so the exact cut happens on INTERNALDATE.
-        criteria = ["SINCE", after.strftime("%d-%b-%Y")] if after else ["ALL"]
+        # IMAP SINCE compares the date in the server time zone, which can be one day before the UTC date.
+        # The exact cut happens on INTERNALDATE.
+        since = after.astimezone(timezone.utc) - timedelta(days=1) if after else None
+        criteria = ["SINCE", since.strftime("%d-%b-%Y")] if since else ["ALL"]
         with self.open_inbox() as mailbox:
             _, found = mailbox.uid("SEARCH", None, *criteria)
             uids = found[0].split()
