@@ -11,6 +11,11 @@ SKIPPED_TAGS = {
     "datalist", "select", "meter", "progress", "object", "iframe", "canvas", "audio", "video", "noembed", "noframes", "rp",
     "frameset",
 }
+# The HTML parser closes an element only when no element of these kinds is open inside it.
+SCOPE = {"applet", "caption", "html", "table", "td", "th", "marquee", "object", "template", "svg", "math"}
+EXTRA_BARRIERS = {"li": {"ol", "ul"}, "p": {"button"}}
+TABLE_TAGS = {"table", "tbody", "thead", "tfoot", "tr", "td", "th", "caption", "colgroup"}
+TABLE_SCOPE = {"html", "table", "template"}
 VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
 BLOCK_TAGS = {
     "p", "div", "br", "tr", "li", "table", "section", "article", "blockquote", "dialog", "details", "summary", "hr",
@@ -606,6 +611,10 @@ class _TextExtractor(_HtmlParser):
         # A browser ignores some end tags that would close other open elements. Which ones depends on the
         # element kinds, so an end tag that would close a hidden element on the way is ignored here.
         if self.hidden_positions and self.hidden_positions[-1] > self.positions[tag][-1]:
+            return
+        # A browser also ignores an end tag whose element is outside the scope that a table cell or similar opens.
+        barriers = TABLE_SCOPE if tag in TABLE_TAGS else SCOPE | EXTRA_BARRIERS.get(tag, set())
+        if any(open_tag in barriers for open_tag, *_ in self.stack[self.positions[tag][-1] + 1:]):
             return
         while self.stack:
             open_tag, hidden, *_ = self.stack.pop()
