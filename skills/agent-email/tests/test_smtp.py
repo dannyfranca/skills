@@ -139,6 +139,11 @@ class SmtpProviderTests(unittest.TestCase):
         found = smtp.SmtpProvider().list(after=datetime(2026, 11, 9, 9, 0, 0, 500000, tzinfo=timezone.utc))
         self.assertEqual([m.id for m in found], ["2", "1"])
 
+    def test_list_puts_the_higher_uid_first_within_one_second(self):
+        FakeImap.store[b"10"] = ("09-Nov-2026 11:05:00 +0100", raw("noreply@site.com", "Code", "Mon, 09 Nov 2026 10:05:00 +0000"))
+        found = smtp.SmtpProvider().list()
+        self.assertEqual([m.id for m in found], ["10", "2", "1"])
+
     def test_search_starts_a_day_early_for_server_time_zones(self):
         FakeImap.store[b"3"] = ("08-Nov-2026 19:01:00 -0500", raw("x@site.com", "West", "Sun, 08 Nov 2026 19:01:00 -0500"))
         found = smtp.SmtpProvider().list(after=datetime(2026, 11, 9, 2, 0, tzinfo=timezone(timedelta(hours=2))))
