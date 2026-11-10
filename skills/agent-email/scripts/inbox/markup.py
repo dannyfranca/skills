@@ -8,7 +8,7 @@ from html.parser import HTMLParser
 # Elements whose content a browser does not render, or renders only where it lacks support for the element.
 SKIPPED_TAGS = {
     "script", "style", "head", "title", "template", "noscript", "svg",
-    "datalist", "iframe", "canvas", "audio", "video", "noembed", "noframes", "rp",
+    "datalist", "select", "iframe", "canvas", "audio", "video", "noembed", "noframes", "rp",
 }
 VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
 BLOCK_TAGS = {
