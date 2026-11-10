@@ -176,6 +176,10 @@ def far_away(value):
     )
 
 
+def readable(value):
+    return len(value) <= MAX_VALUE and READABLE_VALUE.fullmatch(value)
+
+
 # Text that a human cannot see is the usual place for instructions aimed at an agent. This check is defense in
 # depth, not the boundary: text in the colour of its background needs a renderer to detect, so every mail still
 # reaches the agent inside the untrusted envelope and through the guard. Where a style can hide text, the check
@@ -183,7 +187,7 @@ def far_away(value):
 def hiding(name, value):
     if name not in VISIBILITY_PROPERTIES:
         return False
-    if len(value) > MAX_VALUE or not READABLE_VALUE.fullmatch(value):
+    if not readable(value):
         return True
     return (
         (name == "display" and value == "none")
@@ -338,7 +342,7 @@ def merged(*found):
 
 def factors(css):
     return merged(*(
-        {GROUPS.get(name, name): min(max(FACTORS[name](value), 0.0), 1.0)}
+        {GROUPS.get(name, name): min(max(FACTORS[name](value), 0.0), 1.0) if readable(value) else 0.0}
         for name, value in declarations(css)
         if name in FACTORS
     ))
