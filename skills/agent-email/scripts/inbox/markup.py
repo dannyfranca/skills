@@ -434,11 +434,16 @@ def target_factors(stylesheets):
     return dict(found)
 
 
+# A browser reads a NUL in an attribute value or a stylesheet as U+FFFD, and so do the selectors that match it.
+def without_nul(value):
+    return value and value.replace("\x00", "\ufffd")
+
+
 def first_values(attrs):
     # A browser keeps the first of duplicate attributes, so a later empty style cannot unhide the element.
     attributes = {}
     for name, value in attrs:
-        attributes.setdefault(name, value)
+        attributes.setdefault(name, without_nul(value))
     return attributes
 
 
@@ -473,7 +478,7 @@ class _StyleCollector(_HtmlParser):
 
     def handle_data(self, data):
         if self.inside:
-            self.stylesheets.append(data)
+            self.stylesheets.append(without_nul(data))
 
 
 class _TextExtractor(_HtmlParser):

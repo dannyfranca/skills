@@ -447,6 +447,16 @@ class HtmlToTextTests(unittest.TestCase):
         )
         self.assertEqual(text.split(), ["Seen"])
 
+    def test_nul_in_attribute_values_and_stylesheets_reads_as_replacement_character(self):
+        for html in (
+            "<style>.x\ufffd {display:none}</style><p class='x\x00'>A</p><p>Seen</p>",
+            "<style>.x\x00 {display:none}</style><p class='x\ufffd'>A</p><p>Seen</p>",
+        ):
+            text, _ = sanitize.html_to_text(html)
+            self.assertEqual(text.split(), ["Seen"], repr(html))
+        text, _ = sanitize.html_to_text("<style>.x\x00 {display:none}</style><body class='x\x00'><p>A</p></body>")
+        self.assertEqual(text.split(), [])
+
     def test_failing_non_ascii_selectors_stay_fast(self):
         start = time.monotonic()
         text, _ = sanitize.html_to_text("<style>." + "é" * 40 + "|x {display:none}</style><p>Seen</p>")
