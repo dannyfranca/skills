@@ -582,6 +582,13 @@ class HtmlToTextTests(unittest.TestCase):
             text, _ = sanitize.html_to_text(html)
             self.assertNotIn("654321", text, html)
 
+    def test_self_closing_textarea_or_title_keeps_its_end_tags_as_text(self):
+        for tag in ("textarea", "title"):
+            html = f"<div hidden><{tag}/></div>Code 654321</{tag}></div><p>Seen</p>"
+            text, _ = sanitize.html_to_text(html)
+            self.assertNotIn("654321", text, html)
+            self.assertIn("Seen", text, html)
+
     def test_root_tags_after_svg_or_math_cannot_unhide_the_mail(self):
         for html in (
             "<svg><html style=font-size:16px></html></svg><html style=font-size:0><p>Code 654321</p><p>Seen</p>",
