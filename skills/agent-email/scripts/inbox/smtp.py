@@ -60,6 +60,14 @@ def fetched(response):
             yield uid.group(1).decode(), received_of(attributes), email.message_from_bytes(part[1], policy=default_policy)
 
 
+def ok(reply, action):
+    status, data = reply
+    if status != "OK":
+        detail = data[0] if data and data[0] else b"no reason given"
+        fail(f"cannot {action}: {detail.decode(errors='replace') if isinstance(detail, bytes) else detail}")
+    return data
+
+
 class SmtpProvider(Provider):
     def __init__(self):
         self.address = env("AGENT_EMAIL_ADDRESS")
@@ -85,11 +93,14 @@ class SmtpProvider(Provider):
         since = after.astimezone(timezone.utc) - timedelta(days=1) if after else None
         criteria = ["SINCE", since.strftime("%d-%b-%Y")] if since else ["ALL"]
         with self.open_inbox() as mailbox:
-            _, found = mailbox.uid("SEARCH", None, *criteria)
+            found = ok(mailbox.uid("SEARCH", None, *criteria), "search INBOX")
             uids = found[0].split()
             if not uids:
                 return []
-            _, response = mailbox.uid("FETCH", b",".join(uids), "(INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM SUBJECT)])")
+            response = ok(
+                mailbox.uid("FETCH", b",".join(uids), "(INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM SUBJECT)])"),
+                "fetch mail",
+            )
         messages = [message_of(uid, received, raw, with_body=False) for uid, received, raw in fetched(response)]
         if after:
             messages = [m for m in messages if m.received and m.received > after]
@@ -98,7 +109,7 @@ class SmtpProvider(Provider):
 
     def fetch(self, message_id):
         with self.open_inbox() as mailbox:
-            _, response = mailbox.uid("FETCH", message_id, "(INTERNALDATE BODY.PEEK[])")
+            response = ok(mailbox.uid("FETCH", message_id, "(INTERNALDATE BODY.PEEK[])"), f"fetch message {message_id}")
         for _, received, raw in fetched(response):
             return received, raw
         fail(f"no message with id {message_id}")
