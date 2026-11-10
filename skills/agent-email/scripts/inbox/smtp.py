@@ -28,9 +28,9 @@ def message_of(uid, received, data, with_body):
             message.html = body(raw, "html")
             message.attachments = [part.get_filename() or "unnamed" for part in raw.iter_attachments()]
         return message
-    # The parser reads MIME parts and structured headers by recursion. Mail nested deep enough to exhaust the stack
-    # is no mail a person sends, and it must not stop each wait. The raw headers still name the mail.
-    except RecursionError:
+    # The parser reads MIME parts and structured headers by recursion, and fails with other errors on some malformed
+    # headers. Such mail is no mail a person sends, and it must not stop each wait. The raw headers still name the mail.
+    except Exception:
         headers = BytesHeaderParser(policy=compat32).parsebytes(data)
         return Message(
             id=uid,
