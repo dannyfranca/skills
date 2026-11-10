@@ -17,7 +17,8 @@ RECEIVED = {
     "message_id": "<abc@site.com>",
     "from": "Site <noreply@site.com>",
     "subject": "Your code",
-    "timestamp": "2026-11-09T10:05:00Z",
+    "timestamp": "2026-11-09T10:04:00Z",
+    "created_at": "2026-11-09T10:05:00Z",
     "labels": ["received"],
     "text": "Hi\n> quoted",
     "extracted_text": "Hi",
@@ -53,9 +54,18 @@ class AgentMailProviderTests(unittest.TestCase):
         self.assertEqual([m.id for m in found], ["<abc@site.com>", "<self@agentmail.to>"])
         url = fake.requests[0].full_url
         self.assertTrue(url.startswith("https://api.agentmail.to/v0/inboxes/agent%40agentmail.to/messages?"))
-        for part in ("limit=5", "include_spam=true", "include_unauthenticated=true", "after=2026-11-09T10%3A00%3A00.000Z"):
+        for part in ("limit=5", "include_spam=true", "include_unauthenticated=true", "after=2026-11-08T10%3A00%3A00.000Z"):
             self.assertIn(part, url)
         self.assertEqual(fake.requests[0].get_header("Authorization"), "Bearer key")
+
+    def test_list_filters_and_orders_by_server_receive_time(self):
+        skewed = dict(RECEIVED, message_id="<skewed@site.com>", timestamp="2026-11-09T09:50:00Z", created_at="2026-11-09T10:06:00Z")
+        old = dict(RECEIVED, message_id="<old@site.com>", timestamp="2026-11-09T09:58:00Z", created_at="2026-11-09T09:58:01Z")
+        bare = dict(RECEIVED, message_id="<bare@site.com>", timestamp="2026-11-09T10:01:00Z")
+        del bare["created_at"]
+        fake = FakeUrlopen({"messages": [RECEIVED, old, bare, skewed]})
+        found = self.call(fake, "list", datetime(2026, 11, 9, 10, tzinfo=timezone.utc), 10)
+        self.assertEqual([m.id for m in found], ["<skewed@site.com>", "<abc@site.com>", "<bare@site.com>"])
 
     def test_read_maps_fields_and_prefers_extracted_text(self):
         fake = FakeUrlopen(RECEIVED)
