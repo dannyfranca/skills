@@ -88,16 +88,17 @@ def links(anchors, text, sender_domain):
     # A URL shown as anchor text is not where the anchor goes. The anchor itself reports the mismatch.
     labels = {url for _, label in anchors for url in bare_urls(label or "")}
     candidates = list(anchors) + [(url, None) for url in bare_urls(text) if url not in labels]
-    seen, result = set(), []
+    found = {}
     for url, label in candidates:
         url = url.strip()
         # Invisible or direction marks inside a URL make the shown link differ from the one that opens.
         host = host_of(url)
-        if url in seen or len(url) > MAX_URL or any(map(invisible, url)) or not URL.fullmatch(url) or not host:
+        if len(url) > MAX_URL or any(map(invisible, url)) or not URL.fullmatch(url) or not host:
             continue
-        seen.add(url)
-        result.append({"url": url, "flag": flag(host, label, sender_domain)})
-    return result[:MAX_LINKS]
+        # One mismatched label is enough: the sender picks which copy of the link comes first.
+        if found.get(url) != "text-mismatch":
+            found[url] = flag(host, label, sender_domain)
+    return [{"url": url, "flag": link_flag} for url, link_flag in found.items()][:MAX_LINKS]
 
 
 def content(message, sender_domain):
