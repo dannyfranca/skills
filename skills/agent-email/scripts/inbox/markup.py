@@ -32,13 +32,14 @@ BOX_SIZES = ("height", "width", "max-height", "max-width")
 OFFSETS = ("left", "top", "right", "bottom", "inset", "text-indent", "margin", "margin-left", "margin-top")
 
 # The values a visibility property may have for the policy to read them: words, numbers, hex colours, strings,
-# and functions of those. Any other value, such as calc() or var(), counts as hiding.
+# and the functions the policy evaluates or that cannot hide text. Any other value, such as calc(), var(),
+# matrix(), or blur(), counts as hiding.
 NUMBER_TOKEN = r"[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?[a-z%]*"
 ATOM = rf"(?:{NUMBER_TOKEN}|-?[^\W\d][\w-]*|#[0-9a-f]{{3,8}}|\"[^\"]*\"|'[^']*')"
 SEPARATOR = r"\s*[\s,/]\s*"
 FUNCTION = (
-    r"(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|scale[xyz3d]*|translate[xyz3d]*|rotate[xyz3d]*|skew[xy]?|matrix(?:3d)?"
-    rf"|perspective|opacity|blur|brightness|contrast|grayscale|sepia|saturate|hue-rotate|invert|drop-shadow|rect)"
+    r"(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|scale[xyz3d]*|translate[xyz3d]*|rotatez?"
+    r"|opacity|brightness|contrast|grayscale|sepia|saturate|hue-rotate|invert|drop-shadow|rect)"
     rf"\(\s*(?:{ATOM}(?:{SEPARATOR}{ATOM})*)?\s*\)"
 )
 TERM = rf"(?:{FUNCTION}|{ATOM})"
