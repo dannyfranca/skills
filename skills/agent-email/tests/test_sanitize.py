@@ -582,6 +582,18 @@ class HtmlToTextTests(unittest.TestCase):
             text, _ = sanitize.html_to_text(html)
             self.assertNotIn("654321", text, html)
 
+    def test_text_masked_by_text_security_is_dropped(self):
+        for html in (
+            "<p style='-webkit-text-security:disc'>Code 654321</p><p>Seen</p>",
+            "<div style='-WEBKIT-TEXT-SECURITY: Square'><p>Code 654321</p></div><p>Seen</p>",
+            "<style>.m{-webkit-text-security:circle}</style><p class=m>Code 654321</p><p>Seen</p>",
+        ):
+            text, _ = sanitize.html_to_text(html)
+            self.assertNotIn("654321", text, html)
+            self.assertIn("Seen", text, html)
+        text, _ = sanitize.html_to_text("<p style='-webkit-text-security:none'>Code 654321</p>")
+        self.assertIn("654321", text)
+
     def test_self_closing_textarea_or_title_keeps_its_end_tags_as_text(self):
         for tag in ("textarea", "title"):
             html = f"<div hidden><{tag}/></div>Code 654321</{tag}></div><p>Seen</p>"

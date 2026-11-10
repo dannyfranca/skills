@@ -99,6 +99,7 @@ OFFSETS = (
 # A mask, a motion path, or an animation can hide or move text in ways the policy does not compute.
 NONE_OR_HIDING = (
     "mask", "mask-image", "-webkit-mask", "-webkit-mask-image", "offset", "offset-path", "animation", "animation-name",
+    "text-security",
 )
 
 # The values a visibility property may have for the policy to read them: words, numbers, hex colours, strings,
