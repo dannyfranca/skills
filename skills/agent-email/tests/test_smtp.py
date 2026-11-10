@@ -176,6 +176,14 @@ class SmtpProviderTests(unittest.TestCase):
         self.assertIsNone(message.html)
         self.assertEqual(screen.hold(message), "label unparsable")
 
+    def test_header_too_deep_to_parse_is_held_in_list_and_read(self):
+        comments = b"\r\n ".join([b"(" * 10] * 110) + b"\r\n " + b"\r\n ".join([b")" * 10] * 110)
+        FakeImap.store[b"3"] = ("09-Nov-2026 12:00:00 +0000", b"From: " + comments + b" x@site.com\r\nSubject: Deep\r\n\r\nhi\r\n")
+        listed = smtp.SmtpProvider().list()[0]
+        message = smtp.SmtpProvider().read("3")
+        for found in (listed, message):
+            self.assertEqual((found.id, found.subject, found.labels), ("3", "Deep", ["unparsable"]))
+
     def test_unknown_charset_still_gives_the_text(self):
         unknown = b"From: x@site.com\r\nSubject: Odd\r\nContent-Type: text/plain; charset=x-unknown\r\n\r\nCode 654321\r\n"
         FakeImap.store[b"3"] = ("09-Nov-2026 11:00:00 +0000", unknown)
