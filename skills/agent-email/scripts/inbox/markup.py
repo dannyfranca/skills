@@ -161,7 +161,7 @@ def alpha(color):
 
 def far_away(value):
     return any(
-        number <= -100 if unit == "%" else number * (EM_PX if unit in ("em", "rem") else 1) <= -FAR_PX
+        number <= -100 if unit == "%" else length_px(number, unit, 0) <= -FAR_PX
         for number, unit in numbers(value)
     )
 
