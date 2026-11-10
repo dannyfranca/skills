@@ -480,6 +480,8 @@ class _TextExtractor(_HtmlParser):
             or (tag == "dialog" and "open" not in attributes)
             or (self.in_closed_details() and (tag != "summary" or self.stack[-1][2]["summary_shown"]))
             or "hidden" in attributes
+            # A popover starts closed, and only a script or a click opens it.
+            or "popover" in attributes
             or attributes.get("aria-hidden") == "true"
             or hides(attributes.get("style") or "")
             or replaces(attributes.get("style") or "")
