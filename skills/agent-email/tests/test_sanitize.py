@@ -462,12 +462,14 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text("<style>." + "é" * 40 + "|x {display:none}</style><p>Seen</p>")
         self.assertLess(time.monotonic() - start, 0.5)
 
-    def test_inherit_takes_the_parent_value_of_a_property_that_does_not_inherit(self):
+    def test_inherit_takes_the_parent_value_even_after_a_local_value(self):
         for html in (
             '<div style="opacity:.2">' + '<div style="opacity:inherit">' * 2 + "A" + "</div>" * 3 + "<p>Seen</p>",
             "<style>.i {zoom:inherit}</style><div style='zoom:.4'><div class='i'><p class='i'>A</p></div></div><p>Seen</p>",
             '<div style="max-height:0"><div style="overflow:hidden;max-height:inherit">A</div></div><p>Seen</p>',
             '<div style="opacity:.5"><div><p style="opacity:inherit">Seen</p></div></div>',
+            '<div style="font-size:2px"><div style="font-size:16px;font-size:inherit"><p style="font-size:.1em">A</p></div></div><p>Seen</p>',
+            '<div style="color:#fff0"><div style="color:#000;color:inherit">A</div></div><p>Seen</p>',
         ):
             text, _ = sanitize.html_to_text(html)
             self.assertEqual(text.split(), ["Seen"], html)
@@ -478,6 +480,9 @@ class HtmlToTextTests(unittest.TestCase):
             "<style>.i {ALL: inherit !important}</style><div style='transform:scale(.3)'>"
             + "<div class='i'>" * 3 + "A" + "</div>" * 4 + "<p>Seen</p>",
             '<div style="opacity:.5"><p style="all:inherit">Seen</p></div>',
+            '<div style="font-size:2px"><div style="font-size:16px;all:inherit"><p style="font-size:.1em">A</p></div></div><p>Seen</p>',
+            '<div style="-webkit-text-fill-color:#fff0"><p style="-webkit-text-fill-color:#000;all:inherit">A</p></div><p>Seen</p>',
+            '<div style="font-size:16px;color:#000"><p style="font-size:inherit;color:inherit">Seen</p></div>',
         ):
             text, _ = sanitize.html_to_text(html)
             self.assertEqual(text.split(), ["Seen"], html)

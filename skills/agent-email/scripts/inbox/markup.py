@@ -385,11 +385,8 @@ def merged(*found):
     return factors
 
 
-# A font size and a text colour pass to the children, so "inherit" on them keeps the parent value already.
-INHERITED_GROUPS = ("font-size", "font-px", "font-root", "color", "fill")
-
-
-INHERITING_ALL = {group: None for groups in FACTORS.values() for group in groups if group not in INHERITED_GROUPS}
+FONT_GROUPS = ("font-size", "font-px", "font-root")
+INHERITING_ALL = {group: None for groups in FACTORS.values() for group in groups}
 
 
 def factors(css):
@@ -398,7 +395,7 @@ def factors(css):
         # "all: inherit" sets each property to "inherit". Its other values reset to the initial value, which shows text.
         groups = INHERITING_ALL if name == "all" and value == "inherit" else FACTORS.get(name, {})
         for group, factor in groups.items():
-            if value == "inherit" and group not in INHERITED_GROUPS:
+            if value == "inherit":
                 found[("inherit", group)] = 0.0
                 continue
             share = factor(value) if readable(value) else 0.0
@@ -515,13 +512,22 @@ class _TextExtractor(_HtmlParser):
             self.stack[-1][3] if self.stack else (1.0, 1.0, 1.0, 1.0, {})
         )
         found = merged(factors(attributes.get("style") or ""), *styled)
-        # "inherit" on a property that does not inherit takes the value the parent itself sets.
-        for key in [key for key in found if isinstance(key, tuple)]:
-            del found[key]
-            found[key[1]] = min(found.get(key[1], 1.0), parent_own.get(key[1], 1.0))
+        # "inherit" takes the value the parent itself sets, or for an inherited property the value it passes on. The
+        # policy cannot tell which declaration comes last across rules, so the lower of that and a local value counts.
+        inheriting = {key[1] for key in found if isinstance(key, tuple)}
+        for group in inheriting:
+            del found[("inherit", group)]
+            if group not in FONT_GROUPS + ("color", "fill"):
+                found[group] = min(found.get(group, 1.0), parent_own.get(group, 1.0))
+        font = font_scale(found, parent_font, self.root_font)
+        if inheriting.intersection(FONT_GROUPS):
+            font = min(font, parent_font)
         # The text colour and fill are inherited each on its own, and a value on the element replaces it.
-        colour, fill = found.get("color", parent_colour), found.get("fill", parent_fill)
-        return inherited * share(found), font_scale(found, parent_font, self.root_font), colour, fill, found
+        colour, fill = (
+            min(found.get(group, parent), parent) if group in inheriting else found.get(group, parent)
+            for group, parent in (("color", parent_colour), ("fill", parent_fill))
+        )
+        return inherited * share(found), font, colour, fill, found
 
     def hidden(self, tag, attributes, level):
         return (
