@@ -116,6 +116,20 @@ class HtmlToTextTests(unittest.TestCase):
         sanitize.html_to_text("<div>" * 10000 + "</span>" * 10000)
         self.assertLess(time.monotonic() - start, 0.5)
 
+    def test_unresolved_visibility_value_hides(self):
+        html = (
+            "<p style='opacity:calc(1 - 1)'>A</p><p style='color:rgba(0,\n0,\n0,\n0)'>B</p><p style='color:color-mix(in srgb, red 0%, transparent)'>C</p>"
+            "<p style='font:12px/1.5 \"Segoe UI\", Roboto, sans-serif;color:rgb(0 0 0 / 80%);width:100%;margin:0 auto'>Seen</p>"
+            "<p style='transform:translate(-50%, -50%) rotate(45deg);display:inline-block;filter:drop-shadow(0 0 2px #000)'>Too</p>"
+        )
+        text, _ = sanitize.html_to_text(html)
+        self.assertEqual(text.split(), ["Seen", "Too"])
+
+    def test_unterminated_selector_stays_fast(self):
+        start = time.monotonic()
+        text, _ = sanitize.html_to_text("<style>" + "[" * 64000 + "{display:none}</style><p>Seen</p>")
+        self.assertLess(time.monotonic() - start, 0.5)
+
     def test_first_duplicate_attribute_wins(self):
         html = (
             "<style>.hide { display: none }</style><p style='display:none' style=''>Code 999999</p>"
