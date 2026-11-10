@@ -11,6 +11,8 @@ LINE_LIMIT = 200
 MAX_CODES = 5
 MAX_LINKS = 20
 MAX_URL = 2000
+# Mail for signups is a few kB, and parsing stays fast up to this size.
+MAX_HTML = 500_000
 MAX_ATTACHMENTS = 10
 ATTACHMENT_NAME_LIMIT = 100
 
