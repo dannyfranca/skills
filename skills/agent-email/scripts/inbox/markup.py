@@ -34,6 +34,8 @@ HEX_ALPHA = re.compile(r"#(?:[0-9a-f]{3}([0-9a-f])|[0-9a-f]{6}([0-9a-f]{2}))")
 COLOR_FUNCTION = re.compile(r"(?:rgb|hsl|hwb|lab|lch|oklab|oklch)a?\((.*)\)")
 # An unclosed bracket runs to the end, so a long run of "[" is one token and not one rescan per bracket.
 PSEUDO_OR_ATTRIBUTE = rf"""::?[\w-]+(?:\([^)]*(?:\)|\Z))?|\[(?:{STRING}|\\.|[^\]"'\\])*(?:\]|\Z)"""
+# CSS 2 pseudo-elements also take a single colon.
+PSEUDO_ELEMENT = re.compile(r"::|:(?:before|after|first-line|first-letter)\Z", re.I)
 SELECTOR_TOKEN = re.compile(rf"({ESCAPE})|({PSEUDO_OR_ATTRIBUTE})|(\s*[\s>+~]\s*)|(,)|[^\\:\[\s>+~,]+|.", re.I | re.S)
 TAG = re.compile(IDENTIFIER, re.I | re.S)
 # One scan, so that the "." of an escaped "\." starts no class.
@@ -224,6 +226,14 @@ def hides(css):
     return any(hiding(name, value) for name, value in declarations(css))
 
 
+# Content on an element replaces all of its text. On a pseudo-element it only adds text, as in the common clearfix.
+def replaces(css):
+    return any(name == "content" and value not in KEPT_CONTENT for name, value in declarations(css))
+
+
+KEPT_CONTENT = ("normal", "none", "initial", "inherit", "unset", "revert", "revert-layer")
+
+
 def compound_target(compound):
     tag = TAG.match(compound)
     parts = COMPOUND_PART.findall(compound)
@@ -242,8 +252,9 @@ def selector_target(compounds, combinators):
 
 
 def selector_targets(selectors):
-    """The (tag, id, classes) of each element that a CSS selector list picks, without its ancestors."""
-    compounds, combinators, compound, combinator, simple = [], [], "", "", True
+    """The (tag, id, classes) of each element that a CSS selector list picks, without its ancestors, and whether
+    the selector picks a pseudo-element of it."""
+    compounds, combinators, compound, combinator, simple, pseudo_element = [], [], "", "", True, False
     for match in SELECTOR_TOKEN.finditer(selectors + ","):
         escape, pseudo_or_attribute, next_combinator, comma = match.groups()
         if escape or not (pseudo_or_attribute or next_combinator is not None or comma):
@@ -253,6 +264,7 @@ def selector_targets(selectors):
             # Pseudo-classes and attributes are ignored: an element with any of them can be the target.
             compound += "*"
             simple = simple and not (pseudo_or_attribute.startswith(":") and "(" in pseudo_or_attribute)
+            pseudo_element = pseudo_element or bool(PSEUDO_ELEMENT.match(pseudo_or_attribute))
             continue
         if compound:
             simple = simple and bool(SIMPLE_COMPOUND.fullmatch(compound))
@@ -264,8 +276,8 @@ def selector_targets(selectors):
             # Functional pseudo-classes and namespaces can pick elements that no tag, id, or class names.
             # Such a rule hides every element: the sender controls the selector, so it may not narrow the check.
             if compounds or not simple:
-                yield selector_target(compounds, combinators) if simple else ANY_ELEMENT
-            compounds, combinators, combinator, simple = [], [], "", True
+                yield (selector_target(compounds, combinators) if simple else ANY_ELEMENT), pseudo_element
+            compounds, combinators, combinator, simple, pseudo_element = [], [], "", True, False
         else:
             combinator += next_combinator.strip()
 
@@ -386,9 +398,13 @@ def target_factors(stylesheets):
     found = defaultdict(dict)
     for stylesheet in stylesheets:
         for selectors, declarations in css_rules(stylesheet):
-            rule = {"hidden": 0.0} if hides(declarations) else factors(declarations)
-            for target in selector_targets(selectors) if rule else ():
-                found[target] = merged(found[target], rule)
+            hidden = hides(declarations)
+            replacing, rule = (False, {}) if hidden else (replaces(declarations), factors(declarations))
+            for target, pseudo_element in selector_targets(selectors) if hidden or replacing or rule else ():
+                if hidden or (replacing and not pseudo_element):
+                    found[target] = merged(found[target], {"hidden": 0.0})
+                elif rule:
+                    found[target] = merged(found[target], rule)
     if len(found) > MAX_HIDING_TARGETS:
         return {ANY_ELEMENT: merged(*found.values())}
     return dict(found)
@@ -466,6 +482,7 @@ class _TextExtractor(_HtmlParser):
             or "hidden" in attributes
             or attributes.get("aria-hidden") == "true"
             or hides(attributes.get("style") or "")
+            or replaces(attributes.get("style") or "")
             or math.prod(level) < FAINT
         )
 

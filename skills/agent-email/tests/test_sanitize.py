@@ -168,7 +168,7 @@ class HtmlToTextTests(unittest.TestCase):
     def test_strings_hold_no_css_syntax(self):
         html = (
             '<style>.a {display:none;--label:"{"} .b {content:"/*"; display:none; x:"*/"} '
-            '.c {content:"x\n} .d {display:none}</style>'
+            '.c {font-family:"x\n} .d {display:none}</style>'
             "<p class='a'>A</p><p class='b'>A</p><p class='d'>A</p>"
             """<p style='content:"/*";display:none;x:"*/"'>A</p><p class='c'>Seen</p>"""
         )
@@ -392,6 +392,17 @@ class HtmlToTextTests(unittest.TestCase):
         text, _ = sanitize.html_to_text("".join(f"<body a{n}=x>" for n in range(32000)) + "<p>Seen</p>")
         self.assertEqual(text.split(), ["Seen"])
         self.assertLess(time.monotonic() - start, 1)
+
+    def test_content_replacement_hides(self):
+        for html in (
+            '<div style="content:url(data:,)">A</div><p>Seen</p>',
+            "<style>.x{content:url(a.png)}</style><div class='x'>A</div><p>Seen</p>",
+            "<style>.y::after,.x{content:'B'}</style><div class='x'>A</div><p>Seen</p>",
+            "<style>.x:after,.x::before{content:'';display:table}</style><div class='x'>Seen</div>",
+            '<div style="content:normal">Seen</div>',
+        ):
+            text, _ = sanitize.html_to_text(html)
+            self.assertEqual(text.split(), ["Seen"], html)
 
     def test_parent_font_units_scale_the_parent_size(self):
         text, _ = sanitize.html_to_text('<div style="font-size:2px"><span style="font-size:.5ex">A</span></div><p>Seen</p>')
