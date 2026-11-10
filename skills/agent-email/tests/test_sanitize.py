@@ -413,6 +413,10 @@ class HtmlToTextTests(unittest.TestCase):
             self.assertEqual(text.split(), ["Seen"], html)
             self.assertEqual(anchors, [], html)
 
+    def test_unopened_popover_hides(self):
+        text, _ = sanitize.html_to_text('<div popover>A</div><div popover="manual">B</div><div popover="auto">C</div><p>Seen</p>')
+        self.assertEqual(text.split(), ["Seen"])
+
     def test_parent_font_units_scale_the_parent_size(self):
         text, _ = sanitize.html_to_text('<div style="font-size:2px"><span style="font-size:.5ex">A</span></div><p>Seen</p>')
         self.assertEqual(text.split(), ["Seen"])
