@@ -632,7 +632,8 @@ class _TextExtractor(_HtmlParser):
             barriers = SCOPE | EXTRA_BARRIERS.get(tag, set())
         else:
             barriers = SPECIAL
-        if any(open_tag in barriers for open_tag, *_ in self.stack[self.positions[tag][-1] + 1:]):
+        opened = self.positions[tag][-1]
+        if any(found and found[-1] > opened for found in map(self.positions.get, barriers)):
             return
         while self.stack:
             open_tag, hidden, *_ = self.stack.pop()
