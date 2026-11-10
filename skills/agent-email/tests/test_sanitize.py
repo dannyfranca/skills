@@ -582,6 +582,16 @@ class HtmlToTextTests(unittest.TestCase):
             text, _ = sanitize.html_to_text(html)
             self.assertNotIn("654321", text, html)
 
+    def test_block_start_ends_an_open_paragraph_as_browsers_do(self):
+        for html in (
+            "<p style=font-size:16px><div style=font-size:4px></p><span style=font-size:.2em>Code 654321</span></div><p>Seen</p>",
+            "<p><b style=opacity:.3><div style=opacity:.3></p>Code 654321</div><p>Seen</p>",
+            "<p><form><form><div style=font-size:0></p>Code 654321</div></form><p>Seen</p>",
+        ):
+            text, _ = sanitize.html_to_text(html)
+            self.assertNotIn("654321", text, html)
+            self.assertIn("Seen", text, html)
+
     def test_text_masked_by_text_security_is_dropped(self):
         for html in (
             "<p style='-webkit-text-security:disc'>Code 654321</p><p>Seen</p>",
