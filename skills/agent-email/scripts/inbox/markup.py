@@ -165,10 +165,11 @@ def alpha(color):
         return fraction(channels[3]) if len(channels) == 4 and numbers(channels[3]) else 0.0
     return 1.0
 
-
+# A clipping ancestor hides text pushed out in either direction.
+# A clipping ancestor hides text pushed out in either direction, and a page shows no more than a few hundred pixels.
 def far_away(value):
     return any(
-        number <= -100 if unit == "%" else length_px(number, unit, 0) <= -FAR_PX
+        abs(number) >= 100 if unit == "%" else abs(length_px(number, unit, 0)) >= FAR_PX
         for number, unit in numbers(value)
     )
 
