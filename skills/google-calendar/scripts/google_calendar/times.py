@@ -106,15 +106,6 @@ def shift(value, delta, tz, real_time=False):
     return {"date": (moment + timedelta(days=delta.days)).isoformat()}
 
 
-def until_before(original_start, tz):
-    """The RRULE UNTIL value that ends a series just before the given instance."""
-    moment = from_api(original_start, tz)
-    if isinstance(moment, datetime):
-        # RFC 5545 needs UNTIL in UTC when the series start has a time zone.
-        return (moment - timedelta(seconds=1)).astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return (moment - timedelta(days=1)).strftime("%Y%m%d")
-
-
 def show(moment):
     return moment.isoformat(timespec="seconds") if isinstance(moment, datetime) else moment.isoformat()
 

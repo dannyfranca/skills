@@ -8,7 +8,7 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import fakes  # noqa: F401
-from google_calendar import api, auth, setup, store, times, untrusted
+from google_calendar import api, auth, recurrence, setup, store, times, untrusted
 from google_calendar.errors import AUTH, BAD_INPUT, NOT_FOUND, REMOTE, GcalError
 
 LISBON = ZoneInfo("Europe/Lisbon")
@@ -42,8 +42,8 @@ class TimesTests(unittest.TestCase):
             times.parse_reminders("sms:10m")
 
     def test_until_before_is_utc_for_timed_and_a_date_for_all_day(self):
-        self.assertEqual(times.until_before({"dateTime": "2026-11-17T10:00:00Z"}, LISBON), "20261117T095959Z")
-        self.assertEqual(times.until_before({"date": "2026-11-17"}, LISBON), "20261116")
+        self.assertEqual(recurrence.until_before({"dateTime": "2026-11-17T10:00:00Z"}, LISBON), "20261117T095959Z")
+        self.assertEqual(recurrence.until_before({"date": "2026-11-17"}, LISBON), "20261116")
 
     def test_shift_keeps_the_own_time_zone(self):
         moved = times.shift({"dateTime": "2026-11-10T10:00:00-05:00", "timeZone": "America/New_York"}, timedelta(days=1), LISBON)

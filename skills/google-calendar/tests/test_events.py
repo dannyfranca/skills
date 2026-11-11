@@ -6,7 +6,8 @@ from fakes import ME, FakeAccount, FakeApi, calendar_list, event
 from google_calendar import untrusted
 from google_calendar.calendars import Calendars
 from google_calendar.errors import APPROVAL, BAD_INPUT, NOT_FOUND, REMOTE, GcalError
-from google_calendar.events import Events, free_slots, truncate
+from google_calendar.events import Events, free_slots
+from google_calendar.recurrence import truncate
 
 EVENTS = "/calendars/primary/events"
 GUEST = "guest@example.com"
@@ -207,6 +208,33 @@ class EditTests(unittest.TestCase):
         self.assertEqual(moved["start"], {"dateTime": "2026-10-26T00:00:00-04:00", "timeZone": york})
         self.assertEqual(moved["end"]["dateTime"], "2026-10-26T00:30:00-04:00")
 
+    def test_series_move_moves_its_last_instance(self):
+        ending = dict(SERIES, recurrence=["RRULE:FREQ=WEEKLY;UNTIL=20261116T100000Z"])
+        first = dict(FIRST, start=ending["start"], end=ending["end"])
+        events, api = make({("GET", f"{EVENTS}/{first['id']}"): first, ("GET", f"{EVENTS}/s1"): ending,
+                            ("PATCH", f"{EVENTS}/s1"): ending})
+        events.edit(first["id"], scope="all", start="2026-11-03T10:00Z")
+        self.assertEqual(api.sent("PATCH")[0][3]["recurrence"], ["RRULE:FREQ=WEEKLY;UNTIL=20261117T100000Z"])
+
+    def test_series_move_keeps_an_until_date_on_the_same_weekday(self):
+        ending = dict(SERIES, recurrence=["RRULE:FREQ=WEEKLY;UNTIL=20261116"])
+        events, api = make({("GET", f"{EVENTS}/{FOURTH['id']}"): FOURTH, ("GET", f"{EVENTS}/s1"): ending,
+                            ("PATCH", f"{EVENTS}/s1"): ending})
+        events.edit(FOURTH["id"], scope="all", start="2026-11-22T22:00Z")
+        self.assertEqual(api.sent("PATCH")[0][3]["recurrence"], ["RRULE:FREQ=WEEKLY;UNTIL=20261115"])
+
+    def test_series_with_extra_dates_does_not_move(self):
+        for extra in ("RDATE:20261225T100000Z", "EXDATE:20261109T100000Z"):
+            listed = dict(SERIES, recurrence=["RRULE:FREQ=WEEKLY;COUNT=10", extra])
+            events, api = make({("GET", f"{EVENTS}/{FOURTH['id']}"): FOURTH, ("GET", f"{EVENTS}/s1"): listed,
+                                ("PATCH", f"{EVENTS}/s1"): listed})
+            error = code_of(lambda: events.edit(FOURTH["id"], scope="all", start="2026-11-23T11:00Z"))
+            self.assertEqual(error.code, BAD_INPUT)
+            self.assertIn(extra.split(":")[0], error.message)
+            self.assertEqual(api.sent("PATCH"), [])
+            events.edit(FOURTH["id"], scope="all", title="Sync")
+            self.assertNotIn("recurrence", api.sent("PATCH")[0][3])
+
     def test_split_with_guests_needs_notify_even_for_a_color(self):
         shared = dict(SERIES, attendees=[{"email": GUEST}])
         events, api = make({("GET", f"{EVENTS}/{FOURTH['id']}"): FOURTH, ("GET", f"{EVENTS}/s1"): shared})
@@ -311,6 +339,7 @@ class DeleteAndRsvpTests(unittest.TestCase):
         events.rsvp("e1", "maybe", notify="all")
         mine = [a for a in api.sent("PATCH")[0][3]["attendees"] if a["email"] == ME]
         self.assertEqual(mine[0]["responseStatus"], "tentative")
+
 
 
 class ReadTests(unittest.TestCase):

@@ -1,24 +1,13 @@
 """Events: read, find free time, create, change, move, delete, and answer invitations."""
 
-import re
 import uuid
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, time, timedelta
 
-from . import shape
+from . import recurrence, shape
 from .api import CALENDAR, quote
 from .errors import NOT_FOUND, GcalError, approval, bad_input
-from .times import (
-    elapsed, from_api, later, parse_duration, parse_moment, parse_reminders, pin, shift, show, start_of, to_api, until_before, zone,
-)
+from .times import elapsed, from_api, later, parse_duration, parse_moment, parse_reminders, pin, shift, show, start_of, to_api, zone
 
-REPEATS = {
-    "daily": "RRULE:FREQ=DAILY",
-    "weekdays": "RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR",
-    "weekly": "RRULE:FREQ=WEEKLY",
-    "biweekly": "RRULE:FREQ=WEEKLY;INTERVAL=2",
-    "monthly": "RRULE:FREQ=MONTHLY",
-    "yearly": "RRULE:FREQ=YEARLY",
-}
 SCOPES = ("instance", "following", "all")
 # Changes to these fields stay in the copy of the user, so they email nobody.
 PERSONAL_FIELDS = {"reminders", "colorId"}
@@ -156,7 +145,7 @@ class Events:
             changes.update(self._series_times(item, master, times, bool(start), "recurrence" in changes))
             updated = self.api.request("PATCH", self._url(calendar_id, master["id"]), self._params(notify, changes), changes)
             return self._shape(updated, calendar_id)
-        _check_split(master)
+        recurrence.check_split(master.get("recurrence") or [])
         return self._split(calendar_id, item, master, changes, times, notify, bool(start), "recurrence" in changes)
 
     def move(self, ref, destination, notify=None, scope=None):
@@ -181,7 +170,7 @@ class Events:
         if scope == "following" and _is_first(item, master, self.account.tz):
             scope = "all"
         if scope == "following":
-            _check_split(master)
+            recurrence.check_split(master.get("recurrence") or [])
         target = master if scope in ("all", "following") else item
         missing = [] if yes else ["--yes"]
         if shape.guests(target, calendar_id, self.account.email) and notify is None:
@@ -192,7 +181,7 @@ class Events:
                            " ".join(missing))
         params = {"sendUpdates": notify}
         if scope == "following":
-            rules = truncate(master["recurrence"], until_before(item["originalStartTime"], self.account.tz))
+            rules = recurrence.truncate(master["recurrence"], recurrence.until_before(item["originalStartTime"], self.account.tz))
             self.api.request("PATCH", self._url(calendar_id, master["id"]), params, {"recurrence": rules})
         else:
             self.api.request("DELETE", self._url(calendar_id, target["id"]), params)
@@ -312,10 +301,12 @@ class Events:
         # An instance can sit off the pattern of its series, so only an explicit --start may move the series.
         # The series moves by the wall-clock difference, so each instance keeps its new hour across a clock change.
         wall = begin.replace(tzinfo=None) - anchor.replace(tzinfo=None) if isinstance(begin, datetime) else begin - anchor
-        if moved and not new_rule:
-            _check_selectors(series.get("recurrence") or [], anchor, begin)
         new_start = shift(series["start"], wall, tz) if moved else series["start"]
-        return {"start": new_start, "end": shift(new_start, elapsed(begin, finish), tz, real_time=True)}
+        result = {"start": new_start, "end": shift(new_start, elapsed(begin, finish), tz, real_time=True)}
+        rules = series.get("recurrence") or []
+        # A new --repeat is the rule for the new time, so it stays as the user gave it.
+        new_rules = recurrence.moved(rules, anchor, begin, tz) if moved and not new_rule else rules
+        return {**result, "recurrence": new_rules} if new_rules != rules else result
 
     def _fields(self, base, anchor, title=None, description=None, location=None, add_guests=None, remove_guests=None,
                 meet=False, repeat=None, until=None, count=None, remind=None, color=None, show_as=None):
@@ -339,7 +330,7 @@ class Events:
         if add_guests or remove_guests:
             changes["attendees"] = _guest_list(base.get("attendees") or [], add_guests or [], remove_guests or [])
         if repeat is not None or until or count:
-            changes["recurrence"] = _recurrence(repeat, until, count, anchor, base, self.account.tz)
+            changes["recurrence"] = recurrence.build(repeat, until, count, anchor, base.get("recurrence") or [], self.account.tz)
         return changes
 
     def _split(self, calendar_id, item, master, changes, times, notify, moved, new_rule):
@@ -361,11 +352,11 @@ class Events:
                 f"{len(changed)} instances from this one on have their own changes, and a split would lose them",
                 "use --scope all, or --scope instance for each instance",
             )
-        series.update(start=start, end=shift(start, length, tz, real_time=True), recurrence=_remaining(master, original, instances, tz))
+        series.update(start=start, end=shift(start, length, tz, real_time=True), recurrence=recurrence.remaining(master["recurrence"], _done(instances, from_api(original, tz), tz)))
         series.update(changes)
         series.update(self._series_times(item, series, times, moved, new_rule))
         created = self.api.request("POST", self._url(calendar_id), self._params(notify, series), series)
-        rules = truncate(master["recurrence"], until_before(original, tz))
+        rules = recurrence.truncate(master["recurrence"], recurrence.until_before(original, tz))
         try:
             self.api.request("PATCH", self._url(calendar_id, master["id"]), {"sendUpdates": notify}, {"recurrence": rules})
         except GcalError as error:
@@ -418,45 +409,9 @@ def _guests(item):
     return {(a.get("email", "").casefold(), bool(a.get("optional"))) for a in item.get("attendees") or []}
 
 
-# A rule part such as BYDAY=MO pins the series to a day or hour, so a move must give a new rule.
-DAY_PARTS = ("BYDAY", "BYMONTHDAY", "BYYEARDAY", "BYWEEKNO", "BYMONTH", "BYSETPOS")
-HOUR_PARTS = ("BYHOUR", "BYMINUTE", "BYSECOND")
-
-
-def _check_selectors(rules, anchor, begin):
-    parts = {part.split("=")[0] for rule in rules if rule.upper().startswith("RRULE:") for part in rule[6:].upper().split(";")}
-    timed = isinstance(begin, datetime)
-    new_day = (begin.date() if timed else begin) != (anchor.date() if timed else anchor)
-    new_hour = timed and begin.time() != anchor.time()
-    pinned = [part for part in parts if (new_day and part in DAY_PARTS) or (new_hour and part in HOUR_PARTS)]
-    if pinned:
-        raise bad_input(
-            f"the repeat rule fixes {', '.join(sorted(pinned))}, so the series cannot move to this time",
-            "add --repeat with a rule for the new time, or use --scope instance",
-        )
-
-
-def _remaining(master, original, instances, tz):
-    """COUNT for the new series: an instance counts by its place in the pattern, so a moved instance keeps its place."""
-    cutoff = from_api(original, tz)
-    done = sum(1 for i in instances if _place(i, tz) < cutoff)
-    rules = []
-    for rule in master["recurrence"]:
-        counted = re.search(r"COUNT=(\d+)", rule, re.I)
-        if rule.upper().startswith("RRULE:") and counted:
-            rule = re.sub(r"COUNT=\d+", f"COUNT={max(int(counted.group(1)) - done, 1)}", rule, flags=re.I)
-        rules.append(rule)
-    return rules
-
-
-def _check_split(master):
-    rules = [rule.upper() for rule in master.get("recurrence") or []]
-    # UNTIL does not stop RDATE dates, so a split would keep them in the old series and copy them into the new one.
-    # An EXDATE date uses a place of COUNT but has no instance, so the new COUNT would be wrong.
-    counted = any(rule.startswith("RRULE:") and "COUNT=" in rule for rule in rules)
-    if any(rule.startswith("RDATE") for rule in rules) or (counted and any(rule.startswith("EXDATE") for rule in rules)):
-        raise bad_input("this series has dates outside its rule (RDATE or EXDATE), so it cannot split",
-                        "use --scope instance or --scope all, or change it in Google Calendar")
+def _done(instances, cutoff, tz):
+    """Instances before the cutoff; an instance counts by its place in the pattern, so a moved instance keeps its place."""
+    return sum(1 for i in instances if _place(i, tz) < cutoff)
 
 
 def _is_first(item, master, tz):
@@ -471,48 +426,6 @@ def _guest_list(current, add, remove):
         raise bad_input(f"not a guest: {', '.join(sorted(missing))}")
     kept = [a for a in current if a.get("email", "").casefold() not in removed]
     return kept + [{"email": email} for email in add if email.casefold() not in known]
-
-
-def _recurrence(repeat, until, count, anchor, base, tz):
-    if repeat == "none":
-        return []
-    if repeat is None:
-        rules = [r for r in base.get("recurrence") or [] if r.upper().startswith("RRULE:")]
-        if not rules:
-            raise bad_input("--until and --count need --repeat")
-        rule = rules[0]
-        others = [r for r in base["recurrence"] if r != rule]
-    else:
-        rule = repeat if repeat.upper().startswith("RRULE:") else REPEATS.get(repeat)
-        others = []
-        if not rule:
-            raise bad_input(f"unknown repeat: {repeat}", f"use {', '.join(REPEATS)}, none, or an RRULE:... line")
-    if until and count:
-        raise bad_input("give --until or --count, not both")
-    rule = re.sub(r";?(UNTIL|COUNT)=[^;]*", "", rule, flags=re.I) if (until or count) else rule
-    if until:
-        last = parse_moment(until, tz)
-        last = last.date() if isinstance(last, datetime) else last
-        if isinstance(anchor, datetime):
-            end_of_day = datetime.combine(last, time(23, 59, 59), tzinfo=tz)
-            rule += ";UNTIL=" + end_of_day.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        else:
-            rule += ";UNTIL=" + last.strftime("%Y%m%d")
-    if count:
-        rule += f";COUNT={int(count)}"
-    return [rule, *others]
-
-
-def truncate(rules, until):
-    """End every RRULE at until; COUNT goes, because RFC 5545 allows only one of the two."""
-    result = []
-    for rule in rules:
-        if rule.upper().startswith("RRULE:"):
-            head, _, body = rule.partition(":")
-            parts = [p for p in body.split(";") if p and not p.upper().startswith(("UNTIL=", "COUNT="))]
-            rule = f"{head}:{';'.join([*parts, f'UNTIL={until}'])}"
-        result.append(rule)
-    return result
 
 
 def free_slots(begin, finish, busy, length, hours, weekends, tz):
