@@ -44,7 +44,7 @@ For Google Tasks, read [`references/tasks.md`](references/tasks.md).
 `agenda` shows each instance of a repeating event with its own ref. To change or delete an instance, add `--scope`:
 
 - `instance`: only this instance.
-- `following`: this instance and all later ones. Google keeps the earlier instances as a separate series. The new series is a new invitation, so with guests it always needs `--notify`. If a later instance has its own changes, the script stops: use `all` or `instance`.
+- `following`: this instance and all later ones. Google keeps the earlier instances as a separate series. The new series is a new invitation, so with guests it always needs `--notify`. If this instance or a later instance has its own changes, the script stops: use `all` or `instance`.
 - `all`: the whole series. A new `--start` moves each instance by the same amount.
 
 `move` moves only a whole series (`--scope all`). `rsvp` takes `instance` or `all`.
