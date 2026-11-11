@@ -21,6 +21,7 @@ npx skills add dannyfranca/skills --skill multi-shot-review
 - `agent-secrets` — Password store for agent signups, with Bitwarden Secrets Manager.
 - `browser` — Browser guidance for agents.
 - `explainer-video` — Make a narrated 3Blue1Brown-style explainer video.
+- `google-calendar` — Manage Google Calendar events, calendars, sharing, and Google Tasks.
 - `graceful-pause` — Pause agents without wasting tokens; in-flight multi-shot reviews finish.
 - `implement-issues-github` — Implement GitHub issues through to merged PRs.
 - `implement-tickets-local` — Implement local tickets with reviews.
