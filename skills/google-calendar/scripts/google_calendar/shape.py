@@ -33,13 +33,14 @@ def split_ref(text, default):
     return (container or default), item
 
 
-def is_own(event, account_email):
+def is_own(event, account_email, calendar_id):
     # The "self" flags describe the calendar that holds this copy, not the user, so compare the email.
     if event.get("guestsCanModify") and event.get("attendees"):
         # Guests can then change the text, and Google keeps the user as creator.
         return False
     creator = (event.get("creator") or {}).get("email", "")
-    return creator.casefold() == account_email.casefold()
+    # A moved event keeps its creator, but its organizer can change the text of all copies.
+    return creator.casefold() == account_email.casefold() and is_organizer(event, calendar_id, account_email)
 
 
 def guests(event, calendar_id, account_email):
@@ -73,7 +74,7 @@ def times(event, tz):
 
 def event(item, calendar_id, calendar_name, account_email, tz, with_body=False, recurrence=None, own_calendar=True):
     # The name of a shared calendar comes from its owner, and its writers can change any event in it.
-    own = own_calendar and is_own(item, account_email)
+    own = own_calendar and is_own(item, account_email, calendar_id)
     start, end = times(item, tz)
     others = guests(item, calendar_id, account_email)
     mine = next(

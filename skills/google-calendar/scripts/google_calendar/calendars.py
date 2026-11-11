@@ -9,7 +9,8 @@ from .untrusted import clean, clean_line
 
 ROLES = {"freebusy": "freeBusyReader", "reader": "reader", "writer": "writer", "owner": "owner"}
 ROLE_NAMES = {value: key for key, value in ROLES.items()}
-HEX_COLOR = r"#[0-9a-fA-F]{6}"
+WRITERS = ("owner", "writer", "writerWithoutPrivateAccess")
+HEX_COLOR =r"#[0-9a-fA-F]{6}"
 
 
 class Calendars:
@@ -74,7 +75,7 @@ class Calendars:
             except GcalError:
                 rules = [{"role": "writer"}]
             self._only_mine[calendar_id] = not any(
-                rule.get("role") in ("owner", "writer") and (rule.get("scope") or {}).get("value", "").casefold() not in me
+                rule.get("role") in WRITERS and (rule.get("scope") or {}).get("value", "").casefold() not in me
                 for rule in rules
             )
         return self._only_mine[calendar_id]
