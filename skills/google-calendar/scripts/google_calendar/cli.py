@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -291,8 +292,19 @@ def _task(args, tasks):
     return tasks.delete(args.ref, args.yes)
 
 
+def _join_offsets(argv):
+    # Python 3.11 argparse reads "--from -3d" as two options. "--from=-3d" works on every version.
+    joined = []
+    for token in argv:
+        if joined and re.fullmatch(r"-\d+[a-z]*", token) and re.fullmatch(r"--[a-z-]+", joined[-1]):
+            joined[-1] = f"{joined[-1]}={token}"
+        else:
+            joined.append(token)
+    return joined
+
+
 def main(argv=None, api=None):
-    args = build_parser().parse_args(argv)
+    args = build_parser().parse_args(_join_offsets(sys.argv[1:] if argv is None else argv))
     try:
         result = dispatch(args, api)
     except GcalError as error:

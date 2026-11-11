@@ -207,6 +207,10 @@ class CliTests(unittest.TestCase):
         self.assertFalse(download.exists())
         login.assert_called_once_with(open_url=False)
 
+    def test_negative_offset_after_a_flag(self):
+        code, _, err = self.run_cli(["search", "dentist", "--from", "-3d", "--to", "+1d"])
+        self.assertEqual((code, err), (0, ""))
+
     def test_bad_flag_is_exit_2(self):
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
             cli.main(["agenda", "--nope"])
