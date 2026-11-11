@@ -191,6 +191,8 @@ def _event_fields(parser):
     parser.add_argument("--color", choices=[*COLOR_IDS, "default"])
     parser.add_argument("--show-as", choices=("busy", "free"))
     parser.add_argument("--notify", choices=NOTIFY, help="email the guests (all) or not (none)")
+    parser.add_argument("--time-zone", dest="event_zone", metavar="ZONE",
+                        help="zone of the times you give, for example America/Sao_Paulo (default: the account zone)")
 
 
 EVENT_FIELDS = ("description", "location", "meet", "repeat", "until", "count", "remind", "color", "show_as")
@@ -203,7 +205,7 @@ def dispatch(args, api=None):
         auth.logout()
         return {"logged_out": True}
     api = api or Api()
-    account = Account(api)
+    account = Account(api, getattr(args, "event_zone", None))
     if args.command == "auth":
         if args.client:
             auth.import_client(args.client)
