@@ -172,6 +172,41 @@ class EditTests(unittest.TestCase):
         self.assertEqual(code_of(lambda: events.edit(FOURTH["id"], scope="following", title="Sync")).code, BAD_INPUT)
         self.assertEqual([call for call in api.calls if call[0] != "GET"], [])
 
+    def test_later_instance_with_an_optional_guest_stops_a_split(self):
+        shared = dict(SERIES, attendees=[{"email": GUEST}])
+        optional = dict(instance("2026-11-30T10:00:00Z", "2026-11-30T10:00:00Z"), attendees=[{"email": GUEST, "optional": True}])
+        events, api = make({("GET", f"{EVENTS}/{FOURTH['id']}"): FOURTH, ("GET", f"{EVENTS}/s1"): shared,
+                            ("GET", f"{EVENTS}/s1/instances"): {"items": [optional]}})
+        self.assertEqual(code_of(lambda: events.edit(FOURTH["id"], scope="following", notify="none", title="Sync")).code, BAD_INPUT)
+        self.assertEqual([call for call in api.calls if call[0] != "GET"], [])
+
+    def test_a_rule_with_a_weekday_needs_a_new_rule_to_move_the_series(self):
+        mondays = dict(SERIES, recurrence=["RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=10"])
+        events, api = make({("GET", f"{EVENTS}/{FOURTH['id']}"): FOURTH, ("GET", f"{EVENTS}/s1"): mondays,
+                            ("PATCH", f"{EVENTS}/s1"): mondays})
+        error = code_of(lambda: events.edit(FOURTH["id"], scope="all", start="2026-11-24T10:00Z"))
+        self.assertEqual(error.code, BAD_INPUT)
+        self.assertIn("BYDAY", error.message)
+        self.assertEqual(api.sent("PATCH"), [])
+        events.edit(FOURTH["id"], scope="all", start="2026-11-23T11:00Z")
+        events.edit(FOURTH["id"], scope="all", start="2026-11-24T10:00Z", repeat="RRULE:FREQ=WEEKLY;BYDAY=TU")
+        self.assertEqual(api.sent("PATCH")[-1][3]["start"]["dateTime"][:10], "2026-11-03")
+
+    def test_series_moves_on_the_clock_of_its_own_time_zone(self):
+        # New York leaves summer time on 2026-11-01 and Lisbon on 2026-10-25, so the two zones disagree on that week.
+        york = "America/New_York"
+        series = dict(SERIES, start={"dateTime": "2026-10-25T01:00:00-04:00", "timeZone": york},
+                      end={"dateTime": "2026-10-25T01:30:00-04:00", "timeZone": york}, recurrence=["RRULE:FREQ=WEEKLY;COUNT=5"])
+        second = dict(FOURTH, id="s1_20261101T050000Z", start={"dateTime": "2026-11-01T01:00:00-04:00", "timeZone": york},
+                      end={"dateTime": "2026-11-01T01:30:00-04:00", "timeZone": york},
+                      originalStartTime={"dateTime": "2026-11-01T01:00:00-04:00", "timeZone": york})
+        events, api = make({("GET", f"{EVENTS}/{second['id']}"): second, ("GET", f"{EVENTS}/s1"): series,
+                            ("PATCH", f"{EVENTS}/s1"): series})
+        events.edit(second["id"], scope="all", start="2026-11-02T05:00Z")
+        moved = api.sent("PATCH")[0][3]
+        self.assertEqual(moved["start"], {"dateTime": "2026-10-26T00:00:00-04:00", "timeZone": york})
+        self.assertEqual(moved["end"]["dateTime"], "2026-10-26T00:30:00-04:00")
+
     def test_split_with_guests_needs_notify_even_for_a_color(self):
         shared = dict(SERIES, attendees=[{"email": GUEST}])
         events, api = make({("GET", f"{EVENTS}/{FOURTH['id']}"): FOURTH, ("GET", f"{EVENTS}/s1"): shared})

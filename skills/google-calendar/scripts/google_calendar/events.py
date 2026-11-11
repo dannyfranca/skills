@@ -8,7 +8,7 @@ from . import shape
 from .api import CALENDAR, quote
 from .errors import NOT_FOUND, GcalError, approval, bad_input
 from .times import (
-    elapsed, from_api, later, parse_duration, parse_moment, parse_reminders, pin, shift, show, start_of, to_api, until_before,
+    elapsed, from_api, later, parse_duration, parse_moment, parse_reminders, pin, shift, show, start_of, to_api, until_before, zone,
 )
 
 REPEATS = {
@@ -153,11 +153,11 @@ class Events:
             updated = self.api.request("PATCH", self._url(calendar_id, item["id"]), self._params(notify, changes), {**changes, **times})
             return self._shape(updated, calendar_id)
         if scope == "all":
-            changes.update(self._series_times(item, master, times, bool(start)))
+            changes.update(self._series_times(item, master, times, bool(start), "recurrence" in changes))
             updated = self.api.request("PATCH", self._url(calendar_id, master["id"]), self._params(notify, changes), changes)
             return self._shape(updated, calendar_id)
         _check_split(master)
-        return self._split(calendar_id, item, master, changes, times, notify, bool(start))
+        return self._split(calendar_id, item, master, changes, times, notify, bool(start), "recurrence" in changes)
 
     def move(self, ref, destination, notify=None, scope=None):
         calendar_id, item = self._load(ref)
@@ -298,11 +298,13 @@ class Events:
             return self._times(begin, None, None)
         return {"start": to_api(begin, self.account.tz_name), "end": to_api(later(begin, elapsed(old_start, old_end), tz), self.account.tz_name)}
 
-    def _series_times(self, item, series, times, moved):
+    def _series_times(self, item, series, times, moved, new_rule):
         """Move a series so that this instance lands on the new time; keep the time zone of the series."""
         if not times:
             return {}
-        tz = self.account.tz
+        # Google repeats a series on the wall clock of its own time zone, so the move is measured there.
+        own_zone = series["start"].get("timeZone")
+        tz = zone(own_zone) if own_zone else self.account.tz
         anchor = from_api(item.get("originalStartTime") or item["start"], tz)
         begin, finish = from_api(times["start"], tz), from_api(times["end"], tz)
         if isinstance(anchor, datetime) != isinstance(begin, datetime):
@@ -310,6 +312,8 @@ class Events:
         # An instance can sit off the pattern of its series, so only an explicit --start may move the series.
         # The series moves by the wall-clock difference, so each instance keeps its new hour across a clock change.
         wall = begin.replace(tzinfo=None) - anchor.replace(tzinfo=None) if isinstance(begin, datetime) else begin - anchor
+        if moved and not new_rule:
+            _check_selectors(series.get("recurrence") or [], anchor, begin)
         new_start = shift(series["start"], wall, tz) if moved else series["start"]
         return {"start": new_start, "end": shift(new_start, elapsed(begin, finish), tz, real_time=True)}
 
@@ -338,7 +342,7 @@ class Events:
             changes["recurrence"] = _recurrence(repeat, until, count, anchor, base, self.account.tz)
         return changes
 
-    def _split(self, calendar_id, item, master, changes, times, notify, moved):
+    def _split(self, calendar_id, item, master, changes, times, notify, moved, new_rule):
         """Scope "following": a new series from this instance on, then the old series ends before it."""
         tz = self.account.tz
         original = item["originalStartTime"]
@@ -359,7 +363,7 @@ class Events:
             )
         series.update(start=start, end=shift(start, length, tz, real_time=True), recurrence=_remaining(master, original, instances, tz))
         series.update(changes)
-        series.update(self._series_times(item, series, times, moved))
+        series.update(self._series_times(item, series, times, moved, new_rule))
         created = self.api.request("POST", self._url(calendar_id), self._params(notify, series), series)
         rules = truncate(master["recurrence"], until_before(original, tz))
         try:
@@ -404,13 +408,32 @@ def _changed_later(instances, master, cutoff, tz):
             or from_api(i["start"], tz) != _place(i, tz)
             or elapsed(from_api(i["start"], tz), from_api(i["end"], tz)) != length
             or any(i.get(key) != master.get(key) for key in (i.keys() | master.keys()) - PER_INSTANCE)
-            or _emails(i) != _emails(master)
+            or _guests(i) != _guests(master)
         )
     ]
 
 
-def _emails(item):
-    return {a.get("email", "").casefold() for a in item.get("attendees") or []}
+def _guests(item):
+    """Guests as a split copies them; RSVP answers differ per instance and stay out."""
+    return {(a.get("email", "").casefold(), bool(a.get("optional"))) for a in item.get("attendees") or []}
+
+
+# A rule part such as BYDAY=MO pins the series to a day or hour, so a move must give a new rule.
+DAY_PARTS = ("BYDAY", "BYMONTHDAY", "BYYEARDAY", "BYWEEKNO", "BYMONTH", "BYSETPOS")
+HOUR_PARTS = ("BYHOUR", "BYMINUTE", "BYSECOND")
+
+
+def _check_selectors(rules, anchor, begin):
+    parts = {part.split("=")[0] for rule in rules if rule.upper().startswith("RRULE:") for part in rule[6:].upper().split(";")}
+    timed = isinstance(begin, datetime)
+    new_day = (begin.date() if timed else begin) != (anchor.date() if timed else anchor)
+    new_hour = timed and begin.time() != anchor.time()
+    pinned = [part for part in parts if (new_day and part in DAY_PARTS) or (new_hour and part in HOUR_PARTS)]
+    if pinned:
+        raise bad_input(
+            f"the repeat rule fixes {', '.join(sorted(pinned))}, so the series cannot move to this time",
+            "add --repeat with a rule for the new time, or use --scope instance",
+        )
 
 
 def _remaining(master, original, instances, tz):
