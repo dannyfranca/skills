@@ -1,6 +1,6 @@
 ---
 name: google-calendar
-description: Google Calendar and Google Tasks of the user. Use to read the agenda, find free time, create or change events, invite guests, manage calendars and their sharing, or manage tasks.
+description: The user's Google Calendar and Google Tasks. Use for any calendar, event, or task request.
 ---
 
 # Google Calendar
