@@ -253,6 +253,17 @@ class DeleteAndRsvpTests(unittest.TestCase):
         self.assertIn("UNTIL=20261123T095959Z", api.sent("PATCH")[0][3]["recurrence"][0])
         self.assertEqual(result["scope"], "following")
 
+    def test_delete_following_in_the_repeated_hour_keeps_earlier_instances(self):
+        # Lisbon repeats 01:00-02:00 on 2026-10-25: 00:30Z and 01:30Z both show as 01:30.
+        hourly = event("h1", "2026-10-24T22:30:00Z", "2026-10-24T23:00:00Z", recurrence=["RRULE:FREQ=HOURLY;COUNT=10"])
+        second = event("h1_20261025T013000Z", "2026-10-25T01:30:00Z", "2026-10-25T02:00:00Z", recurringEventId="h1",
+                       originalStartTime={"dateTime": "2026-10-25T01:30:00Z"})
+        events, api = make({("GET", f"{EVENTS}/{second['id']}"): second, ("GET", f"{EVENTS}/h1"): hourly})
+        result = events.delete(second["id"], scope="following", yes=True)
+        self.assertEqual(api.sent("DELETE"), [])
+        self.assertIn("UNTIL=20261025T012959Z", api.sent("PATCH")[0][3]["recurrence"][0])
+        self.assertEqual(result["scope"], "following")
+
     def test_deleted_event_is_not_found(self):
         events, _ = make({("GET", f"{EVENTS}/old"): {"id": "old", "status": "cancelled"}})
         self.assertEqual(code_of(lambda: events.get("old")).code, NOT_FOUND)
@@ -333,6 +344,25 @@ class ReadTests(unittest.TestCase):
         slots = free_slots(begin, begin + timedelta(days=4), busy, timedelta(minutes=30), "09:00-12:00", False, tz)
         self.assertEqual([(s["start"][11:16], s["end"][11:16]) for s in slots], [("09:00", "10:00"), ("11:00", "12:00"), ("09:00", "12:00")])
         self.assertEqual(slots[-1]["start"][:10], "2026-11-16")
+
+    def test_free_slots_see_busy_time_in_the_repeated_hour(self):
+        answer = {"calendars": {ME: {"busy": [{"start": "2026-10-25T01:10:00Z", "end": "2026-10-25T01:20:00Z"}]}}}
+        events, _ = make({("POST", "/freeBusy"): answer})
+        slots = events.freebusy("2026-10-25T00:00", "2026-10-25T03:00", slots="30m", hours="00:00-03:00", weekends=True)
+        self.assertEqual([(s["start"], s["end"]) for s in slots],
+                         [("2026-10-25T00:00:00+01:00", "2026-10-25T01:10:00+00:00"), ("2026-10-25T01:20:00+00:00", "2026-10-25T03:00:00+00:00")])
+        self.assertEqual([s["minutes"] for s in slots], [130, 100])
+
+    def test_agenda_limit_keeps_the_first_moment_in_the_repeated_hour(self):
+        team = {"id": "team@group.calendar.google.com", "summary": "Team", "accessRole": "owner", "selected": True}
+        api = FakeApi({
+            **calendar_list(team),
+            ("GET", "/calendars/me%40example.com/events"): {"items": [event("late", "2026-10-25T01:15:00Z", "2026-10-25T01:30:00Z")]},
+            ("GET", "/calendars/team%40group.calendar.google.com/events"): {"items": [event("early", "2026-10-25T00:45:00Z", "2026-10-25T01:00:00Z")]},
+        })
+        account = FakeAccount()
+        items = Events(api, account, Calendars(api, account)).agenda("2026-10-25", "2026-10-26", limit=1)
+        self.assertEqual([item["ref"].rpartition(":")[2] for item in items], ["early"])
 
     def test_truncate_drops_count(self):
         rules = ["RRULE:FREQ=DAILY;COUNT=5;BYHOUR=9", "EXDATE:20261112T090000Z"]

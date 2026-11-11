@@ -7,7 +7,9 @@ from datetime import datetime, time, timedelta, timezone
 from . import shape
 from .api import CALENDAR, quote
 from .errors import NOT_FOUND, GcalError, approval, bad_input
-from .times import elapsed, from_api, later, parse_duration, parse_moment, parse_reminders, shift, show, start_of, to_api, until_before
+from .times import (
+    elapsed, from_api, later, parse_duration, parse_moment, parse_reminders, pin, shift, show, start_of, to_api, until_before,
+)
 
 REPEATS = {
     "daily": "RRULE:FREQ=DAILY",
@@ -52,7 +54,7 @@ class Events:
     def agenda(self, start=None, end=None, calendars=None, query=None, limit=None, body=False):
         tz = self.account.tz
         begin = start_of(parse_moment(start or "today", tz), tz)
-        finish = start_of(parse_moment(end, tz), tz) if end else begin + timedelta(days=7)
+        finish = start_of(parse_moment(end, tz), tz) if end else pin(begin.astimezone(tz) + timedelta(days=7), tz)
         if finish <= begin:
             raise bad_input("--to must be after --from")
         ids = [self.calendars.resolve(name) for name in calendars] if calendars else self.calendars.shown()
@@ -70,7 +72,7 @@ class Events:
                 maxResults=250,
             )
             items += [self._shape(item, calendar_id, body) for item in found if item.get("status") != "cancelled"]
-        items.sort(key=lambda item: item["start"])
+        items.sort(key=lambda item: start_of(parse_moment(item["start"], tz), tz))
         return items[:limit] if limit else items
 
     def search(self, query, start=None, end=None, calendars=None, limit=None, body=False):
@@ -88,7 +90,7 @@ class Events:
     def freebusy(self, start=None, end=None, who=None, calendars=None, slots=None, hours="09:00-17:00", weekends=False):
         tz = self.account.tz
         begin = start_of(parse_moment(start or "now", tz), tz)
-        finish = start_of(parse_moment(end, tz), tz) if end else begin + timedelta(days=7)
+        finish = start_of(parse_moment(end, tz), tz) if end else pin(begin.astimezone(tz) + timedelta(days=7), tz)
         chosen = [self.calendars.resolve(name) for name in calendars or []] or self.calendars.owned()
         # Time with another person must also be free for the user, so --who adds to the calendars.
         ids = list(dict.fromkeys([*chosen, *(who or [])]))
@@ -279,7 +281,7 @@ class Events:
             if not isinstance(finish, datetime):
                 raise bad_input("--end of a timed event is a time", "for example 2026-11-12T15:00")
         else:
-            finish = later(begin, parse_duration(duration or DEFAULT_DURATION))
+            finish = later(begin, parse_duration(duration or DEFAULT_DURATION), tz)
         if elapsed(begin, finish) <= timedelta(0):
             raise bad_input("the event must end after it starts")
         return {"start": to_api(begin, name), "end": to_api(finish, name)}
@@ -294,7 +296,7 @@ class Events:
             return self._times(begin, end, duration)
         if isinstance(begin, datetime) != isinstance(old_start, datetime):
             return self._times(begin, None, None)
-        return {"start": to_api(begin, self.account.tz_name), "end": to_api(later(begin, elapsed(old_start, old_end)), self.account.tz_name)}
+        return {"start": to_api(begin, self.account.tz_name), "end": to_api(later(begin, elapsed(old_start, old_end), tz), self.account.tz_name)}
 
     def _series_times(self, item, series, times, moved):
         """Move a series so that this instance lands on the new time; keep the time zone of the series."""
@@ -306,7 +308,9 @@ class Events:
         if isinstance(anchor, datetime) != isinstance(begin, datetime):
             raise bad_input("a whole series cannot switch between all-day and timed", "use --scope instance")
         # An instance can sit off the pattern of its series, so only an explicit --start may move the series.
-        new_start = shift(series["start"], begin - anchor, tz) if moved else series["start"]
+        # The series moves by the wall-clock difference, so each instance keeps its new hour across a clock change.
+        wall = begin.replace(tzinfo=None) - anchor.replace(tzinfo=None) if isinstance(begin, datetime) else begin - anchor
+        new_start = shift(series["start"], wall, tz) if moved else series["start"]
         return {"start": new_start, "end": shift(new_start, elapsed(begin, finish), tz, real_time=True)}
 
     def _fields(self, base, anchor, title=None, description=None, location=None, add_guests=None, remove_guests=None,
@@ -497,8 +501,8 @@ def free_slots(begin, finish, busy, length, hours, weekends, tz):
     slots, day = [], begin.date()
     while day <= finish.date():
         if weekends or day.weekday() < 5:
-            cursor = max(begin, datetime.combine(day, first, tzinfo=tz))
-            close = min(finish, datetime.combine(day, last, tzinfo=tz))
+            cursor = max(begin, pin(datetime.combine(day, first, tzinfo=tz), tz))
+            close = min(finish, pin(datetime.combine(day, last, tzinfo=tz), tz))
             for busy_start, busy_end in busy:
                 if busy_end <= cursor or busy_start >= close:
                     continue

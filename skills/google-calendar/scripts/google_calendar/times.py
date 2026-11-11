@@ -19,6 +19,16 @@ def zone(name):
         raise bad_input(f"unknown time zone: {name}") from error
 
 
+def pin(moment, tz):
+    """The moment in the zone tz, with the fixed offset of that moment.
+
+    Python compares and subtracts two datetimes of one ZoneInfo by the wall clock. In the repeated hour of a clock
+    change, two different moments then look equal. A fixed offset makes each datetime one exact moment.
+    """
+    local = moment.astimezone(tz)
+    return local.replace(tzinfo=timezone(local.utcoffset()), fold=0)
+
+
 def parse_duration(text):
     text = (text or "").strip()
     parts = DURATION.findall(text)
@@ -29,30 +39,31 @@ def parse_duration(text):
 
 def parse_moment(text, tz, now=None):
     """A date for a whole day, or an aware datetime. Times without an offset are in the zone tz."""
-    now = now or datetime.now(tz)
+    # Offsets such as +1d move the wall clock, so they add in the ZoneInfo before the moment is pinned.
+    now = (now or datetime.now(tz)).astimezone(tz)
     word = (text or "").strip().lower()
     if word == "now":
-        return now
+        return pin(now, tz)
     if word in ("today", "tomorrow", "yesterday"):
         return now.date() + timedelta(days={"today": 0, "tomorrow": 1, "yesterday": -1}[word])
     relative = RELATIVE.match(word)
     if relative:
         delta = parse_duration(relative.group(2))
-        return now + delta if relative.group(1) == "+" else now - delta
+        return pin(now + delta if relative.group(1) == "+" else now - delta, tz)
     try:
         if re.fullmatch(r"\d{4}-\d{2}-\d{2}", word):
             return date.fromisoformat(word)
         moment = datetime.fromisoformat(text.strip().replace("Z", "+00:00"))
     except ValueError as error:
         raise bad_input(f"not a time: {text}", TIME_FORMAT_HINT) from error
-    return moment if moment.tzinfo else moment.replace(tzinfo=tz)
+    return pin(moment if moment.tzinfo else moment.replace(tzinfo=tz), tz)
 
 
 def start_of(moment, tz):
     """An aware datetime: a date becomes 00:00 of that day."""
     if isinstance(moment, datetime):
         return moment
-    return datetime.combine(moment, datetime.min.time(), tzinfo=tz)
+    return pin(datetime.combine(moment, datetime.min.time(), tzinfo=tz), tz)
 
 
 def to_api(moment, tz_name):
@@ -61,11 +72,10 @@ def to_api(moment, tz_name):
     return {"date": moment.isoformat()}
 
 
-def later(moment, delta):
+def later(moment, delta, tz):
     if not isinstance(moment, datetime):
         return moment + timedelta(days=delta.days)
-    # Aware datetimes in one zone add on the wall clock; a daylight-saving change would then lose or gain an hour.
-    return (moment.astimezone(timezone.utc) + delta).astimezone(moment.tzinfo)
+    return pin(moment.astimezone(timezone.utc) + delta, tz)
 
 
 def elapsed(begin, finish):
@@ -75,9 +85,9 @@ def elapsed(begin, finish):
 
 
 def from_api(value, tz):
-    """A date for all-day values, else an aware datetime in the zone tz."""
+    """A date for all-day values, else a pinned datetime in the zone tz."""
     if "dateTime" in value:
-        return datetime.fromisoformat(value["dateTime"].replace("Z", "+00:00")).astimezone(tz)
+        return pin(datetime.fromisoformat(value["dateTime"].replace("Z", "+00:00")), tz)
     return date.fromisoformat(value["date"])
 
 
@@ -89,7 +99,7 @@ def shift(value, delta, tz, real_time=False):
     moment = from_api(value, tz)
     if isinstance(moment, datetime):
         own_zone = value.get("timeZone")
-        moved = later(moment, delta) if real_time else moment + delta
+        moved = later(moment, delta, tz) if real_time else pin(moment.astimezone(tz) + delta, tz)
         if own_zone:
             moved = moved.astimezone(zone(own_zone))
         return {"dateTime": moved.isoformat(timespec="seconds"), **({"timeZone": own_zone} if own_zone else {})}
