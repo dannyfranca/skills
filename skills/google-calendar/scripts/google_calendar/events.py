@@ -35,7 +35,11 @@ COPIED_FIELDS = (
 )
 DEFAULT_DURATION = "1h"
 # An instance with its own value in one of these has changes that a split would lose.
-INSTANCE_FIELDS = ("summary", "description", "location", "colorId", "transparency", "visibility", "reminders")
+# Each instance has its own value of these keys, also when nobody changed it. Attendees differ in their answers only.
+PER_INSTANCE = frozenset(
+    ("id", "etag", "htmlLink", "kind", "start", "end", "originalStartTime", "recurringEventId", "recurrence",
+     "sequence", "created", "updated", "status", "attendees")
+)
 NOTIFY_FLAG = "--notify all (or --notify none for no email)"
 
 
@@ -395,7 +399,7 @@ def _changed_later(instances, master, cutoff, tz):
             i.get("status") == "cancelled"
             or from_api(i["start"], tz) != _place(i, tz)
             or elapsed(from_api(i["start"], tz), from_api(i["end"], tz)) != length
-            or any(i.get(key) != master.get(key) for key in INSTANCE_FIELDS)
+            or any(i.get(key) != master.get(key) for key in (i.keys() | master.keys()) - PER_INSTANCE)
             or _emails(i) != _emails(master)
         )
     ]

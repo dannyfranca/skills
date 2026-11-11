@@ -20,8 +20,9 @@ MOVED = dict(FOURTH, start={"dateTime": "2026-11-23T15:00:00+00:00"}, end={"date
 
 def instance(original, start, length=timedelta(minutes=30)):
     end = (datetime.fromisoformat(start) + length).isoformat()
-    return {"id": f"s1_{original}", "summary": SERIES["summary"], "originalStartTime": {"dateTime": original},
-            "start": {"dateTime": start}, "end": {"dateTime": end}}
+    inherited = {key: value for key, value in SERIES.items() if key != "recurrence"}
+    return {**inherited, "id": f"s1_{original}", "recurringEventId": "s1", "originalStartTime": {"dateTime": original},
+            "start": {"dateTime": start}, "end": {"dateTime": end}, "etag": original, "updated": original}
 
 
 def make(routes=None):
@@ -38,7 +39,7 @@ def code_of(call):
 
 class CreateTests(unittest.TestCase):
     def test_own_event_needs_no_flag_and_lasts_one_hour(self):
-        events, api = make({("POST", EVENTS): lambda params, body: {"id": "n", **body, "creator": {"email": ME}}})
+        events, api = make({("POST", EVENTS): lambda params, body: {"id": "n", **body, "creator": {"email": ME}, "organizer": {"email": ME}}})
         result = events.create("Focus", "2026-11-12T09:00")
         self.assertEqual(result["end"], "2026-11-12T10:00:00+00:00")
         self.assertTrue(result["own"])
@@ -164,6 +165,13 @@ class EditTests(unittest.TestCase):
                             ("GET", f"{EVENTS}/s1/instances"): {"items": [longer]}})
         self.assertEqual(code_of(lambda: events.edit(FOURTH["id"], scope="following", title="Sync")).code, BAD_INPUT)
 
+    def test_later_instance_with_its_own_meet_stops_a_split(self):
+        meet = dict(instance("2026-11-30T10:00:00Z", "2026-11-30T10:00:00Z"), conferenceData={"conferenceId": "abc-defg-hij"})
+        events, api = make({("GET", f"{EVENTS}/{FOURTH['id']}"): FOURTH, ("GET", f"{EVENTS}/s1"): SERIES,
+                            ("GET", f"{EVENTS}/s1/instances"): {"items": [meet]}})
+        self.assertEqual(code_of(lambda: events.edit(FOURTH["id"], scope="following", title="Sync")).code, BAD_INPUT)
+        self.assertEqual([call for call in api.calls if call[0] != "GET"], [])
+
     def test_split_with_guests_needs_notify_even_for_a_color(self):
         shared = dict(SERIES, attendees=[{"email": GUEST}])
         events, api = make({("GET", f"{EVENTS}/{FOURTH['id']}"): FOURTH, ("GET", f"{EVENTS}/s1"): shared})
@@ -195,6 +203,7 @@ class EditTests(unittest.TestCase):
             instance("2026-11-09T10:00:00Z", "2026-11-24T10:00:00Z"),
             instance("2026-11-16T10:00:00Z", "2026-11-16T10:00:00Z"),
             instance("2026-11-23T10:00:00Z", "2026-11-23T10:00:00Z"),
+            instance("2026-11-30T10:00:00Z", "2026-11-30T10:00:00Z"),
         ]
         events, api = make({
             ("GET", f"{EVENTS}/{FOURTH['id']}"): FOURTH,
@@ -291,6 +300,17 @@ class ReadTests(unittest.TestCase):
         self.assertFalse(events.get("e1")["own"])
         error = code_of(lambda: events.delete("e1"))
         self.assertNotIn("Do X now", error.message)
+
+    def test_events_that_restricted_writers_can_change_are_untrusted(self):
+        mine = event("e1", "2026-11-12T09:00:00+00:00", "2026-11-12T10:00:00+00:00")
+        writer = {"role": "writerWithoutPrivateAccess", "scope": {"type": "user", "value": GUEST}}
+        events, _ = make({("GET", f"{EVENTS}/e1"): mine, ("GET", "/calendars/me%40example.com/acl"): {"items": [writer]}})
+        self.assertFalse(events.get("e1")["own"])
+
+    def test_events_with_another_organizer_are_untrusted(self):
+        moved = event("e1", "2026-11-12T09:00:00+00:00", "2026-11-12T10:00:00+00:00", organizer=GUEST)
+        events, _ = make({("GET", f"{EVENTS}/e1"): moved})
+        self.assertFalse(events.get("e1")["own"])
 
     def test_free_with_people_keeps_my_calendars_and_withholds_unknown_slots(self):
         answer = {"calendars": {ME: {"busy": []}, GUEST: {"errors": [{"reason": "notFound"}]}}}
