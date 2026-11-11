@@ -341,6 +341,35 @@ class DeleteAndRsvpTests(unittest.TestCase):
         self.assertEqual(mine[0]["responseStatus"], "tentative")
 
 
+    def test_rsvp_on_a_calendar_of_another_person_changes_only_the_answer_of_the_user(self):
+        team = {"id": "boss@example.com", "summary": "Boss", "accessRole": "writer", "selected": True}
+        invite = event("e1", "2026-11-12T09:00:00+00:00", "2026-11-12T10:00:00+00:00", creator=GUEST, organizer=GUEST,
+                       attendees=[{"email": "boss@example.com", "self": True, "responseStatus": "needsAction"},
+                                  {"email": ME, "responseStatus": "accepted"}])
+        url = "/calendars/boss%40example.com/events/e1"
+        events, api = make({**calendar_list(team), ("GET", url): invite, ("PATCH", url): invite})
+        self.assertEqual(events.get("boss@example.com:e1")["my_response"], "yes")
+        events.rsvp("boss@example.com:e1", "no", notify="none")
+        answers = {a["email"]: a["responseStatus"] for a in api.sent("PATCH")[0][3]["attendees"]}
+        self.assertEqual(answers, {"boss@example.com": "needsAction", ME: "declined"})
+
+    def test_rsvp_on_a_calendar_of_another_person_needs_the_user_as_guest(self):
+        team = {"id": "boss@example.com", "summary": "Boss", "accessRole": "writer", "selected": True}
+        invite = event("e1", "2026-11-12T09:00:00+00:00", "2026-11-12T10:00:00+00:00", creator=GUEST, organizer=GUEST,
+                       attendees=[{"email": "boss@example.com", "self": True, "responseStatus": "needsAction"}])
+        url = "/calendars/boss%40example.com/events/e1"
+        events, api = make({**calendar_list(team), ("GET", url): invite, ("PATCH", url): invite})
+        self.assertNotIn("my_response", events.get("boss@example.com:e1"))
+        self.assertEqual(code_of(lambda: events.rsvp("boss@example.com:e1", "no", notify="none")).code, BAD_INPUT)
+        self.assertEqual(api.sent("PATCH"), [])
+
+    def test_rsvp_on_the_primary_calendar_finds_the_user_invited_by_an_alias(self):
+        invite = event("e1", "2026-11-12T09:00:00+00:00", "2026-11-12T10:00:00+00:00", creator=GUEST, organizer=GUEST,
+                       attendees=[{"email": "alias@example.com", "self": True, "responseStatus": "needsAction"}])
+        events, api = make({("GET", f"{EVENTS}/e1"): invite, ("PATCH", f"{EVENTS}/e1"): invite})
+        events.rsvp("e1", "yes", notify="none")
+        self.assertEqual(api.sent("PATCH")[0][3]["attendees"][0]["responseStatus"], "accepted")
+
 
 class ReadTests(unittest.TestCase):
     def test_agenda_merges_calendars_and_wraps_events_of_others(self):

@@ -52,6 +52,17 @@ def guests(event, calendar_id, account_email):
     ]
 
 
+def my_attendee(attendees, calendar_id, account_email):
+    """The attendee that is the user, or None.
+
+    "self" marks the attendee of the calendar that holds this copy, so it names the user only on the primary calendar.
+    There it also finds the user when the invitation went to an alias.
+    """
+    me = account_email.casefold()
+    primary = calendar_id.casefold() == me
+    return next((a for a in attendees if a.get("email", "").casefold() == me or (primary and a.get("self"))), None)
+
+
 def is_organizer(event, calendar_id, account_email):
     organizer = (event.get("organizer") or {}).get("email", "").casefold()
     return organizer in (account_email.casefold(), calendar_id.casefold())
@@ -77,9 +88,7 @@ def event(item, calendar_id, calendar_name, account_email, tz, with_body=False, 
     own = own_calendar and is_own(item, account_email, calendar_id)
     start, end = times(item, tz)
     others = guests(item, calendar_id, account_email)
-    mine = next(
-        (a for a in item.get("attendees") or [] if a.get("self") or a.get("email", "").casefold() == account_email.casefold()), None
-    )
+    mine = my_attendee(item.get("attendees") or [], calendar_id, account_email)
     reminders = item.get("reminders") or {}
     result = {
         "ref": ref(calendar_id, item["id"]),

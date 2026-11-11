@@ -196,14 +196,13 @@ class Events:
         if scope == "following":
             raise bad_input("an answer goes to one instance or to the whole series", "use --scope instance or --scope all")
         target = master if scope == "all" else item
-        email = self.account.email.casefold()
         attendees = [dict(a) for a in target.get("attendees") or []]
-        mine = [a for a in attendees if a.get("self") or a.get("email", "").casefold() == email]
+        mine = shape.my_attendee(attendees, self.calendars.real_id(calendar_id), self.account.email)
         if not mine:
             raise bad_input("you are not a guest of this event")
         if notify is None:
             raise approval(f"this answers {answer} to {(target.get('organizer') or {}).get('email')}", NOTIFY_FLAG)
-        mine[0]["responseStatus"] = shape.RESPONSE_VALUES[answer]
+        mine["responseStatus"] = shape.RESPONSE_VALUES[answer]
         updated = self.api.request("PATCH", self._url(calendar_id, target["id"]), {"sendUpdates": notify}, {"attendees": attendees})
         return self._shape(updated, calendar_id)
 
