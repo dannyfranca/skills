@@ -34,6 +34,7 @@ For Google Tasks, read [`references/tasks.md`](references/tasks.md).
 - A ref identifies an event: `<calendar-id>:<event-id>`. Copy it from the output. Do not make one.
 - `--calendar` takes a name or an ID. Errors show the name only of calendars that the user owns. Reads use the calendars that are ticked in the Google Calendar sidebar. `free` uses only the ticked calendars that the user owns, because a shared or holiday calendar does not make the user busy. `--who` adds people to these calendars. If the busy time of a calendar is unknown, `free` gives no slots. Writes go to the primary calendar.
 - A time is `2026-11-12T15:00`, `2026-11-12`, `today`, `tomorrow`, `now`, or an offset such as `+2h` or `-3d`. A time with no offset is in the time zone of the account (`whoami`).
+- If the event is in a different time zone, add `--time-zone <zone>` to `create` or `edit`, for example `--time-zone America/Sao_Paulo`. The times that you give are in that zone, and a new repeating event follows the clock of that zone. A change to a whole series (`--scope all`) keeps the zone of the series.
 - A date with no time makes an all-day event. Its `--end` is the last day, and the output shows the last day.
 - `--to` is not included in the range.
 - `--remind` sets the phone and email alerts of Google: `10m,1h`, `email:1d`, `default`, or `none`. `calendar edit --remind` sets the default alerts of a calendar.

@@ -11,9 +11,13 @@ TIME_ZONE_MAX_AGE_SECONDS = 86400
 
 
 class Account:
-    def __init__(self, api):
+    def __init__(self, api, time_zone=None):
+        """time_zone replaces the zone of the account for one command, for an event in another place."""
         self.api = api
         self._facts = None
+        if time_zone:
+            zone(time_zone)
+        self._time_zone = time_zone
 
     def refresh(self):
         primary = self.api.get(f"{CALENDAR}/calendars/primary")
@@ -35,7 +39,7 @@ class Account:
 
     @property
     def tz_name(self):
-        return self.facts()["time_zone"]
+        return self._time_zone or self.facts()["time_zone"]
 
     @property
     def tz(self):
