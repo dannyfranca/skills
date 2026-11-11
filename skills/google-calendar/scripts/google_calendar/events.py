@@ -6,7 +6,7 @@ from datetime import datetime, time, timedelta, timezone
 
 from . import shape
 from .api import CALENDAR, quote
-from .errors import approval, bad_input
+from .errors import NOT_FOUND, GcalError, approval, bad_input
 from .times import from_api, parse_duration, parse_moment, parse_reminders, shift, show, start_of, to_api, until_before
 
 REPEATS = {
@@ -138,10 +138,11 @@ class Events:
             updated = self.api.request("PATCH", self._url(calendar_id, item["id"]), self._params(notify, changes), {**changes, **times})
             return self._shape(updated, calendar_id)
         if scope == "all":
-            changes.update(self._series_times(item, master, times))
+            changes.update(self._series_times(item, master, times, bool(start)))
             updated = self.api.request("PATCH", self._url(calendar_id, master["id"]), self._params(notify, changes), changes)
             return self._shape(updated, calendar_id)
-        return self._split(calendar_id, item, master, changes, times, notify)
+        _check_split(master)
+        return self._split(calendar_id, item, master, changes, times, notify, bool(start))
 
     def move(self, ref, destination, notify=None, scope=None):
         calendar_id, item = self._load(ref)
@@ -164,6 +165,8 @@ class Events:
         scope = self._scope(item, master, scope)
         if scope == "following" and _is_first(item, master, self.account.tz):
             scope = "all"
+        if scope == "following":
+            _check_split(master)
         target = master if scope in ("all", "following") else item
         missing = [] if yes else ["--yes"]
         if shape.guests(target, calendar_id, self.account.email) and notify is None:
@@ -207,7 +210,11 @@ class Events:
     def _load(self, ref):
         calendar, event_id = shape.split_ref(ref, "primary")
         calendar_id = self.calendars.resolve(calendar)
-        return calendar_id, self.api.get(self._url(calendar_id, event_id))
+        item = self.api.get(self._url(calendar_id, event_id))
+        # Google still answers for a deleted event, but with only its id and status.
+        if item.get("status") == "cancelled":
+            raise GcalError(NOT_FOUND, f"not found: {ref}", "the event is deleted; list the events again")
+        return calendar_id, item
 
     def _master(self, calendar_id, item):
         if item.get("recurrence"):
@@ -273,7 +280,7 @@ class Events:
             return self._times(begin, None, None)
         return {"start": to_api(begin, self.account.tz_name), "end": to_api(begin + (old_end - old_start), self.account.tz_name)}
 
-    def _series_times(self, item, series, times):
+    def _series_times(self, item, series, times, moved):
         """Move a series so that this instance lands on the new time; keep the time zone of the series."""
         if not times:
             return {}
@@ -282,7 +289,8 @@ class Events:
         begin, finish = from_api(times["start"], tz), from_api(times["end"], tz)
         if isinstance(anchor, datetime) != isinstance(begin, datetime):
             raise bad_input("a whole series cannot switch between all-day and timed", "use --scope instance")
-        new_start = shift(series["start"], begin - anchor, tz)
+        # An instance can sit off the pattern of its series, so only an explicit --start may move the series.
+        new_start = shift(series["start"], begin - anchor, tz) if moved else series["start"]
         return {"start": new_start, "end": shift(new_start, finish - begin, tz)}
 
     def _fields(self, base, anchor, title=None, description=None, location=None, add_guests=None, remove_guests=None,
@@ -310,7 +318,7 @@ class Events:
             changes["recurrence"] = _recurrence(repeat, until, count, anchor, base, self.account.tz)
         return changes
 
-    def _split(self, calendar_id, item, master, changes, times, notify):
+    def _split(self, calendar_id, item, master, changes, times, notify, moved):
         """Scope "following": a new series from this instance on, then the old series ends before it."""
         tz = self.account.tz
         original = item["originalStartTime"]
@@ -324,7 +332,7 @@ class Events:
             start["timeZone"] = master["start"]["timeZone"]
         series.update(start=start, end=shift(start, length, tz), recurrence=self._remaining(calendar_id, master, original))
         series.update(changes)
-        series.update(self._series_times(item, series, times))
+        series.update(self._series_times(item, series, times, moved))
         created = self.api.request("POST", self._url(calendar_id), self._params(notify, series), series)
         rules = truncate(master["recurrence"], until_before(original, tz))
         self.api.request("PATCH", self._url(calendar_id, master["id"]), {"sendUpdates": notify}, {"recurrence": rules})
@@ -337,14 +345,23 @@ class Events:
         for rule in master["recurrence"]:
             counted = re.search(r"COUNT=(\d+)", rule, re.I)
             if rule.upper().startswith("RRULE:") and counted:
-                before = self.api.pages(
-                    self._url(calendar_id, master["id"], "/instances"),
-                    timeMax=show(start_of(from_api(original, self.account.tz), self.account.tz)),
-                    showDeleted="true",
-                )
-                rule = re.sub(r"COUNT=\d+", f"COUNT={max(int(counted.group(1)) - len(before), 1)}", rule, flags=re.I)
+                rule = re.sub(r"COUNT=\d+", f"COUNT={max(int(counted.group(1)) - self._done(calendar_id, master, original), 1)}", rule, flags=re.I)
             rules.append(rule)
         return rules
+
+    def _done(self, calendar_id, master, original):
+        """Instances of the series before this one, by their place in the pattern: a moved instance keeps its place."""
+        tz = self.account.tz
+        cutoff = from_api(original, tz)
+        # COUNT limits the series, so this reads a bounded number of instances.
+        instances = self.api.pages(self._url(calendar_id, master["id"], "/instances"), showDeleted="true")
+        return sum(1 for i in instances if from_api(i.get("originalStartTime") or i["start"], tz) < cutoff)
+
+
+def _check_split(master):
+    # UNTIL does not stop RDATE dates, so a split would keep them in the old series and copy them into the new one.
+    if any(rule.upper().startswith("RDATE") for rule in master.get("recurrence") or []):
+        raise bad_input("this series has extra dates (RDATE), so it cannot split", "use --scope instance or --scope all, or change it in Google Calendar")
 
 
 def _is_first(item, master, tz):

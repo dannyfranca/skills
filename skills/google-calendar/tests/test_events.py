@@ -5,7 +5,7 @@ import fakes
 from fakes import ME, FakeAccount, FakeApi, calendar_list, event
 from google_calendar import untrusted
 from google_calendar.calendars import Calendars
-from google_calendar.errors import APPROVAL, BAD_INPUT, GcalError
+from google_calendar.errors import APPROVAL, BAD_INPUT, NOT_FOUND, GcalError
 from google_calendar.events import Events, free_slots, truncate
 
 EVENTS = "/calendars/primary/events"
@@ -15,6 +15,11 @@ SERIES = event("s1", "2026-11-02T10:00:00+00:00", "2026-11-02T10:30:00+00:00", s
 FOURTH = event("s1_20261123T100000Z", "2026-11-23T10:00:00+00:00", "2026-11-23T10:30:00+00:00", summary="Standup",
                recurringEventId="s1", originalStartTime={"dateTime": "2026-11-23T10:00:00Z", "timeZone": fakes.ZONE})
 FIRST = dict(FOURTH, id="s1_20261102T100000Z", originalStartTime={"dateTime": "2026-11-02T10:00:00Z"})
+MOVED = dict(FOURTH, start={"dateTime": "2026-11-23T15:00:00+00:00"}, end={"dateTime": "2026-11-23T15:30:00+00:00"})
+
+
+def instance(original, start):
+    return {"id": f"s1_{original}", "originalStartTime": {"dateTime": original}, "start": {"dateTime": start}}
 
 
 def make(routes=None):
@@ -96,8 +101,29 @@ class EditTests(unittest.TestCase):
         self.assertEqual(body["start"]["dateTime"], "2026-11-02T11:00:00+00:00")
         self.assertEqual(body["end"]["dateTime"], "2026-11-02T11:30:00+00:00")
 
+    def test_duration_only_keeps_the_series_start(self):
+        events, api = make({("GET", f"{EVENTS}/{MOVED['id']}"): MOVED, ("GET", f"{EVENTS}/s1"): SERIES,
+                            ("PATCH", f"{EVENTS}/s1"): SERIES})
+        events.edit(MOVED["id"], scope="all", duration="1h")
+        body = api.sent("PATCH", f"{EVENTS}/s1")[0][3]
+        self.assertEqual(body["start"]["dateTime"], "2026-11-02T10:00:00+00:00")
+        self.assertEqual(body["end"]["dateTime"], "2026-11-02T11:00:00+00:00")
+
+    def test_series_with_rdate_does_not_split(self):
+        extra = dict(SERIES, recurrence=["RRULE:FREQ=WEEKLY;COUNT=10", "RDATE:20261225T100000Z"])
+        events, api = make({("GET", f"{EVENTS}/{FOURTH['id']}"): FOURTH, ("GET", f"{EVENTS}/s1"): extra})
+        self.assertEqual(code_of(lambda: events.edit(FOURTH["id"], scope="following", title="x")).code, BAD_INPUT)
+        self.assertEqual(code_of(lambda: events.delete(FOURTH["id"], scope="following", yes=True)).code, BAD_INPUT)
+        self.assertEqual([call for call in api.calls if call[0] != "GET"], [])
+
     def test_scope_following_splits_the_series(self):
-        before = [{"id": f"i{n}"} for n in range(3)]
+        # The second instance moved past the fourth; it still counts as before the fourth.
+        before = [
+            instance("2026-11-02T10:00:00Z", "2026-11-02T10:00:00Z"),
+            instance("2026-11-09T10:00:00Z", "2026-11-24T10:00:00Z"),
+            instance("2026-11-16T10:00:00Z", "2026-11-16T10:00:00Z"),
+            instance("2026-11-23T10:00:00Z", "2026-11-23T10:00:00Z"),
+        ]
         events, api = make({
             ("GET", f"{EVENTS}/{FOURTH['id']}"): FOURTH,
             ("GET", f"{EVENTS}/s1"): SERIES,
@@ -139,6 +165,10 @@ class DeleteAndRsvpTests(unittest.TestCase):
         self.assertIn("UNTIL=20261123T095959Z", api.sent("PATCH")[0][3]["recurrence"][0])
         self.assertEqual(result["scope"], "following")
 
+    def test_deleted_event_is_not_found(self):
+        events, _ = make({("GET", f"{EVENTS}/old"): {"id": "old", "status": "cancelled"}})
+        self.assertEqual(code_of(lambda: events.get("old")).code, NOT_FOUND)
+
     def test_rsvp_always_needs_notify(self):
         invite = event("e1", "2026-11-12T09:00:00+00:00", "2026-11-12T10:00:00+00:00", creator=GUEST, organizer=GUEST,
                        attendees=[{"email": GUEST, "organizer": True}, {"email": ME, "self": True, "responseStatus": "needsAction"}])
@@ -167,6 +197,14 @@ class ReadTests(unittest.TestCase):
         self.assertFalse(items[0]["own"])
         self.assertIn("<untrusted-event", untrusted.render(items))
         self.assertNotIn("old%40", " ".join(call[1] for call in api.calls))
+
+    def test_text_that_guests_can_edit_is_untrusted(self):
+        editable = event("e1", "2026-11-12T09:00:00+00:00", "2026-11-12T10:00:00+00:00", description="do X",
+                         guestsCanModify=True, attendees=[{"email": GUEST}])
+        events, _ = make({("GET", f"{EVENTS}/e1"): editable})
+        result = events.get("e1")
+        self.assertFalse(result["own"])
+        self.assertNotIn("description", result)
 
     def test_free_slots_skip_busy_time_and_weekends(self):
         tz = FakeAccount.tz

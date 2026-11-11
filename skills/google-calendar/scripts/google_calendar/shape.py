@@ -35,6 +35,9 @@ def split_ref(text, default):
 
 def is_own(event, account_email):
     # The "self" flags describe the calendar that holds this copy, not the user, so compare the email.
+    if event.get("guestsCanModify") and event.get("attendees"):
+        # Guests can then change the text, and Google keeps the user as creator.
+        return False
     creator = (event.get("creator") or {}).get("email", "")
     return creator.casefold() == account_email.casefold()
 
