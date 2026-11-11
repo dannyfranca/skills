@@ -239,6 +239,23 @@ class EditTests(unittest.TestCase):
         events.edit(FOURTH["id"], scope="all", start="2026-11-24T10:00Z", repeat="RRULE:FREQ=WEEKLY;BYDAY=TU")
         self.assertEqual(api.sent("PATCH")[-1][3]["start"]["dateTime"][:10], "2026-11-03")
 
+    def test_a_new_count_or_until_still_needs_a_new_rule_to_move_the_series(self):
+        mondays = dict(SERIES, recurrence=["RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=10"])
+        events, api = make({("GET", f"{EVENTS}/{FOURTH['id']}"): FOURTH, ("GET", f"{EVENTS}/s1"): mondays,
+                            ("GET", f"{EVENTS}/s1/instances"): {"items": []}})
+        for scope in ("all", "following"):
+            for limit in ({"count": 6}, {"until": "2026-12-31"}):
+                error = code_of(lambda: events.edit(FOURTH["id"], scope=scope, start="2026-11-24T10:00Z", **limit))
+                self.assertEqual(error.code, BAD_INPUT)
+                self.assertIn("BYDAY", error.message)
+        self.assertEqual([call for call in api.calls if call[0] != "GET"], [])
+
+    def test_a_new_until_stays_on_its_day_when_the_series_moves(self):
+        events, api = make({("GET", f"{EVENTS}/{FOURTH['id']}"): FOURTH, ("GET", f"{EVENTS}/s1"): SERIES,
+                            ("PATCH", f"{EVENTS}/s1"): SERIES})
+        events.edit(FOURTH["id"], scope="all", start="2026-11-24T10:00Z", until="2026-12-31")
+        self.assertEqual(api.sent("PATCH")[0][3]["recurrence"], ["RRULE:FREQ=WEEKLY;UNTIL=20261231T235959Z"])
+
     def test_series_moves_on_the_clock_of_its_own_time_zone(self):
         # New York leaves summer time on 2026-11-01 and Lisbon on 2026-10-25, so the two zones disagree on that week.
         york = "America/New_York"

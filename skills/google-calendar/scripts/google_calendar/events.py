@@ -132,6 +132,7 @@ class Events:
         base = master if scope in ("all", "following") else item
         anchor = from_api(base["start"], self.account.tz)
         changes = self._fields(base, anchor, **fields)
+        given = {key for key in ("repeat", "until") if fields.get(key) is not None}
         times = self._new_times(item, start, end, duration)
         if not changes and not times:
             raise bad_input("nothing to change", "add a field to change, for example --title or --start")
@@ -144,11 +145,11 @@ class Events:
             updated = self.api.request("PATCH", self._url(calendar_id, item["id"]), self._params(notify, changes), {**changes, **times})
             return self._shape(updated, calendar_id)
         if scope == "all":
-            changes.update(self._series_times(item, master, times, bool(start), "recurrence" in changes))
+            changes.update(self._series_times(item, {**master, **changes}, times, bool(start), given))
             updated = self.api.request("PATCH", self._url(calendar_id, master["id"]), self._params(notify, changes), changes)
             return self._shape(updated, calendar_id)
         recurrence.check_split(master.get("recurrence") or [])
-        return self._split(calendar_id, item, master, changes, times, notify, bool(start), "recurrence" in changes)
+        return self._split(calendar_id, item, master, changes, times, notify, bool(start), given)
 
     def move(self, ref, destination, notify=None, scope=None):
         calendar_id, item = self._load(ref)
@@ -288,7 +289,7 @@ class Events:
             return self._times(begin, None, None)
         return {"start": to_api(begin, self.account.tz_name), "end": to_api(later(begin, elapsed(old_start, old_end), tz), self.account.tz_name)}
 
-    def _series_times(self, item, series, times, moved, new_rule):
+    def _series_times(self, item, series, times, moved, given):
         """Move a series so that this instance lands on the new time; keep the time zone of the series."""
         if not times:
             return {}
@@ -305,8 +306,8 @@ class Events:
         new_start = shift(series["start"], wall, tz) if moved else series["start"]
         result = {"start": new_start, "end": shift(new_start, elapsed(begin, finish), tz, real_time=True)}
         rules = series.get("recurrence") or []
-        # A new --repeat is the rule for the new time, so it stays as the user gave it.
-        new_rules = recurrence.moved(rules, anchor, begin, tz) if moved and not new_rule else rules
+        # A new --repeat is the rule for the new time, and a new --until is the last day the user wants.
+        new_rules = recurrence.moved(rules, anchor, begin, tz, "until" in given) if moved and "repeat" not in given else rules
         return {**result, "recurrence": new_rules} if new_rules != rules else result
 
     def _fields(self, base, anchor, title=None, description=None, location=None, add_guests=None, remove_guests=None,
@@ -334,7 +335,7 @@ class Events:
             changes["recurrence"] = recurrence.build(repeat, until, count, anchor, base.get("recurrence") or [], self.account.tz)
         return changes
 
-    def _split(self, calendar_id, item, master, changes, times, notify, moved, new_rule):
+    def _split(self, calendar_id, item, master, changes, times, notify, moved, given):
         """Scope "following": a new series from this instance on, then the old series ends before it."""
         tz = self.account.tz
         original = item["originalStartTime"]
@@ -355,7 +356,7 @@ class Events:
             )
         series.update(start=start, end=shift(start, length, tz, real_time=True), recurrence=recurrence.remaining(master["recurrence"], _done(instances, from_api(original, tz), tz)))
         series.update(changes)
-        series.update(self._series_times(item, series, times, moved, new_rule))
+        series.update(self._series_times(item, series, times, moved, given))
         created = self.api.request("POST", self._url(calendar_id), self._params(notify, series), series)
         rules = recurrence.truncate(master["recurrence"], recurrence.until_before(original, tz))
         try:

@@ -86,11 +86,11 @@ def check_split(rules):
                         "use --scope instance or --scope all, or change it in Google Calendar")
 
 
-def moved(rules, anchor, begin, tz):
+def moved(rules, anchor, begin, tz, keep_until=False):
     """The rules of a series whose instance at anchor moves to begin, on the wall clock of tz.
 
-    The last instance (UNTIL) moves with the series. Rule parts and extra dates that fix a day or an hour cannot move
-    with it, so they stop the move.
+    The last instance (UNTIL) moves with the series, unless keep_until. Rule parts and extra dates that fix a day or an
+    hour cannot move with it, so they stop the move.
     """
     if begin == anchor:
         return rules
@@ -106,6 +106,8 @@ def moved(rules, anchor, begin, tz):
             f"the repeat rules fix {', '.join(pinned)}, so the series cannot move to this time",
             "add --repeat with a rule for the new time, or use --scope instance",
         )
+    if keep_until:
+        return rules
     wall = begin.replace(tzinfo=None) - anchor.replace(tzinfo=None) if timed else days
     return [_with_parts(rule, lambda part: True, None, lambda part: _move_until(part, wall, days, tz)) for rule in rules]
 
