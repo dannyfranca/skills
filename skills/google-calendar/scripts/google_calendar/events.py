@@ -32,7 +32,7 @@ PER_INSTANCE = frozenset(
      "sequence", "created", "updated", "status", "attendees")
 )
 # The guest fields that belong to the series; the answer and comment of a guest differ per instance.
-GUEST_FIELDS = ("email", "optional", "additionalGuests")
+GUEST_FIELDS = ("email", "optional", "resource", "additionalGuests")
 NOTIFY_FLAG = "--notify all (or --notify none for no email)"
 
 
@@ -407,7 +407,10 @@ def _changed_later(instances, master, cutoff, tz):
 
 def _guests(item):
     """Guests as a split copies them; RSVP answers differ per instance and stay out."""
-    return {(a.get("email", "").casefold(), bool(a.get("optional")), a.get("additionalGuests") or 0) for a in item.get("attendees") or []}
+    return {
+        (a.get("email", "").casefold(), bool(a.get("optional")), bool(a.get("resource")), a.get("additionalGuests") or 0)
+        for a in item.get("attendees") or []
+    }
 
 
 def _done(instances, cutoff, tz):

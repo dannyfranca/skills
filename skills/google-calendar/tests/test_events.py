@@ -209,6 +209,24 @@ class EditTests(unittest.TestCase):
         events.edit(FOURTH["id"], scope="following", notify="none", title="Sync")
         self.assertEqual(api.sent("POST")[0][3]["attendees"], [{"email": GUEST, "additionalGuests": 2}])
 
+    def test_later_instance_with_a_room_stops_a_split(self):
+        room = {"email": "room@resource.calendar.google.com"}
+        shared = dict(SERIES, attendees=[room])
+        booked = dict(instance("2026-11-30T10:00:00Z", "2026-11-30T10:00:00Z"), attendees=[{**room, "resource": True}])
+        events, api = make({("GET", f"{EVENTS}/{FOURTH['id']}"): FOURTH, ("GET", f"{EVENTS}/s1"): shared,
+                            ("GET", f"{EVENTS}/s1/instances"): {"items": [booked]}})
+        self.assertEqual(code_of(lambda: events.edit(FOURTH["id"], scope="following", notify="none", title="Sync")).code, BAD_INPUT)
+        self.assertEqual([call for call in api.calls if call[0] != "GET"], [])
+
+    def test_split_keeps_the_room_of_the_series(self):
+        room = {"email": "room@resource.calendar.google.com", "resource": True}
+        shared = dict(SERIES, attendees=[{**room, "responseStatus": "accepted"}])
+        events, api = make({("GET", f"{EVENTS}/{FOURTH['id']}"): FOURTH, ("GET", f"{EVENTS}/s1"): shared,
+                            ("GET", f"{EVENTS}/s1/instances"): {"items": []}, ("POST", EVENTS): dict(SERIES, id="s2"),
+                            ("PATCH", f"{EVENTS}/s1"): shared})
+        events.edit(FOURTH["id"], scope="following", notify="none", title="Sync")
+        self.assertEqual(api.sent("POST")[0][3]["attendees"], [room])
+
     def test_a_rule_with_a_weekday_needs_a_new_rule_to_move_the_series(self):
         mondays = dict(SERIES, recurrence=["RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=10"])
         events, api = make({("GET", f"{EVENTS}/{FOURTH['id']}"): FOURTH, ("GET", f"{EVENTS}/s1"): mondays,
