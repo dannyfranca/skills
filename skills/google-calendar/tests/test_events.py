@@ -220,6 +220,13 @@ class EditTests(unittest.TestCase):
         self.assertEqual(api.sent("PATCH", f"{EVENTS}/s1")[0][3], {"recurrence": ["RRULE:FREQ=WEEKLY;UNTIL=20261123T095959Z"]})
         self.assertIn("two series", result["note"])
 
+    def test_own_change_of_the_selected_instance_stops_a_split(self):
+        custom = dict(instance("2026-11-23T10:00:00Z", "2026-11-23T10:00:00Z"), summary="Custom")
+        events, api = make({("GET", f"{EVENTS}/{FOURTH['id']}"): FOURTH, ("GET", f"{EVENTS}/s1"): SERIES,
+                            ("GET", f"{EVENTS}/s1/instances"): {"items": [custom]}})
+        self.assertEqual(code_of(lambda: events.edit(FOURTH["id"], scope="following", color="sage")).code, BAD_INPUT)
+        self.assertEqual([call for call in api.calls if call[0] != "GET"], [])
+
     def test_following_from_the_first_instance_is_all(self):
         events, api = make({("GET", f"{EVENTS}/{FIRST['id']}"): FIRST, ("GET", f"{EVENTS}/s1"): SERIES,
                             ("PATCH", f"{EVENTS}/s1"): SERIES})

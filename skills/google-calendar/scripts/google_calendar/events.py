@@ -350,7 +350,7 @@ class Events:
         changed = _changed_later(instances, master, from_api(original, tz), tz)
         if changed:
             raise bad_input(
-                f"{len(changed)} later instances have their own changes, and a split would lose them",
+                f"{len(changed)} instances from this one on have their own changes, and a split would lose them",
                 "use --scope all, or --scope instance for each instance",
             )
         series.update(start=start, end=shift(start, length, tz, real_time=True), recurrence=_remaining(master, original, instances, tz))
@@ -395,7 +395,7 @@ def _changed_later(instances, master, cutoff, tz):
     length = elapsed(from_api(master["start"], tz), from_api(master["end"], tz))
     return [
         i for i in instances
-        if _place(i, tz) > cutoff and (
+        if _place(i, tz) >= cutoff and (
             i.get("status") == "cancelled"
             or from_api(i["start"], tz) != _place(i, tz)
             or elapsed(from_api(i["start"], tz), from_api(i["end"], tz)) != length
