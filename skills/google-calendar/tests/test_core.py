@@ -1,7 +1,10 @@
 import json
 import os
 import tempfile
+import threading
 import unittest
+import urllib.parse
+import urllib.request
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -12,6 +15,9 @@ from google_calendar import api, auth, recurrence, setup, store, times, untruste
 from google_calendar.errors import AUTH, BAD_INPUT, NOT_FOUND, REMOTE, GcalError
 
 LISBON = ZoneInfo("Europe/Lisbon")
+GRANTED = {"refresh_token": "r2", "access_token": "a2", "expires_in": 3600, "scope": " ".join(auth.SCOPES)}
+# The fake browser puts the state of the real login request in place of this marker.
+STATE = object()
 NOW = datetime(2026, 11, 10, 15, 30, tzinfo=LISBON)
 
 
@@ -166,6 +172,45 @@ class StoreAndAuthTests(unittest.TestCase):
         with patch.object(auth, "_post", return_value={"access_token": "new", "expires_in": 3600}) as post:
             self.assertEqual(auth.access_token(), "new")
         self.assertEqual(post.call_args.args[1]["grant_type"], "refresh_token")
+
+    def login(self, answer, tokens=GRANTED):
+        """Run auth.login with a fake browser that sends answer to the loopback callback, and a fake token endpoint."""
+        def browser(url):
+            query = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))
+            reply = {key: query["state"] if value is STATE else value for key, value in answer.items()}
+            target = f"{query['redirect_uri']}/?{urllib.parse.urlencode(reply)}"
+            threading.Thread(target=lambda: urllib.request.urlopen(target, timeout=5).read(), daemon=True).start()
+
+        with patch.object(auth, "_post", return_value=tokens) as post:
+            try:
+                return auth.login(open_url=False, notify=browser), post
+            except GcalError as error:
+                return error, post
+
+    def test_login_saves_the_tokens_of_the_code(self):
+        store.save({"client_id": "c", "client_secret": "s"})
+        data, post = self.login({"code": "k", "state": STATE})
+        self.assertEqual(data["refresh_token"], "r2")
+        self.assertEqual(store.load()["refresh_token"], "r2")
+        form = post.call_args.args[1]
+        self.assertEqual((form["code"], form["grant_type"]), ("k", "authorization_code"))
+        self.assertTrue(form["code_verifier"])
+
+    def test_failed_login_keeps_the_old_login(self):
+        cases = [
+            ({"code": "k", "state": "forged"}, GRANTED, "wrong state"),
+            ({"error": "access_denied", "state": STATE}, GRANTED, "access_denied"),
+            ({"code": "k", "state": STATE}, {"error": "invalid_grant"}, "no refresh token"),
+            ({"code": "k", "state": STATE}, {**GRANTED, "scope": auth.SCOPES[0]}, "tasks"),
+        ]
+        for answer, tokens, words in cases:
+            store.save({"client_id": "c", "client_secret": "s", "refresh_token": "old"})
+            error, post = self.login(answer, tokens)
+            self.assertEqual(error.code, AUTH)
+            self.assertIn(words, error.message)
+            self.assertEqual(store.load()["refresh_token"], "old")
+            if "code" not in answer or answer["state"] is not STATE:
+                post.assert_not_called()
 
     def test_wizard_imports_the_newest_download_and_deletes_it(self):
         downloads = Path(self.folder.name) / "dl"
