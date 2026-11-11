@@ -75,6 +75,14 @@ def meet_link(event):
     return event.get("hangoutLink")
 
 
+def meet_status(event):
+    """pending or failed while a requested Meet link is missing; Google makes the link after it answers."""
+    if meet_link(event):
+        return None
+    code = (((event.get("conferenceData") or {}).get("createRequest") or {}).get("status") or {}).get("statusCode")
+    return {"pending": "pending: get the event again in a few seconds", "failure": "failed: edit the event with --meet again"}.get(code)
+
+
 def times(event, tz):
     start, end = from_api(event["start"], tz), from_api(event["end"], tz)
     if not isinstance(start, datetime):
@@ -104,6 +112,7 @@ def event(item, calendar_id, calendar_name, account_email, tz, with_body=False, 
         "guests": [{"email": g.get("email"), "response": RESPONSES.get(g.get("responseStatus"), "none")} for g in others],
         "my_response": RESPONSES.get(mine.get("responseStatus")) if mine else None,
         "meet": meet_link(item),
+        "meet_status": meet_status(item),
         "recurring": bool(item.get("recurringEventId") or item.get("recurrence")),
         "recurrence": recurrence or item.get("recurrence"),
         "color": EVENT_COLORS.get(item.get("colorId")),

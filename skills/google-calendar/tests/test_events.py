@@ -69,6 +69,17 @@ class CreateTests(unittest.TestCase):
         self.assertEqual(code_of(lambda: events.create("x", "2026-11-12T09:00", color="pink")).code, BAD_INPUT)
 
 
+    def test_meet_link_that_google_still_makes_shows_its_status(self):
+        for code, status in (("pending", "pending"), ("failure", "failed"), ("success", None)):
+            made = {"createRequest": {"status": {"statusCode": code}}}
+            if code == "success":
+                made["entryPoints"] = [{"entryPointType": "video", "uri": "https://meet.google.com/abc-defg-hij"}]
+            events, _ = make({("POST", EVENTS): lambda params, body: {"id": "n", **body, "conferenceData": made}})
+            result = events.create("Call", "2026-11-12T09:00", meet=True)
+            self.assertEqual(result.get("meet_status", "").split(":")[0] or None, status)
+            self.assertEqual("meet" in result, code == "success")
+
+
 class EditTests(unittest.TestCase):
     def test_personal_change_on_a_shared_event_emails_nobody(self):
         shared = event("e1", "2026-11-12T09:00:00+00:00", "2026-11-12T10:00:00+00:00", attendees=[{"email": GUEST}])
