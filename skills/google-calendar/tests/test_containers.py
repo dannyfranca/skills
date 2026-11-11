@@ -44,6 +44,12 @@ class CalendarTests(unittest.TestCase):
         error = raised(lambda: twins.resolve("Team"))
         self.assertEqual({c.get("name") for c in error.candidates}, {"Team", None})
 
+    def test_reminder_beyond_four_weeks_changes_nothing(self):
+        found, api = calendars(TEAM)
+        self.assertEqual(raised(lambda: found.edit(TEAM["id"], name="New", remind="5w")).code, BAD_INPUT)
+        self.assertEqual(api.sent("PATCH"), [])
+        found.edit(TEAM["id"], remind="4w")
+
     def test_bad_color_changes_nothing(self):
         found, api = calendars(TEAM)
         self.assertEqual(raised(lambda: found.edit(TEAM["id"], name="New", color="blue")).code, BAD_INPUT)

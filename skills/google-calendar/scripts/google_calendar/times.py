@@ -9,6 +9,8 @@ from .errors import bad_input
 DURATION = re.compile(r"(\d+)\s*([wdhm])", re.I)
 RELATIVE = re.compile(r"^([+-])\s*((?:\d+\s*[wdhm]\s*)+)$", re.I)
 UNITS = {"w": "weeks", "d": "days", "h": "hours", "m": "minutes"}
+# Google refuses a reminder more than 4 weeks before the event.
+MAX_REMINDER_MINUTES = 40320
 TIME_FORMAT_HINT = "use an ISO date (2026-11-12), an ISO time (2026-11-12T14:00), now, today, tomorrow, or +2h / -3d / +1w"
 
 
@@ -130,7 +132,10 @@ def parse_reminders(text):
         method = method or "popup"
         if method not in ("popup", "email"):
             raise bad_input(f"unknown reminder method: {method}", "use popup:10m or email:1d")
-        overrides.append({"method": method, "minutes": int(parse_duration(amount).total_seconds() // 60)})
+        minutes = int(parse_duration(amount).total_seconds() // 60)
+        if minutes > MAX_REMINDER_MINUTES:
+            raise bad_input(f"reminder too early: {item}", "give a reminder of 4 weeks (4w) or less")
+        overrides.append({"method": method, "minutes": minutes})
     if not overrides or len(overrides) > 5:
         raise bad_input("give 1 to 5 reminders", "for example --remind 10m,1h or --remind email:1d")
     return overrides
