@@ -34,7 +34,11 @@ class Calendars:
         found = [entry for entry in entries if _name(entry).casefold() == wanted]
         if len(found) == 1:
             return found[0]["id"]
-        candidates = [{"id": entry["id"], "name": clean_line(_name(entry))} for entry in (found or entries)]
+        # Errors have no untrusted wrapper, so names that other people control stay out of them.
+        candidates = [
+            {"id": entry["id"], **({"name": clean_line(_name(entry))} if _owned(entry) else {"access": entry.get("accessRole")})}
+            for entry in (found or entries)
+        ]
         message = f"more than one calendar is named {name_or_id}" if found else f"no calendar fits {name_or_id}"
         raise GcalError(NOT_FOUND, message, "use an id from candidates", candidates)
 
@@ -51,6 +55,12 @@ class Calendars:
             return clean_line(_name(self.entry(calendar_id)))
         except GcalError:
             return calendar_id
+
+    def owns(self, calendar_id):
+        try:
+            return _owned(self.entry(calendar_id))
+        except GcalError:
+            return False
 
     def real_id(self, calendar_id):
         return self.account.email if calendar_id == "primary" else calendar_id
@@ -77,10 +87,8 @@ class Calendars:
         calendar_id = self.account.email if calendar_id == "primary" else calendar_id
         entry = self.entry(calendar_id)
         details = {key: value for key, value in (("summary", name), ("description", description), ("timeZone", time_zone)) if value is not None}
-        if details:
-            if entry.get("accessRole") != "owner":
-                raise bad_input("only an owner can change the name, description, or time zone", "use --color, --remind, or --show / --hide")
-            self.api.request("PATCH", f"{CALENDAR}/calendars/{quote(calendar_id)}", body=details)
+        if details and entry.get("accessRole") != "owner":
+            raise bad_input("only an owner can change the name, description, or time zone", "use --color, --remind, or --show / --hide")
         listing = {}
         if color is not None:
             if not re.fullmatch(HEX_COLOR, color):
@@ -91,6 +99,8 @@ class Calendars:
             listing["defaultReminders"] = overrides or []
         if shown is not None:
             listing["selected"] = shown
+        if details:
+            self.api.request("PATCH", f"{CALENDAR}/calendars/{quote(calendar_id)}", body=details)
         if listing:
             self.api.request(
                 "PATCH",
@@ -174,8 +184,12 @@ def _name(entry):
     return entry.get("summaryOverride") or entry.get("summary") or entry["id"]
 
 
+def _owned(entry):
+    return entry.get("accessRole") == "owner"
+
+
 def shape(entry):
-    owned = entry.get("accessRole") == "owner"
+    owned = _owned(entry)
     result = {
         "id": entry["id"],
         "own": owned,

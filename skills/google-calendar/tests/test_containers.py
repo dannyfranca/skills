@@ -39,6 +39,16 @@ class CalendarTests(unittest.TestCase):
         self.assertEqual(error.code, NOT_FOUND)
         self.assertEqual({c["id"] for c in error.candidates}, {TEAM["id"], TWIN["id"]})
 
+    def test_candidates_show_only_names_that_i_own(self):
+        twins, _ = calendars(TEAM, TWIN)
+        error = raised(lambda: twins.resolve("Team"))
+        self.assertEqual({c.get("name") for c in error.candidates}, {"Team", None})
+
+    def test_bad_color_changes_nothing(self):
+        found, api = calendars(TEAM)
+        self.assertEqual(raised(lambda: found.edit(TEAM["id"], name="New", color="blue")).code, BAD_INPUT)
+        self.assertEqual(api.sent("PATCH"), [])
+
     def test_delete_needs_the_exact_name(self):
         found, api = calendars(TEAM)
         error = raised(lambda: found.delete(TEAM["id"], "team"))
@@ -130,6 +140,11 @@ class TaskTests(unittest.TestCase):
                             ("POST", f"{INBOX}/t1/move"): {"id": "t1", "parent": "p"}})
         found.move("L1:t1", after="L1:t2")
         self.assertEqual(api.sent("POST")[0][2], {"parent": "p", "previous": "t2"})
+
+    def test_parent_must_be_top_level(self):
+        found, api = tasks({("GET", f"{INBOX}/c"): {"id": "c", "parent": "p"}})
+        self.assertEqual(raised(lambda: found.add("x", parent="L1:c")).code, BAD_INPUT)
+        self.assertEqual(api.sent("POST"), [])
 
     def test_move_needs_a_target_in_the_same_list(self):
         found, _ = tasks({("GET", f"{INBOX}/t1"): {"id": "t1"}})

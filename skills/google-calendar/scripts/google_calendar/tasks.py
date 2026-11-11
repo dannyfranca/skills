@@ -154,6 +154,9 @@ class Tasks:
     def _place(self, parent, after, list_id):
         previous = self._child_id(after, list_id)
         parent_id = self._child_id(parent, list_id)
+        # The Tasks app shows one level of subtasks only.
+        if parent_id and self.api.get(self._url(list_id, parent_id)).get("parent"):
+            raise bad_input("--parent must be a top-level task", "use the parent of that task")
         if previous and not parent:
             # Google puts a task with no parent at the top level, so "after a subtask" needs the parent of that subtask.
             parent_id = self.api.get(self._url(list_id, previous)).get("parent")
