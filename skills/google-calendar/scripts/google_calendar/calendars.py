@@ -16,6 +16,7 @@ class Calendars:
     def __init__(self, api, account):
         self.api, self.account = api, account
         self._entries = None
+        self._only_mine = {}
 
     def entries(self):
         if self._entries is None:
@@ -61,6 +62,22 @@ class Calendars:
             return _owned(self.entry(calendar_id))
         except GcalError:
             return False
+
+    def only_mine(self, calendar_id):
+        """True when only the user can change the events of this calendar."""
+        if not self.owns(calendar_id):
+            return False
+        if calendar_id not in self._only_mine:
+            me = {self.account.email.casefold(), calendar_id.casefold()}
+            try:
+                rules = self.api.pages(f"{CALENDAR}/calendars/{quote(calendar_id)}/acl")
+            except GcalError:
+                rules = [{"role": "writer"}]
+            self._only_mine[calendar_id] = not any(
+                rule.get("role") in ("owner", "writer") and (rule.get("scope") or {}).get("value", "").casefold() not in me
+                for rule in rules
+            )
+        return self._only_mine[calendar_id]
 
     def real_id(self, calendar_id):
         return self.account.email if calendar_id == "primary" else calendar_id

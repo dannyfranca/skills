@@ -128,7 +128,8 @@ class Tasks:
     def delete(self, ref, yes):
         list_id, item = self._load(ref)
         if not yes:
-            raise approval(f"this deletes the task {clean_line(item.get('title'))} and its subtasks", "--yes")
+            # The title of an assigned task comes from another person, and errors have no untrusted wrapper.
+            raise approval(f"this deletes the task {shape.ref(list_id, item['id'])} and its subtasks", "--yes")
         self.api.request("DELETE", self._url(list_id, item["id"]))
         return {"deleted": shape.ref(list_id, item["id"])}
 
