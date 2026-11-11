@@ -178,6 +178,7 @@ def shape(entry):
     owned = entry.get("accessRole") == "owner"
     result = {
         "id": entry["id"],
+        "own": owned,
         "name": clean_line(_name(entry)),
         "access": ROLE_NAMES.get(entry.get("accessRole"), entry.get("accessRole")),
         "shown": bool(entry.get("selected")),

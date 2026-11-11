@@ -209,9 +209,9 @@ def dispatch(args, api=None):
         return {"account": facts["account"], "time_zone": facts["time_zone"], "credentials": str(store.credentials_file())}
     calendars = Calendars(api, account)
     if args.command == "calendars":
-        return calendars.list()
+        return calendars.list(), "calendar"
     if args.command == "calendar":
-        return _calendar(args, calendars)
+        return _calendar(args, calendars), "calendar"
     if args.command == "share":
         calendar_id = calendars.resolve(args.calendar)
         if args.action == "list":
