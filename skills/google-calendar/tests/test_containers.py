@@ -58,6 +58,13 @@ class CalendarTests(unittest.TestCase):
         self.assertEqual(api.sent("DELETE")[0][1], "/calendars/team%40group.calendar.google.com")
         self.assertEqual(raised(lambda: found.delete(ME, ME)).code, BAD_INPUT)
 
+    def test_calendar_with_another_owner_is_untrusted(self):
+        other = {"id": "user:x@example.com", "role": "owner", "scope": {"type": "user", "value": "x@example.com"}}
+        found, _ = calendars(TEAM, routes={("GET", TEAM_ACL): {"items": [other]}})
+        team = next(entry for entry in found.list() if entry["id"] == TEAM["id"])
+        self.assertFalse(team["own"])
+        self.assertNotIn("Team", raised(lambda: found.delete(TEAM["id"], "x")).hint)
+
     def test_share_needs_yes_and_updates_an_existing_rule(self):
         rule = {"id": "user:a@example.com", "role": "reader", "scope": {"type": "user", "value": "a@example.com"}}
         found, api = calendars(TEAM, routes={("GET", TEAM_ACL): {"items": [rule]}})

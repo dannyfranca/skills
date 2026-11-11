@@ -38,7 +38,7 @@ class Calendars:
             return found[0]["id"]
         # Errors have no untrusted wrapper, so names that other people control stay out of them.
         candidates = [
-            {"id": entry["id"], **({"name": clean_line(_name(entry))} if _owned(entry) else {"access": entry.get("accessRole")})}
+            {"id": entry["id"], **({"name": clean_line(_name(entry))} if self.only_mine(entry["id"]) else {"access": entry.get("accessRole")})}
             for entry in (found or entries)
         ]
         message = f"more than one calendar is named {name_or_id}" if found else f"no calendar fits {name_or_id}"
@@ -91,7 +91,7 @@ class Calendars:
         return [entry["id"] for entry in self.entries() if entry.get("selected") and entry.get("accessRole") == "owner"]
 
     def list(self):
-        return [shape(entry) for entry in self.entries()]
+        return [shape(entry, self.only_mine(entry["id"])) for entry in self.entries()]
 
     def create(self, name, description=None, time_zone=None):
         body = {"summary": name, "timeZone": time_zone or self.account.tz_name}
@@ -99,7 +99,7 @@ class Calendars:
             body["description"] = description
         created = self.api.request("POST", f"{CALENDAR}/calendars", body=body)
         self._entries = None
-        return shape(self.entry(created["id"]))
+        return shape(self.entry(created["id"]), self.only_mine(created["id"]))
 
     def edit(self, calendar_id, name=None, description=None, time_zone=None, color=None, remind=None, shown=None):
         calendar_id = self.account.email if calendar_id == "primary" else calendar_id
@@ -127,7 +127,7 @@ class Calendars:
                 listing,
             )
         self._entries = None
-        return shape(self.entry(calendar_id))
+        return shape(self.entry(calendar_id), self.only_mine(calendar_id))
 
     def delete(self, calendar_id, confirm):
         entry = self.entry(calendar_id)
@@ -135,19 +135,22 @@ class Calendars:
             raise bad_input("the primary calendar cannot be deleted")
         if entry.get("accessRole") != "owner":
             raise bad_input("you do not own this calendar", "use `calendar unsubscribe` to remove it from the list")
+        # Other owners and writers control the name, and errors have no untrusted wrapper.
+        mine = self.only_mine(entry["id"])
         if confirm != _name(entry):
+            name = f": {clean_line(_name(entry))}" if mine else " (ask the user for it)"
             raise GcalError(
                 APPROVAL,
                 "deleting a calendar deletes all its events, with no trash",
-                f"get approval from the user, then add --confirm with the exact name: {clean_line(_name(entry))}",
+                f"get approval from the user, then add --confirm with the exact name{name}",
             )
         self.api.request("DELETE", f"{CALENDAR}/calendars/{quote(entry['id'])}")
-        return {"deleted": entry["id"], "name": _name(entry)}
+        return {"deleted": entry["id"], **({"name": clean_line(_name(entry))} if mine else {})}
 
     def subscribe(self, calendar_id):
         self.api.request("POST", f"{CALENDAR}/users/me/calendarList", body={"id": calendar_id})
         self._entries = None
-        return shape(self.entry(calendar_id))
+        return shape(self.entry(calendar_id), self.only_mine(calendar_id))
 
     def unsubscribe(self, calendar_id, yes):
         entry = self.entry(calendar_id)
@@ -206,11 +209,10 @@ def _owned(entry):
     return entry.get("accessRole") == "owner"
 
 
-def shape(entry):
-    owned = _owned(entry)
+def shape(entry, own):
     result = {
         "id": entry["id"],
-        "own": owned,
+        "own": own,
         "name": clean_line(_name(entry)),
         "access": ROLE_NAMES.get(entry.get("accessRole"), entry.get("accessRole")),
         "shown": bool(entry.get("selected")),
@@ -221,7 +223,7 @@ def shape(entry):
     if entry.get("primary"):
         result["primary"] = True
     # A calendar of another person can carry text aimed at the agent, so only owned calendars show it.
-    if owned and entry.get("description"):
+    if own and entry.get("description"):
         result["description"] = clean(entry["description"], 500)
     return result
 
