@@ -1,6 +1,6 @@
 ---
 name: google-calendar
-description: The user's Google Calendar and Google Tasks.
+description: Managing Google Calendar or Tasks.
 disable-model-invocation: true
 ---
 
