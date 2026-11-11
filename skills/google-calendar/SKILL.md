@@ -5,7 +5,7 @@ description: Google Calendar and Google Tasks of the user. Use to read the agend
 
 # Google Calendar
 
-Use `$HOME/.agents/skills/google-calendar/scripts/gcal`. It needs Python 3.11 or later and no packages. Each command prints one JSON object per line. Run `gcal <command> --help` for all the flags.
+Use `$HOME/.agents/skills/google-calendar/scripts/gcal`. It needs Python 3.11 or later and no packages. Each command prints one JSON object per line for each item. Run `gcal <command> --help` for all the flags.
 
 ```bash
 gcal=$HOME/.agents/skills/google-calendar/scripts/gcal
@@ -31,7 +31,7 @@ For Google Tasks, read [`references/tasks.md`](references/tasks.md).
 ## Refs, calendars, and times
 
 - A ref identifies an event: `<calendar-id>:<event-id>`. Copy it from the output. Do not make one.
-- `--calendar` takes a name or an ID. Reads use the calendars that are ticked in the Google Calendar sidebar. `free` uses only the ticked calendars that the user owns, because a shared or holiday calendar does not make the user busy. Writes go to the primary calendar.
+- `--calendar` takes a name or an ID. Errors show the name only of calendars that the user owns. Reads use the calendars that are ticked in the Google Calendar sidebar. `free` uses only the ticked calendars that the user owns, because a shared or holiday calendar does not make the user busy. `--who` adds people to these calendars. If the busy time of a calendar is unknown, `free` gives no slots. Writes go to the primary calendar.
 - A time is `2026-11-12T15:00`, `2026-11-12`, `today`, `tomorrow`, `now`, or an offset such as `+2h` or `-3d`. A time with no offset is in the time zone of the account (`whoami`).
 - A date with no time makes an all-day event. Its `--end` is the last day, and the output shows the last day.
 - `--to` is not included in the range.
