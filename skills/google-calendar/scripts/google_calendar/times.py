@@ -62,11 +62,15 @@ def to_api(moment, tz_name):
 
 
 def later(moment, delta):
+    if not isinstance(moment, datetime):
+        return moment + timedelta(days=delta.days)
     # Aware datetimes in one zone add on the wall clock; a daylight-saving change would then lose or gain an hour.
     return (moment.astimezone(timezone.utc) + delta).astimezone(moment.tzinfo)
 
 
 def elapsed(begin, finish):
+    if not isinstance(begin, datetime):
+        return finish - begin
     return finish.astimezone(timezone.utc) - begin.astimezone(timezone.utc)
 
 
@@ -77,12 +81,15 @@ def from_api(value, tz):
     return date.fromisoformat(value["date"])
 
 
-def shift(value, delta, tz):
-    """Move an API time value by delta and keep its own time zone field."""
+def shift(value, delta, tz, real_time=False):
+    """Move an API time value by delta and keep its own time zone field.
+
+    real_time adds elapsed time (for a length); else delta moves the wall clock (for a new start).
+    """
     moment = from_api(value, tz)
     if isinstance(moment, datetime):
         own_zone = value.get("timeZone")
-        moved = moment + delta
+        moved = later(moment, delta) if real_time else moment + delta
         if own_zone:
             moved = moved.astimezone(zone(own_zone))
         return {"dateTime": moved.isoformat(timespec="seconds"), **({"timeZone": own_zone} if own_zone else {})}

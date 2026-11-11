@@ -18,8 +18,10 @@ FIRST = dict(FOURTH, id="s1_20261102T100000Z", originalStartTime={"dateTime": "2
 MOVED = dict(FOURTH, start={"dateTime": "2026-11-23T15:00:00+00:00"}, end={"dateTime": "2026-11-23T15:30:00+00:00"})
 
 
-def instance(original, start):
-    return {"id": f"s1_{original}", "originalStartTime": {"dateTime": original}, "start": {"dateTime": start}}
+def instance(original, start, length=timedelta(minutes=30)):
+    end = (datetime.fromisoformat(start) + length).isoformat()
+    return {"id": f"s1_{original}", "summary": SERIES["summary"], "originalStartTime": {"dateTime": original},
+            "start": {"dateTime": start}, "end": {"dateTime": end}}
 
 
 def make(routes=None):
@@ -86,6 +88,25 @@ class EditTests(unittest.TestCase):
         events.create("Night", "2026-10-25T00:30", duration="2h")
         self.assertEqual(api.sent("POST", EVENTS)[0][3]["end"]["dateTime"], "2026-10-25T01:30:00+00:00")
 
+    def test_an_hour_that_repeats_is_still_one_hour(self):
+        events, api = make({("POST", EVENTS): lambda params, body: {"id": "n", **body}})
+        events.create("Fold", "2026-10-25T01:30", duration="1h")
+        self.assertEqual(api.sent("POST", EVENTS)[0][3]["end"]["dateTime"], "2026-10-25T01:30:00+00:00")
+
+    def test_new_date_of_an_all_day_event_keeps_its_days(self):
+        trip = event("e1", "2026-11-12", "2026-11-15")
+        events, api = make({("GET", f"{EVENTS}/e1"): trip, ("PATCH", f"{EVENTS}/e1"): trip})
+        events.edit("e1", start="2026-11-20")
+        self.assertEqual(api.sent("PATCH")[0][3]["end"], {"date": "2026-11-23"})
+
+    def test_series_length_is_elapsed_time(self):
+        weekly = event("w1", "2026-10-18T00:30:00+01:00", "2026-10-18T01:00:00+01:00", recurrence=["RRULE:FREQ=WEEKLY"])
+        night = event("w1_x", "2026-10-25T00:30:00+01:00", "2026-10-25T00:00:00+00:00", recurringEventId="w1",
+                      originalStartTime={"dateTime": "2026-10-25T00:30:00+01:00"})
+        events, api = make({("GET", f"{EVENTS}/w1_x"): night, ("GET", f"{EVENTS}/w1"): weekly, ("PATCH", f"{EVENTS}/w1"): weekly})
+        events.edit("w1_x", scope="all", duration="2h")
+        self.assertEqual(api.sent("PATCH", f"{EVENTS}/w1")[0][3]["end"]["dateTime"], "2026-10-18T02:30:00+01:00")
+
     def test_new_start_keeps_the_length(self):
         solo = event("e1", "2026-11-12T09:00:00+00:00", "2026-11-12T09:45:00+00:00")
         events, api = make({("GET", f"{EVENTS}/e1"): solo, ("PATCH", f"{EVENTS}/e1"): solo})
@@ -136,6 +157,28 @@ class EditTests(unittest.TestCase):
         self.assertEqual(error.code, BAD_INPUT)
         self.assertIn("--scope all", error.hint)
         self.assertEqual([call for call in api.calls if call[0] != "GET"], [])
+
+    def test_later_instance_with_a_new_length_stops_a_split(self):
+        longer = instance("2026-11-30T10:00:00Z", "2026-11-30T10:00:00Z", timedelta(hours=2))
+        events, api = make({("GET", f"{EVENTS}/{FOURTH['id']}"): FOURTH, ("GET", f"{EVENTS}/s1"): SERIES,
+                            ("GET", f"{EVENTS}/s1/instances"): {"items": [longer]}})
+        self.assertEqual(code_of(lambda: events.edit(FOURTH["id"], scope="following", title="Sync")).code, BAD_INPUT)
+
+    def test_split_with_guests_needs_notify_even_for_a_color(self):
+        shared = dict(SERIES, attendees=[{"email": GUEST}])
+        events, api = make({("GET", f"{EVENTS}/{FOURTH['id']}"): FOURTH, ("GET", f"{EVENTS}/s1"): shared})
+        self.assertEqual(code_of(lambda: events.edit(FOURTH["id"], scope="following", color="sage")).code, APPROVAL)
+
+    def test_split_saved_without_an_answer_keeps_the_new_series(self):
+        ended = dict(SERIES, recurrence=["RRULE:FREQ=WEEKLY;UNTIL=20261123T095959Z"])
+        def lost_answer(params, body):
+            raise GcalError(REMOTE, "timed out")
+        events, api = make({("GET", f"{EVENTS}/{FOURTH['id']}"): FOURTH, ("GET", f"{EVENTS}/s1"): ended,
+                            ("POST", EVENTS): lambda params, body: {"id": "s2", **body}, ("PATCH", f"{EVENTS}/s1"): lost_answer})
+        events._master = lambda calendar_id, item: SERIES
+        result = events.edit(FOURTH["id"], scope="following", title="Sync")
+        self.assertIn("two series", result["note"])
+        self.assertEqual(api.sent("DELETE"), [])
 
     def test_failed_split_removes_the_new_series(self):
         def refuse(params, body):
@@ -240,6 +283,14 @@ class ReadTests(unittest.TestCase):
         mine = event("e1", "2026-11-12T09:00:00+00:00", "2026-11-12T10:00:00+00:00")
         events, _ = make({**calendar_list(team), ("GET", "/calendars/team%40group.calendar.google.com/events/e1"): mine})
         self.assertFalse(events.get(f"{team['id']}:e1")["own"])
+
+    def test_events_that_other_writers_can_change_are_untrusted(self):
+        mine = event("e1", "2026-11-12T09:00:00+00:00", "2026-11-12T10:00:00+00:00", summary="Do X now")
+        writer = {"role": "writer", "scope": {"type": "user", "value": GUEST}}
+        events, _ = make({("GET", f"{EVENTS}/e1"): mine, ("GET", "/calendars/me%40example.com/acl"): {"items": [writer]}})
+        self.assertFalse(events.get("e1")["own"])
+        error = code_of(lambda: events.delete("e1"))
+        self.assertNotIn("Do X now", error.message)
 
     def test_free_with_people_keeps_my_calendars_and_withholds_unknown_slots(self):
         answer = {"calendars": {ME: {"busy": []}, GUEST: {"errors": [{"reason": "notFound"}]}}}

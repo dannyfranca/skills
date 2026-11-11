@@ -34,6 +34,8 @@ COPIED_FIELDS = (
     "guestsCanSeeOtherGuests",
 )
 DEFAULT_DURATION = "1h"
+# An instance with its own value in one of these has changes that a split would lose.
+INSTANCE_FIELDS = ("summary", "description", "location", "colorId", "transparency", "visibility", "reminders")
 NOTIFY_FLAG = "--notify all (or --notify none for no email)"
 
 
@@ -138,7 +140,9 @@ class Events:
             raise bad_input("nothing to change", "add a field to change, for example --title or --start")
         if "recurrence" in changes and scope == "instance":
             raise bad_input("one instance cannot get its own repeat rule", "use --scope following or --scope all")
-        self._check_notify(base, calendar_id, {**changes, **times}, notify, "this change")
+        # A split makes a new series for the guests, so even a color change there is not personal.
+        split = {"recurrence": True} if scope == "following" else {}
+        self._check_notify(base, calendar_id, {**changes, **times, **split}, notify, "this change")
         if scope in (None, "instance"):
             updated = self.api.request("PATCH", self._url(calendar_id, item["id"]), self._params(notify, changes), {**changes, **times})
             return self._shape(updated, calendar_id)
@@ -177,7 +181,9 @@ class Events:
         if shape.guests(target, calendar_id, self.account.email) and notify is None:
             missing.append(NOTIFY_FLAG)
         if missing:
-            raise approval(f"this deletes {target.get('summary') or 'the event'} ({scope or 'single event'})", " ".join(missing))
+            # The title can come from another person, and errors have no untrusted wrapper.
+            raise approval(f"this deletes {shape.ref(self.calendars.real_id(calendar_id), target['id'])} ({scope or 'single event'})",
+                           " ".join(missing))
         params = {"sendUpdates": notify}
         if scope == "following":
             rules = truncate(master["recurrence"], until_before(item["originalStartTime"], self.account.tz))
@@ -242,7 +248,7 @@ class Events:
     def _shape(self, item, calendar_id, body=False, recurrence=None):
         real = self.calendars.real_id(calendar_id)
         return shape.event(item, real, self.calendars.name(real), self.account.email, self.account.tz, body, recurrence,
-                           self.calendars.owns(real))
+                           self.calendars.only_mine(real))
 
     def _params(self, notify, body):
         return {"sendUpdates": notify, "conferenceDataVersion": 1 if "conferenceData" in body else None}
@@ -270,7 +276,7 @@ class Events:
                 raise bad_input("--end of a timed event is a time", "for example 2026-11-12T15:00")
         else:
             finish = later(begin, parse_duration(duration or DEFAULT_DURATION))
-        if finish <= begin:
+        if elapsed(begin, finish) <= timedelta(0):
             raise bad_input("the event must end after it starts")
         return {"start": to_api(begin, name), "end": to_api(finish, name)}
 
@@ -297,7 +303,7 @@ class Events:
             raise bad_input("a whole series cannot switch between all-day and timed", "use --scope instance")
         # An instance can sit off the pattern of its series, so only an explicit --start may move the series.
         new_start = shift(series["start"], begin - anchor, tz) if moved else series["start"]
-        return {"start": new_start, "end": shift(new_start, finish - begin, tz)}
+        return {"start": new_start, "end": shift(new_start, elapsed(begin, finish), tz, real_time=True)}
 
     def _fields(self, base, anchor, title=None, description=None, location=None, add_guests=None, remove_guests=None,
                 meet=False, repeat=None, until=None, count=None, remind=None, color=None, show_as=None):
@@ -332,7 +338,7 @@ class Events:
         series["attendees"] = [
             {"email": a["email"], **({"optional": True} if a.get("optional") else {})} for a in master.get("attendees") or []
         ]
-        length = from_api(master["end"], tz) - from_api(master["start"], tz)
+        length = elapsed(from_api(master["start"], tz), from_api(master["end"], tz))
         start = dict(original)
         if "dateTime" in start and master["start"].get("timeZone"):
             start["timeZone"] = master["start"]["timeZone"]
@@ -343,7 +349,7 @@ class Events:
                 f"{len(changed)} later instances have their own changes, and a split would lose them",
                 "use --scope all, or --scope instance for each instance",
             )
-        series.update(start=start, end=shift(start, length, tz), recurrence=_remaining(master, original, instances, tz))
+        series.update(start=start, end=shift(start, length, tz, real_time=True), recurrence=_remaining(master, original, instances, tz))
         series.update(changes)
         series.update(self._series_times(item, series, times, moved))
         created = self.api.request("POST", self._url(calendar_id), self._params(notify, series), series)
@@ -351,23 +357,30 @@ class Events:
         try:
             self.api.request("PATCH", self._url(calendar_id, master["id"]), {"sendUpdates": notify}, {"recurrence": rules})
         except GcalError as error:
-            self._undo_split(calendar_id, created, notify, error)
-            raise
+            if not self._split_saved(calendar_id, master, rules, created, notify, error):
+                raise
         result = self._shape(created, calendar_id)
         result["note"] = "the series is now two series: the old one ends before this instance"
         return result
 
-    def _undo_split(self, calendar_id, created, notify, error):
-        """Two full series would overlap, and a retry would add a third, so remove the new one."""
-        new_ref = shape.ref(self.calendars.real_id(calendar_id), created["id"])
+    def _split_saved(self, calendar_id, master, rules, created, notify, error):
+        """After a failed end of the old series: True if Google saved it after all, else remove the new series.
+
+        Google can save a change and still fail to answer. Two full series would overlap, and a retry would add a third.
+        """
+        real = self.calendars.real_id(calendar_id)
+        new_ref, old_ref = shape.ref(real, created["id"]), shape.ref(real, master["id"])
         try:
+            if self.api.get(self._url(calendar_id, master["id"])).get("recurrence") == rules:
+                return True
             self.api.request("DELETE", self._url(calendar_id, created["id"]), {"sendUpdates": notify})
         except GcalError:
             raise GcalError(
                 error.code,
-                f"{error.message}; the new series {new_ref} is still there, next to the old series",
-                f"delete {new_ref} with --scope all, then try again",
+                f"{error.message}; the split is maybe half done: the new series is {new_ref}, the old series is {old_ref}",
+                f"get both refs: if the old series did not end, delete {new_ref} with --scope all, then try again",
             ) from error
+        return False
 
 
 def _place(instance, tz):
@@ -375,14 +388,21 @@ def _place(instance, tz):
 
 
 def _changed_later(instances, master, cutoff, tz):
-    later_ones = [i for i in instances if _place(i, tz) > cutoff]
-    fields = ("summary", "description", "location")
+    length = elapsed(from_api(master["start"], tz), from_api(master["end"], tz))
     return [
-        i for i in later_ones
-        if i.get("status") == "cancelled"
-        or from_api(i["start"], tz) != _place(i, tz)
-        or any(i.get(key) != master.get(key) for key in fields)
+        i for i in instances
+        if _place(i, tz) > cutoff and (
+            i.get("status") == "cancelled"
+            or from_api(i["start"], tz) != _place(i, tz)
+            or elapsed(from_api(i["start"], tz), from_api(i["end"], tz)) != length
+            or any(i.get(key) != master.get(key) for key in INSTANCE_FIELDS)
+            or _emails(i) != _emails(master)
+        )
     ]
+
+
+def _emails(item):
+    return {a.get("email", "").casefold() for a in item.get("attendees") or []}
 
 
 def _remaining(master, original, instances, tz):
