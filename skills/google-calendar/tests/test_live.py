@@ -75,7 +75,8 @@ class LiveTests(unittest.TestCase):
                              "--color", "tomato", "--remind", "10m,email:1d", "--show-as", "free")
         self.assertTrue(created["own"])
         self.assertEqual(created["color"], "tomato")
-        self.assertEqual(created["reminders"], ["popup:10m", "email:1d"])
+        # Google returns the reminders in its own order.
+        self.assertCountEqual(created["reminders"], ["popup:10m", "email:1d"])
         self.assertEqual(created["show_as"], "free")
         self.assertIn(created["ref"], [item["ref"] for item in self.agenda()])
         found = gcal("search", f"Focus {RUN}", "--calendar", self.calendar, "--to", str(DAY + timedelta(days=2)))
@@ -105,7 +106,7 @@ class LiveTests(unittest.TestCase):
         instances = [item for item in self.agenda() if item["title"] == f"Standup {RUN}"]
         self.assertEqual(len(instances), 6)
         second, fourth = instances[1]["ref"], instances[3]["ref"]
-        self.assertEqual(gcal("edit", second, "--title", "x", code=2)["hint"].count("--scope"), 1)
+        self.assertIn("--scope instance", gcal("edit", second, "--title", "x", code=2)["hint"])
         one("edit", second, "--scope", "instance", "--title", f"Moved standup {RUN}", "--start", at(15, 11))
         split = one("edit", fourth, "--scope", "following", "--title", f"Sync {RUN}")
         self.assertIn("two series", split["note"])
@@ -138,8 +139,10 @@ class LiveTests(unittest.TestCase):
         started = datetime.now(timezone.utc).isoformat(timespec="seconds")
         created = one("create", title, "--calendar", self.calendar, "--start", at(3, 15), "--guest", GUEST, "--notify", "all")
         self.assertEqual([g["email"] for g in created["guests"]], [GUEST])
+        # Google sends the invitation with the address of the organizer as the sender.
+        organizer = one("whoami")["account"].rpartition("@")[2]
         waited = subprocess.run(
-            [sys.executable, str(MAIL), "wait", "--from", "google.com", "--after", started, "--subject", title, "--timeout", "240"],
+            [sys.executable, str(MAIL), "wait", "--from", organizer, "--after", started, "--subject", title, "--timeout", "240"],
             capture_output=True, text=True, timeout=300,
         )
         self.assertEqual(waited.returncode, 0, waited.stderr)
