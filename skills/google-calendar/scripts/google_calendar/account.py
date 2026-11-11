@@ -17,7 +17,9 @@ class Account:
 
     def refresh(self):
         primary = self.api.get(f"{CALENDAR}/calendars/primary")
-        self._facts = store.update(account=primary["id"], time_zone=primary["timeZone"], checked_at=time.time())
+        # The time zone of the user is a setting of its own; the primary calendar can keep an older zone.
+        setting = self.api.get(f"{CALENDAR}/users/me/settings/timezone").get("value")
+        self._facts = store.update(account=primary["id"], time_zone=setting or primary["timeZone"], checked_at=time.time())
         return self._facts
 
     def facts(self):

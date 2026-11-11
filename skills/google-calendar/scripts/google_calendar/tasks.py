@@ -70,7 +70,12 @@ class Tasks:
 
     def tasks(self, list_name=None, done=False, due_before=None, body=False):
         list_id = self.resolve(list_name)
-        params = {"showCompleted": "true" if done else "false", "showHidden": "true" if done else "false", "maxResults": 100}
+        params = {
+            "showCompleted": "true" if done else "false",
+            "showHidden": "true" if done else "false",
+            "showAssigned": "true",
+            "maxResults": 100,
+        }
         if due_before:
             params["dueMax"] = _due(due_before, self.account.tz)
         items = self.api.pages(self._url(list_id), **params)
@@ -83,7 +88,7 @@ class Tasks:
     def add(self, title, list_name=None, notes=None, due=None, parent=None, after=None):
         list_id = self.resolve(list_name)
         body = {"title": title, "notes": notes, "due": _due(due, self.account.tz) if due else None}
-        params = {"parent": self._child_id(parent, list_id), "previous": self._child_id(after, list_id)}
+        params = self._place(parent, after, list_id)
         created = self.api.request("POST", self._url(list_id), params, {k: v for k, v in body.items() if v is not None})
         return self._shape(created, list_id)
 
@@ -112,8 +117,7 @@ class Tasks:
         list_id, item = self._load(ref)
         destination = self.resolve(to_list) if to_list else None
         params = {
-            "parent": self._child_id(parent, destination or list_id),
-            "previous": self._child_id(after, destination or list_id),
+            **self._place(parent, after, destination or list_id),
             "destinationTasklist": destination if destination and destination != list_id else None,
         }
         if not (top or any(params.values())):
@@ -146,6 +150,14 @@ class Tasks:
         if self.resolve(ref_list) != list_id:
             raise bad_input("--parent and --after must be tasks in the same list")
         return task_id
+
+    def _place(self, parent, after, list_id):
+        previous = self._child_id(after, list_id)
+        parent_id = self._child_id(parent, list_id)
+        if previous and not parent:
+            # Google puts a task with no parent at the top level, so "after a subtask" needs the parent of that subtask.
+            parent_id = self.api.get(self._url(list_id, previous)).get("parent")
+        return {"parent": parent_id, "previous": previous}
 
     def _patch(self, list_id, item, body):
         updated = self.api.request("PATCH", self._url(list_id, item["id"]), body=body)
