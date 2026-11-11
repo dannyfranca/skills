@@ -34,7 +34,9 @@ class Api:
                 refreshed = True
                 continue
             # Google reports quota limits as 403 with a rate reason, not only as 429.
-            if (status in RETRY_STATUSES or _rate_limited(status, payload)) and attempt < RETRIES:
+            # Google can save a POST and still answer 5xx; a second POST would then make a copy.
+            unsafe = method == "POST" and status >= 500
+            if (status in RETRY_STATUSES or _rate_limited(status, payload)) and not unsafe and attempt < RETRIES:
                 self.sleep(2**attempt)
                 continue
             break

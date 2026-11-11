@@ -95,6 +95,11 @@ class ApiTests(unittest.TestCase):
         client, _ = self.make([(503, {}), (403, limited), (200, {"ok": 1})])
         self.assertEqual(client.get("https://x/v3/a"), {"ok": 1})
 
+    def test_post_is_not_sent_twice_after_a_server_error(self):
+        client, _ = self.make([(503, {}), (200, {"ok": 1})])
+        with self.assertRaises(GcalError):
+            client.request("POST", "https://x/v3/a", body={})
+
     def test_error_codes(self):
         for status, payload, code in (
             (404, {}, NOT_FOUND),
