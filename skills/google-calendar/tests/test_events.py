@@ -181,6 +181,23 @@ class EditTests(unittest.TestCase):
         self.assertEqual(code_of(lambda: events.edit(FOURTH["id"], scope="following", notify="none", title="Sync")).code, BAD_INPUT)
         self.assertEqual([call for call in api.calls if call[0] != "GET"], [])
 
+    def test_later_instance_with_more_additional_guests_stops_a_split(self):
+        shared = dict(SERIES, attendees=[{"email": GUEST}])
+        plus_two = dict(instance("2026-11-30T10:00:00Z", "2026-11-30T10:00:00Z"), attendees=[{"email": GUEST, "additionalGuests": 2}])
+        events, api = make({("GET", f"{EVENTS}/{FOURTH['id']}"): FOURTH, ("GET", f"{EVENTS}/s1"): shared,
+                            ("GET", f"{EVENTS}/s1/instances"): {"items": [plus_two]}})
+        self.assertEqual(code_of(lambda: events.edit(FOURTH["id"], scope="following", notify="none", title="Sync")).code, BAD_INPUT)
+        self.assertEqual([call for call in api.calls if call[0] != "GET"], [])
+
+    def test_split_keeps_the_additional_guests_of_the_series(self):
+        shared = dict(SERIES, attendees=[{"email": GUEST, "additionalGuests": 2, "responseStatus": "accepted", "comment": "+2"}])
+        later = dict(instance("2026-11-30T10:00:00Z", "2026-11-30T10:00:00Z"), attendees=shared["attendees"])
+        events, api = make({("GET", f"{EVENTS}/{FOURTH['id']}"): FOURTH, ("GET", f"{EVENTS}/s1"): shared,
+                            ("GET", f"{EVENTS}/s1/instances"): {"items": [later]}, ("POST", EVENTS): dict(SERIES, id="s2"),
+                            ("PATCH", f"{EVENTS}/s1"): shared})
+        events.edit(FOURTH["id"], scope="following", notify="none", title="Sync")
+        self.assertEqual(api.sent("POST")[0][3]["attendees"], [{"email": GUEST, "additionalGuests": 2}])
+
     def test_a_rule_with_a_weekday_needs_a_new_rule_to_move_the_series(self):
         mondays = dict(SERIES, recurrence=["RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=10"])
         events, api = make({("GET", f"{EVENTS}/{FOURTH['id']}"): FOURTH, ("GET", f"{EVENTS}/s1"): mondays,
