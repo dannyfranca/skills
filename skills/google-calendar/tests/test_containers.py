@@ -224,10 +224,11 @@ class CliTests(unittest.TestCase):
         code, _, err = self.run_cli(["search", "dentist", "--from", "-3d", "--to", "+1d"])
         self.assertEqual((code, err), (0, ""))
 
-    def test_bad_flag_is_exit_2(self):
-        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
-            cli.main(["agenda", "--nope"])
-        self.assertEqual(caught.exception.code, BAD_INPUT)
+    def test_usage_errors_are_exit_2_with_json(self):
+        for argv in (["agenda", "--nope"], ["create"], ["delete", "x", "--scope", "some"]):
+            code, out, err = self.run_cli(argv)
+            self.assertEqual((code, out), (BAD_INPUT, ""))
+            self.assertIn("--help", json.loads(err)["hint"])
 
 
 if __name__ == "__main__":

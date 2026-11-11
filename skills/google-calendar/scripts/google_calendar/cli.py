@@ -10,7 +10,7 @@ from . import auth, setup, store
 from .account import Account
 from .api import Api
 from .calendars import ROLES, Calendars
-from .errors import GcalError
+from .errors import GcalError, bad_input
 from .events import SCOPES, Events
 from .shape import COLOR_IDS, RESPONSE_VALUES
 from .tasks import Tasks
@@ -19,8 +19,15 @@ from .untrusted import render
 NOTIFY = ("all", "none")
 
 
+class Parser(argparse.ArgumentParser):
+    """Usage errors come out as JSON with exit 2, like every other error; --help stays text."""
+
+    def error(self, message):
+        raise bad_input(message, f"run `{self.prog} --help`")
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(prog="gcal", description="Google Calendar and Google Tasks for agents. See SKILL.md.")
+    parser = Parser(prog="gcal", description="Google Calendar and Google Tasks for agents. See SKILL.md.")
     commands = parser.add_subparsers(dest="command", required=True)
 
     commands.add_parser("setup", help="interactive setup for the user, in a terminal")
@@ -304,8 +311,8 @@ def _join_offsets(argv):
 
 
 def main(argv=None, api=None):
-    args = build_parser().parse_args(_join_offsets(sys.argv[1:] if argv is None else argv))
     try:
+        args = build_parser().parse_args(_join_offsets(sys.argv[1:] if argv is None else argv))
         result = dispatch(args, api)
     except GcalError as error:
         print(json.dumps(error.payload(), ensure_ascii=False), file=sys.stderr)
