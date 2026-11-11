@@ -1,6 +1,6 @@
 ---
 name: google-calendar
-description: The user's Google Calendar and Google Tasks. Use for any calendar, event, or task request.
+description: The user's Google Calendar and Google Tasks.
 ---
 
 # Google Calendar
