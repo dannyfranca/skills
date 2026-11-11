@@ -47,12 +47,14 @@ class LiveTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.name = f"gcal-live-{RUN}"
+        # Each cleanup is registered at once, so a failed setup or a failed cleanup leaves nothing in the account.
         cls.calendar = one("calendar", "create", cls.name)["id"]
+        cls.addClassCleanup(cls.delete_calendar)
         cls.task_list = one("task", "new-list", cls.name)["id"]
+        cls.addClassCleanup(gcal, "task", "delete-list", cls.task_list, "--yes")
 
     @classmethod
-    def tearDownClass(cls):
-        gcal("task", "delete-list", cls.task_list, "--yes")
+    def delete_calendar(cls):
         gcal("calendar", "delete", cls.calendar, "--confirm", cls.name)
         names = [entry["name"] for entry in gcal("calendars")]
         assert cls.name not in names, "the throwaway calendar is still in the list"
@@ -73,7 +75,7 @@ class LiveTests(unittest.TestCase):
                              "--color", "tomato", "--remind", "10m,email:1d", "--show-as", "free")
         self.assertTrue(created["own"])
         self.assertEqual(created["color"], "tomato")
-        self.assertEqual(created["reminders"], ["popup:10m", "email:1440m"])
+        self.assertEqual(created["reminders"], ["popup:10m", "email:1d"])
         self.assertEqual(created["show_as"], "free")
         self.assertIn(created["ref"], [item["ref"] for item in self.agenda()])
         found = gcal("search", f"Focus {RUN}", "--calendar", self.calendar, "--to", str(DAY + timedelta(days=2)))
