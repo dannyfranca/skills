@@ -184,7 +184,10 @@ def logout():
     data = store.load()
     token = data.get("refresh_token")
     if token:
-        _post(REVOKE_URL, {"token": token})
+        answer = _post(REVOKE_URL, {"token": token})
+        # invalid_token: Google already revoked it, so only the local copy is left to remove.
+        if "_status" in answer and answer.get("error") != "invalid_token":
+            raise GcalError(REMOTE, f"Google did not revoke the login: HTTP {answer['_status']}", "try logout again later")
     for key in ("refresh_token", "access_token", "expires_at"):
         data.pop(key, None)
     store.save(data)

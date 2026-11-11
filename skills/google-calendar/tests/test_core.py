@@ -147,6 +147,20 @@ class StoreAndAuthTests(unittest.TestCase):
             auth.access_token()
         self.assertEqual(caught.exception.code, AUTH)
 
+    def test_logout_keeps_the_login_when_google_does_not_revoke_it(self):
+        store.save({"client_id": "c", "client_secret": "s", "refresh_token": "r"})
+        with patch.object(auth, "_post", return_value={"_status": 503, "error": "http_error"}):
+            with self.assertRaises(GcalError) as caught:
+                auth.logout()
+        self.assertEqual(caught.exception.code, REMOTE)
+        self.assertEqual(store.load()["refresh_token"], "r")
+
+    def test_logout_of_a_revoked_login_removes_it(self):
+        store.save({"client_id": "c", "client_secret": "s", "refresh_token": "r"})
+        with patch.object(auth, "_post", return_value={"_status": 400, "error": "invalid_token"}):
+            auth.logout()
+        self.assertNotIn("refresh_token", store.load())
+
     def test_refresh_uses_the_refresh_token(self):
         store.save({"client_id": "c", "client_secret": "s", "refresh_token": "r", "access_token": "old", "expires_at": 0})
         with patch.object(auth, "_post", return_value={"access_token": "new", "expires_in": 3600}) as post:
