@@ -61,6 +61,15 @@ def to_api(moment, tz_name):
     return {"date": moment.isoformat()}
 
 
+def later(moment, delta):
+    # Aware datetimes in one zone add on the wall clock; a daylight-saving change would then lose or gain an hour.
+    return (moment.astimezone(timezone.utc) + delta).astimezone(moment.tzinfo)
+
+
+def elapsed(begin, finish):
+    return finish.astimezone(timezone.utc) - begin.astimezone(timezone.utc)
+
+
 def from_api(value, tz):
     """A date for all-day values, else an aware datetime in the zone tz."""
     if "dateTime" in value:

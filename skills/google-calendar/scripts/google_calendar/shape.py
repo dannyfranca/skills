@@ -71,8 +71,9 @@ def times(event, tz):
     return start, end
 
 
-def event(item, calendar_id, calendar_name, account_email, tz, with_body=False, recurrence=None):
-    own = is_own(item, account_email)
+def event(item, calendar_id, calendar_name, account_email, tz, with_body=False, recurrence=None, own_calendar=True):
+    # The owner of a shared calendar controls its name, and the name is part of this item.
+    own = own_calendar and is_own(item, account_email)
     start, end = times(item, tz)
     others = guests(item, calendar_id, account_email)
     mine = next(
