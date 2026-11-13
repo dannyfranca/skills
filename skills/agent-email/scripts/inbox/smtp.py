@@ -5,39 +5,77 @@ import imaplib
 import re
 import smtplib
 import ssl
+from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
+from email.parser import BytesHeaderParser
+from email.policy import compat32
 from email.policy import default as default_policy
-from email.utils import make_msgid, parsedate_to_datetime
+from email.utils import make_msgid
 
 from .base import Message, Provider, address_of, env, fail
 
 IMPLICIT_TLS_SMTP_PORT = 465
+TIMEOUT_SECONDS = 30
+INTERNALDATE = re.compile(rb'INTERNALDATE "([^"]+)"')
 
 
-def message_of(uid, raw, with_body):
-    message = Message(
-        id=uid,
-        sender=str(raw["From"] or ""),
-        subject=str(raw["Subject"] or ""),
-        received=parsedate_to_datetime(raw["Date"]) if raw["Date"] else None,
-    )
-    if with_body:
-        message.text = body(raw, "plain")
-        message.html = body(raw, "html")
-        message.attachments = [part.get_filename() or "unnamed" for part in raw.iter_attachments()]
-    return message
+def message_of(uid, received, data, with_body):
+    try:
+        raw = email.message_from_bytes(data, policy=default_policy)
+        message = Message(id=uid, sender=str(raw["From"] or ""), subject=str(raw["Subject"] or ""), received=received)
+        if with_body:
+            message.text = body(raw, "plain")
+            message.html = body(raw, "html")
+            message.attachments = [part.get_filename() or "unnamed" for part in raw.iter_attachments()]
+        return message
+    # The parser reads MIME parts and structured headers by recursion, and fails with other errors on some malformed
+    # headers. Such mail is no mail a person sends, and it must not stop each wait. The raw headers still name the mail.
+    except Exception:
+        headers = BytesHeaderParser(policy=compat32).parsebytes(data)
+        return Message(
+            id=uid,
+            sender=str(headers["From"] or ""),
+            subject=str(headers["Subject"] or ""),
+            received=received,
+            labels=["unparsable"],
+        )
 
 
 def body(raw, subtype):
     part = raw.get_body(preferencelist=(subtype,))
-    return part.get_content() if part else None
+    if not part:
+        return None
+    try:
+        return part.get_content()
+    # The sender names the charset. An unknown one must not stop the screening of the mail.
+    except (LookupError, UnicodeError):
+        return (part.get_payload(decode=True) or b"").decode("utf-8", "replace")
+
+
+# The server sets INTERNALDATE on delivery. The Date header is whatever the sender wrote.
+def received_of(attributes):
+    found = INTERNALDATE.search(attributes)
+    return datetime.strptime(found.group(1).decode().strip(), "%d-%b-%Y %H:%M:%S %z") if found else None
 
 
 def fetched(response):
-    for part in response:
-        if isinstance(part, tuple):
-            uid = re.search(rb"UID (\d+)", part[0]).group(1).decode()
-            yield uid, email.message_from_bytes(part[1], policy=default_policy)
+    for index, part in enumerate(response):
+        if not isinstance(part, tuple):
+            continue
+        # RFC 3501 lets the server put UID and INTERNALDATE before or after the message literal.
+        after = response[index + 1] if index + 1 < len(response) and isinstance(response[index + 1], bytes) else b""
+        attributes = part[0] + after
+        uid = re.search(rb"UID (\d+)", attributes)
+        if uid:
+            yield uid.group(1).decode(), received_of(attributes), part[1]
+
+
+def ok(reply, action):
+    status, data = reply
+    if status != "OK":
+        detail = data[0] if data and data[0] else b"no reason given"
+        fail(f"cannot {action}: {detail.decode(errors='replace') if isinstance(detail, bytes) else detail}")
+    return data
 
 
 class SmtpProvider(Provider):
@@ -50,7 +88,9 @@ class SmtpProvider(Provider):
         self.imap_port = int(env("AGENT_EMAIL_IMAP_PORT", "993"))
 
     def open_inbox(self):
-        mailbox = imaplib.IMAP4_SSL(self.imap_host, self.imap_port, ssl_context=ssl.create_default_context())
+        mailbox = imaplib.IMAP4_SSL(
+            self.imap_host, self.imap_port, ssl_context=ssl.create_default_context(), timeout=TIMEOUT_SECONDS
+        )
         mailbox.login(*self.credentials)
         status, detail = mailbox.select("INBOX", readonly=True)
         if status != "OK":
@@ -58,29 +98,37 @@ class SmtpProvider(Provider):
         return mailbox
 
     def list(self, after=None, limit=10):
-        # IMAP SINCE has day granularity, so the exact cut happens on the Date header.
-        criteria = ["SINCE", after.strftime("%d-%b-%Y")] if after else ["ALL"]
+        # IMAP SINCE compares the date in the server time zone, which can be one day before the UTC date.
+        # The exact cut happens on INTERNALDATE.
+        since = after.astimezone(timezone.utc) - timedelta(days=1) if after else None
+        criteria = ["SINCE", since.strftime("%d-%b-%Y")] if since else ["ALL"]
         with self.open_inbox() as mailbox:
-            _, found = mailbox.uid("SEARCH", None, *criteria)
+            found = ok(mailbox.uid("SEARCH", None, *criteria), "search INBOX")
             uids = found[0].split()
             if not uids:
                 return []
-            _, response = mailbox.uid("FETCH", b",".join(uids), "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])")
-        messages = [message_of(uid, raw, with_body=False) for uid, raw in fetched(response)]
+            response = ok(
+                mailbox.uid("FETCH", b",".join(uids), "(INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM SUBJECT)])"),
+                "fetch mail",
+            )
+        messages = [message_of(*found, with_body=False) for found in fetched(response)]
         if after:
-            messages = [m for m in messages if m.received and m.received > after]
-        messages.sort(key=lambda m: m.received.timestamp() if m.received else 0, reverse=True)
+            # INTERNALDATE has whole seconds, so mail from the second of the start time counts as later.
+            cutoff = after.replace(microsecond=0)
+            messages = [m for m in messages if m.received and m.received >= cutoff]
+        # A server gives each new mail a higher UID, which orders the mail that arrives in the same second.
+        messages.sort(key=lambda m: (m.received.timestamp() if m.received else 0, int(m.id)), reverse=True)
         return messages[:limit]
 
     def fetch(self, message_id):
         with self.open_inbox() as mailbox:
-            _, response = mailbox.uid("FETCH", message_id, "(BODY.PEEK[])")
-        for _, raw in fetched(response):
-            return raw
+            response = ok(mailbox.uid("FETCH", message_id, "(INTERNALDATE BODY.PEEK[])"), f"fetch message {message_id}")
+        for _, received, data in fetched(response):
+            return received, data
         fail(f"no message with id {message_id}")
 
     def read(self, message_id):
-        return message_of(message_id, self.fetch(message_id), with_body=True)
+        return message_of(message_id, *self.fetch(message_id), with_body=True)
 
     def deliver(self, to, subject, text, in_reply_to=None):
         message = EmailMessage()
@@ -95,9 +143,9 @@ class SmtpProvider(Provider):
 
         context = ssl.create_default_context()
         if self.smtp_port == IMPLICIT_TLS_SMTP_PORT:
-            server = smtplib.SMTP_SSL(self.smtp_host, self.smtp_port, context=context, timeout=30)
+            server = smtplib.SMTP_SSL(self.smtp_host, self.smtp_port, context=context, timeout=TIMEOUT_SECONDS)
         else:
-            server = smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=30)
+            server = smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=TIMEOUT_SECONDS)
             server.starttls(context=context)
         with server:
             server.login(*self.credentials)
@@ -108,7 +156,7 @@ class SmtpProvider(Provider):
         return self.deliver(to, subject, text)
 
     def reply(self, message_id, text):
-        original = self.fetch(message_id)
+        original = email.message_from_bytes(self.fetch(message_id)[1], policy=default_policy)
         subject = str(original["Subject"] or "")
         if not subject.lower().startswith("re:"):
             subject = f"Re: {subject}"

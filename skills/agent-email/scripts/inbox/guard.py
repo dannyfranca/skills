@@ -25,10 +25,13 @@ def check(email):
     if not command:
         return None
     try:
+        argv = shlex.split(command)
+        if not argv:
+            return "unavailable"
         # An empty working folder keeps the guard away from project files and instructions.
         with tempfile.TemporaryDirectory() as folder:
             result = subprocess.run(
-                shlex.split(command),
+                argv,
                 input=PROMPT.format(email=email),
                 capture_output=True,
                 text=True,

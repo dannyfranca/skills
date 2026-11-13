@@ -2,97 +2,52 @@
 
 import re
 import unicodedata
-from html.parser import HTMLParser
 from urllib.parse import urlparse
+
+from .markup import html_to_text
 
 BODY_LIMIT = 4000
 LINE_LIMIT = 200
 MAX_CODES = 5
 MAX_LINKS = 20
 MAX_URL = 2000
+# Mail for signups is a few kB, and parsing stays fast up to this size.
+MAX_HTML = 500_000
 MAX_ATTACHMENTS = 10
 ATTACHMENT_NAME_LIMIT = 100
 
-SKIPPED_TAGS = {"script", "style", "head", "title", "template", "noscript", "svg"}
-VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
-BLOCK_TAGS = {"p", "div", "br", "tr", "li", "table", "section", "article", "blockquote", "hr", "h1", "h2", "h3", "h4", "h5", "h6"}
-# Text that a human cannot see is the usual place for instructions aimed at an agent.
-HIDDEN_STYLE = re.compile(
-    r"display\s*:\s*none|visibility\s*:\s*hidden|(?:font-size|opacity|max-height)\s*:\s*0(?![.\d]*[1-9])", re.I
-)
-
-URL = re.compile(r"https?://[^\s<>\"'()\[\]{}]+", re.I)
+# Browsers read "\" in a URL as "/", so "https://evil.net\@site.com" opens evil.net. A URL stops at "\".
+URL = re.compile(r"https?://[^\s<>\"'()\[\]{}\\]+", re.I)
+# Prose puts brackets around a URL, but in an href they are part of it.
+HREF = re.compile(r"https?://[^\s<>\"'\\]+", re.I)
 TRAILING_PUNCTUATION = ".,;:!?"
-COMMON_TLDS = "com|net|org|io|co|dev|app|ai|me|info|biz|xyz|email|[a-z]{2}"
-DOMAIN_IN_TEXT = re.compile(rf"\b(?:[a-z0-9-]+\.)+(?:{COMMON_TLDS})\b", re.I)
+# A domain starts only where a dotted run starts. A start inside the run retries the whole run, which is quadratic
+# on a long run that ends without a top-level domain.
+# Labels and top-level domains can be in any script, and a top-level domain can be in its ASCII form.
+DOMAIN_IN_TEXT = re.compile(r"(?<![\w-])(?<![\w-]\.)(?:(?:[^\W_]|-)+\.)+(?:xn--[a-z0-9-]+|[^\W\d_]{2,63})\b", re.I)
 CODE_KEYWORD = r"(?:code|otp|pin|passcode|password|token|verification|verify|c[óo]digo)"
 CODE_NEAR_KEYWORD = re.compile(
     rf"{CODE_KEYWORD}[^\n]{{0,40}}?\b((?=[A-Za-z0-9]*\d)[A-Za-z0-9]{{4,8}}|\d{{3}}[- ]\d{{3}})\b", re.I
 )
 BARE_CODE = re.compile(r"\b\d{4,8}\b")
 YEAR = re.compile(r"(?:19|20)\d\d")
+# Unicode default-ignorable characters outside category C: they render as nothing.
+INVISIBLE_MARKS = re.compile("[\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u3164\ufe00-\ufe0f\uffa0\U000e0100-\U000e01ef]")
 
 
-class _TextExtractor(HTMLParser):
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.stack, self.hidden_depth, self.parts, self.anchors, self.anchor = [], 0, [], [], None
-
-    def handle_starttag(self, tag, attrs):
-        if tag in BLOCK_TAGS and not self.hidden_depth:
-            self.parts.append("\n")
-        if tag in VOID_TAGS:
-            return
-        attributes = dict(attrs)
-        hidden = (
-            tag in SKIPPED_TAGS
-            or "hidden" in attributes
-            or attributes.get("aria-hidden") == "true"
-            or bool(HIDDEN_STYLE.search(attributes.get("style") or ""))
-        )
-        self.stack.append((tag, hidden))
-        self.hidden_depth += hidden
-        if tag == "a" and not self.hidden_depth:
-            self.anchor = (attributes.get("href") or "", [])
-
-    def handle_startendtag(self, tag, attrs):
-        self.handle_starttag(tag, attrs)
-        if tag not in VOID_TAGS:
-            self.handle_endtag(tag)
-
-    def handle_endtag(self, tag):
-        if not any(open_tag == tag for open_tag, _ in self.stack):
-            return
-        while self.stack:
-            open_tag, hidden = self.stack.pop()
-            self.hidden_depth -= hidden
-            if open_tag == "a" and self.anchor:
-                self.anchors.append((self.anchor[0], "".join(self.anchor[1])))
-                self.anchor = None
-            if open_tag == tag:
-                break
-        if tag in BLOCK_TAGS:
-            self.parts.append("\n")
-
-    def handle_data(self, data):
-        if self.hidden_depth:
-            return
-        self.parts.append(data)
-        if self.anchor:
-            self.anchor[1].append(data)
+def invisible(ch):
+    return unicodedata.category(ch)[0] == "C" or bool(INVISIBLE_MARKS.match(ch))
 
 
-def html_to_text(html):
-    extractor = _TextExtractor()
-    extractor.feed(html)
-    extractor.close()
-    return "".join(extractor.parts), extractor.anchors
+def shown(text):
+    """The text as a reader sees it: full-width letters as ASCII, invisible characters gone."""
+    text = unicodedata.normalize("NFKC", text or "")
+    return "".join(ch for ch in text if ch in "\n\t" or not invisible(ch))
 
 
 def clean(text, limit=BODY_LIMIT):
     # NFKC first, so full-width brackets become "<" and ">" before they are neutralized.
-    text = unicodedata.normalize("NFKC", text or "")
-    text = "".join(ch for ch in text if ch in "\n\t" or unicodedata.category(ch)[0] != "C")
+    text = shown(text)
     # No "<" or ">" survives, so mail content cannot open or close a tag of the envelope.
     text = text.replace("<", "‹").replace(">", "›")
     text = re.sub(r"[ \t]+", " ", text)
@@ -105,8 +60,24 @@ def clean_line(text, limit=LINE_LIMIT):
     return clean((text or "").replace("\n", " "), limit)
 
 
+# Browsers keep these letters in a host, while the IDNA 2003 codec maps "ß" to "ss" and "ς" to "σ".
+DEVIATION_LETTERS = re.compile("[ßςẞ]")
+
+
+def ascii_label(label):
+    if DEVIATION_LETTERS.search(label):
+        return "xn--" + unicodedata.normalize("NFKC", label.lower()).encode("punycode").decode()
+    return label.encode("idna").decode()
+
+
 def site(host):
-    labels = (host or "").lower().rstrip(".").split(".")
+    # A label can show the Unicode form of a host and the URL its ASCII form. A host the codec rejects stays
+    # as it is, so it differs from both forms.
+    try:
+        host = ".".join(map(ascii_label, (host or "").split(".")))
+    except UnicodeError:
+        pass
+    labels = host.lower().rstrip(".").split(".")
     keep = 3 if len(labels) >= 3 and len(labels[-1]) == 2 and len(labels[-2]) <= 3 else 2
     return ".".join(labels[-keep:])
 
@@ -118,26 +89,57 @@ def codes(subject, text):
     return list(dict.fromkeys(found))[:MAX_CODES]
 
 
-def flag(url, label, sender_domain):
-    host = urlparse(url).hostname or ""
-    label_sites = {site(domain) for domain in DOMAIN_IN_TEXT.findall(label or "")}
-    if label_sites and site(host) not in label_sites:
+def host_of(url):
+    try:
+        return urlparse(url).hostname or ""
+    except ValueError:
+        return ""
+
+
+# IDNA reads these full stops as the dot between labels. NFKC already maps the full-width one.
+IDEOGRAPHIC_DOTS = str.maketrans("\u3002\uff61", "..")
+
+
+def domains_in_text(text):
+    # Many scripts write vowels as combining marks, which "\w" does not match. The scan reads each mark as a letter.
+    letters = "".join("a" if unicodedata.category(ch)[0] == "M" else ch for ch in text)
+    return [text[match.start():match.end()] for match in DOMAIN_IN_TEXT.finditer(letters)]
+
+
+def named_sites(label):
+    label = label.translate(IDEOGRAPHIC_DOTS)
+    hosts = [host_of(url) for url in URL.findall(label)] + domains_in_text(URL.sub(" ", label))
+    return {site(host) for host in hosts if host}
+
+
+def flag(host, label, sender_domain):
+    label_sites = named_sites(shown(label))
+    # A label that also names the destination still names another site, and the reader may trust that one.
+    if label_sites - {site(host)}:
         return "text-mismatch"
     return "same-domain" if site(host) == site(sender_domain) else "other-domain"
 
 
+def bare_urls(text):
+    return [match.rstrip(TRAILING_PUNCTUATION) for match in URL.findall(text)]
+
+
 def links(anchors, text, sender_domain):
-    candidates = list(anchors) + [(match.rstrip(TRAILING_PUNCTUATION), None) for match in URL.findall(text)]
-    seen, result = set(), []
-    for url, label in candidates:
+    # A URL shown as anchor text is not where the anchor goes. The anchor itself reports the mismatch.
+    labels = {url for _, label in anchors for url in bare_urls(label or "")}
+    candidates = [(url, label, HREF) for url, label in anchors]
+    candidates += [(url, None, URL) for url in bare_urls(text) if url not in labels]
+    found = {}
+    for url, label, pattern in candidates:
         url = url.strip()
         # Invisible or direction marks inside a URL make the shown link differ from the one that opens.
-        invisible = any(unicodedata.category(ch)[0] == "C" for ch in url)
-        if url in seen or len(url) > MAX_URL or invisible or not URL.fullmatch(url):
+        host = host_of(url)
+        if len(url) > MAX_URL or any(map(invisible, url)) or not pattern.fullmatch(url) or not host:
             continue
-        seen.add(url)
-        result.append({"url": url, "flag": flag(url, label, sender_domain)})
-    return result[:MAX_LINKS]
+        # One mismatched label is enough: the sender picks which copy of the link comes first.
+        if found.get(url) != "text-mismatch":
+            found[url] = flag(host, label, sender_domain)
+    return [{"url": url, "flag": link_flag} for url, link_flag in found.items()][:MAX_LINKS]
 
 
 def content(message, sender_domain):

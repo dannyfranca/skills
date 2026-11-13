@@ -1,13 +1,13 @@
 import os
 import sys
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
-from inbox import smtp  # noqa: E402
+from inbox import base, screen, smtp  # noqa: E402
 
 ENV = {
     "AGENT_EMAIL_ADDRESS": "agent@example.com",
@@ -60,9 +60,11 @@ class FakeSmtp:
 class FakeImap:
     store = {}
     select_reply = ("OK", [b"2"])
+    attributes_after_body = False
+    failing = None
 
-    def __init__(self, host, port, **_):
-        pass
+    def __init__(self, host, port, **options):
+        FakeImap.options = options
 
     def __enter__(self):
         return self
@@ -78,13 +80,23 @@ class FakeImap:
         return FakeImap.select_reply
 
     def uid(self, command, *args):
+        if command == FakeImap.failing:
+            return "NO", [b"Temporary failure"]
         if command == "SEARCH":
             FakeImap.last_search = args[1:]
             return "OK", [b" ".join(FakeImap.store)]
         uids = args[0] if isinstance(args[0], bytes) else args[0].encode()
-        return "OK", [
-            (b"1 (UID " + uid + b" BODY[] {1}", FakeImap.store[uid]) for uid in uids.split(b",") if uid in FakeImap.store
-        ]
+        response = []
+        for uid in uids.split(b","):
+            if uid not in FakeImap.store:
+                continue
+            internal_date, message = FakeImap.store[uid]
+            attributes = b"UID " + uid + b' INTERNALDATE "' + internal_date.encode() + b'"'
+            if FakeImap.attributes_after_body:
+                response += [(b"1 (BODY[] {1}", message), b" " + attributes + b")"]
+            else:
+                response += [(b"1 (" + attributes + b" BODY[] {1}", message), b")"]
+        return "OK", response
 
 
 @patch.dict(os.environ, ENV, clear=True)
@@ -92,15 +104,20 @@ class SmtpProviderTests(unittest.TestCase):
     def setUp(self):
         FakeSmtp.instances = []
         FakeImap.select_reply = ("OK", [b"2"])
+        FakeImap.attributes_after_body = False
+        FakeImap.failing = None
         FakeImap.store = {
-            b"1": raw("old@site.com", "Old", "Mon, 09 Nov 2026 09:00:00 +0000"),
-            b"2": raw(
-                "Site <noreply@site.com>",
-                "Code",
-                "Mon, 09 Nov 2026 10:05:00 +0000",
-                text="Code 123456",
-                html="<a href='https://site.com/v'>v</a>",
-                attachment="terms.pdf",
+            b"1": (" 9-Nov-2026 09:00:00 +0000", raw("old@site.com", "Old", "Mon, 09 Nov 2026 09:00:00 +0000")),
+            b"2": (
+                "09-Nov-2026 11:05:00 +0100",
+                raw(
+                    "Site <noreply@site.com>",
+                    "Code",
+                    "not a date",
+                    text="Code 123456",
+                    html="<a href='https://site.com/v'>v</a>",
+                    attachment="terms.pdf",
+                ),
             ),
         }
         patches = [
@@ -116,7 +133,37 @@ class SmtpProviderTests(unittest.TestCase):
         after = datetime(2026, 11, 9, 10, 0, tzinfo=timezone.utc)
         found = smtp.SmtpProvider().list(after=after)
         self.assertEqual([m.id for m in found], ["2"])
-        self.assertEqual(FakeImap.last_search, ("SINCE", "09-Nov-2026"))
+        self.assertEqual(FakeImap.last_search, ("SINCE", "08-Nov-2026"))
+
+    def test_list_keeps_mail_from_the_same_second_as_the_start(self):
+        found = smtp.SmtpProvider().list(after=datetime(2026, 11, 9, 9, 0, 0, 500000, tzinfo=timezone.utc))
+        self.assertEqual([m.id for m in found], ["2", "1"])
+
+    def test_list_puts_the_higher_uid_first_within_one_second(self):
+        FakeImap.store[b"10"] = ("09-Nov-2026 11:05:00 +0100", raw("noreply@site.com", "Code", "Mon, 09 Nov 2026 10:05:00 +0000"))
+        found = smtp.SmtpProvider().list()
+        self.assertEqual([m.id for m in found], ["10", "2", "1"])
+
+    def test_search_starts_a_day_early_for_server_time_zones(self):
+        FakeImap.store[b"3"] = ("08-Nov-2026 19:01:00 -0500", raw("x@site.com", "West", "Sun, 08 Nov 2026 19:01:00 -0500"))
+        found = smtp.SmtpProvider().list(after=datetime(2026, 11, 9, 2, 0, tzinfo=timezone(timedelta(hours=2))))
+        self.assertEqual(FakeImap.last_search, ("SINCE", "08-Nov-2026"))
+        self.assertIn("3", [m.id for m in found])
+
+    def test_list_uses_the_server_receive_time_not_the_date_header(self):
+        FakeImap.store[b"3"] = ("09-Nov-2026 10:01:00 +0000", raw("x@site.com", "Skewed", "Mon, 09 Nov 2026 10:05:00 -0000"))
+        found = smtp.SmtpProvider().list(after=datetime(2026, 11, 9, 10, 0, tzinfo=timezone.utc))
+        self.assertEqual([m.id for m in found], ["2", "3"])
+        self.assertEqual(found[0].received, datetime(2026, 11, 9, 10, 5, tzinfo=timezone.utc))
+
+    def test_reads_uid_sent_after_the_message_body(self):
+        FakeImap.attributes_after_body = True
+        self.assertEqual([m.id for m in smtp.SmtpProvider().list()], ["2", "1"])
+        self.assertIn("123456", smtp.SmtpProvider().read("2").text)
+
+    def test_imap_connection_has_a_timeout(self):
+        smtp.SmtpProvider().list()
+        self.assertEqual(FakeImap.options["timeout"], smtp.TIMEOUT_SECONDS)
 
     def test_list_is_newest_first_without_bodies(self):
         found = smtp.SmtpProvider().list()
@@ -129,6 +176,38 @@ class SmtpProviderTests(unittest.TestCase):
         self.assertIn("https://site.com/v", message.html)
         self.assertEqual(message.attachments, ["terms.pdf"])
         self.assertIsNone(message.armor)
+
+    def test_mime_too_deep_to_parse_is_held_with_its_headers(self):
+        nested = b"".join(b'Content-Type: multipart/mixed; boundary="b%d"\r\n\r\n--b%d\r\n' % (n, n) for n in range(1100))
+        FakeImap.store[b"3"] = ("09-Nov-2026 11:00:00 +0000", b"From: x@site.com\r\nSubject: Deep\r\n" + nested)
+        message = smtp.SmtpProvider().read("3")
+        self.assertEqual((message.sender, message.subject, message.labels), ("x@site.com", "Deep", ["unparsable"]))
+        self.assertIsNone(message.html)
+        self.assertEqual(screen.hold(message), "label unparsable")
+
+    def test_header_too_deep_to_parse_is_held_in_list_and_read(self):
+        comments = b"\r\n ".join([b"(" * 10] * 110) + b"\r\n " + b"\r\n ".join([b")" * 10] * 110)
+        FakeImap.store[b"3"] = ("09-Nov-2026 12:00:00 +0000", b"From: " + comments + b" x@site.com\r\nSubject: Deep\r\n\r\nhi\r\n")
+        listed = smtp.SmtpProvider().list()[0]
+        message = smtp.SmtpProvider().read("3")
+        for found in (listed, message):
+            self.assertEqual((found.id, found.subject, found.labels), ("3", "Deep", ["unparsable"]))
+            self.assertIn("withheld: label unparsable", screen.listing(found))
+            self.assertIn("withheld: label unparsable", screen.inspect(found))
+            self.assertFalse(base.sender_matches(found.sender, "site.com"))
+
+    def test_sender_the_parser_cannot_read_is_held_and_other_mail_still_lists(self):
+        FakeImap.store[b"3"] = ("09-Nov-2026 12:00:00 +0000", b"From: ():\r\nSubject: Odd\r\n\r\nhi\r\n")
+        listed = {found.id: found for found in smtp.SmtpProvider().list()}
+        self.assertEqual(set(listed), {"1", "2", "3"})
+        for found in (listed["3"], smtp.SmtpProvider().read("3")):
+            self.assertEqual((found.subject, found.labels), ("Odd", ["unparsable"]))
+            self.assertIn("withheld: label unparsable", screen.inspect(found))
+
+    def test_unknown_charset_still_gives_the_text(self):
+        unknown = b"From: x@site.com\r\nSubject: Odd\r\nContent-Type: text/plain; charset=x-unknown\r\n\r\nCode 654321\r\n"
+        FakeImap.store[b"3"] = ("09-Nov-2026 11:00:00 +0000", unknown)
+        self.assertIn("654321", smtp.SmtpProvider().read("3").text)
 
     def test_read_of_unknown_id_fails(self):
         with self.assertRaises(SystemExit) as error:
@@ -149,8 +228,9 @@ class SmtpProviderTests(unittest.TestCase):
         self.assertTrue(FakeSmtp.instances[0].tls)
 
     def test_reply_goes_to_reply_to_and_threads(self):
-        FakeImap.store[b"3"] = raw(
-            "noreply@site.com", "Welcome", "Mon, 09 Nov 2026 11:00:00 +0000", reply_to="Help <help@site.com>"
+        FakeImap.store[b"3"] = (
+            "09-Nov-2026 11:00:00 +0000",
+            raw("noreply@site.com", "Welcome", "Mon, 09 Nov 2026 11:00:00 +0000", reply_to="Help <help@site.com>"),
         )
         smtp.SmtpProvider().reply("3", "Thanks")
         sent = FakeSmtp.instances[0].sent[0]
@@ -163,6 +243,14 @@ class SmtpProviderTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as error:
             smtp.SmtpProvider().list()
         self.assertIn("missing permission", str(error.exception))
+
+    def test_failed_search_or_fetch_reports_the_server_reason(self):
+        for command, call in (("SEARCH", "list"), ("FETCH", "list"), ("FETCH", "read")):
+            FakeImap.failing = command
+            provider = smtp.SmtpProvider()
+            with self.assertRaises(SystemExit) as error:
+                provider.read("2") if call == "read" else provider.list()
+            self.assertIn("Temporary failure", str(error.exception))
 
     def test_missing_setting_names_the_variable(self):
         with patch.dict(os.environ, {}, clear=True), self.assertRaises(SystemExit) as error:

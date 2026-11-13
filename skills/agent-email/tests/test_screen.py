@@ -41,13 +41,20 @@ class HoldTests(unittest.TestCase):
         self.assertIn("shown (armor: clear, guard: off)", text)
         self.assertIn("<codes>123456</codes>", text)
 
+    def test_html_too_large_to_screen_is_withheld(self):
+        oversized = Message("1", "noreply@site.com", "Code", None, html="<p>Code 123456</p>" + " " * screen.sanitize.MAX_HTML)
+        self.assertEqual(screen.hold(oversized), "html too large to screen")
+
     def test_listing_never_shows_codes(self):
         self.assertNotIn("123456", screen.listing(message()))
 
 
 class GuardTests(unittest.TestCase):
     def inspect_with(self, script, **fields):
-        with patch.dict(os.environ, {"AGENT_EMAIL_GUARD_CMD": guard_command(script)}, clear=True):
+        return self.inspect_with_command(guard_command(script), **fields)
+
+    def inspect_with_command(self, command, **fields):
+        with patch.dict(os.environ, {"AGENT_EMAIL_GUARD_CMD": command}, clear=True):
             return screen.inspect(message(**fields))
 
     def test_exact_safe_passes(self):
@@ -63,6 +70,9 @@ class GuardTests(unittest.TestCase):
         self.assertIn("withheld: guard unavailable", self.inspect_with("raise SystemExit(1)"))
         with patch.dict(os.environ, {"AGENT_EMAIL_GUARD_CMD": "/no/such/guard"}):
             self.assertEqual(guard.check("x"), "unavailable")
+
+    def test_blank_command_withholds(self):
+        self.assertIn("withheld: guard unavailable", self.inspect_with_command("   "))
 
     def test_timeout_withholds(self):
         with patch.object(guard, "TIMEOUT_SECONDS", 0.2):

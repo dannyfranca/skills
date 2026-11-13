@@ -4,6 +4,8 @@ Do this one time. The agent gets access to one project only. The personal vault 
 
 The user does the steps in the Bitwarden web app and types the access token. Keep the token out of the chat.
 
+`bws` has no stdin input for a secret value, so `login.py` gives the password to `bws` as a command argument. While `bws` runs, other users on the same computer can read its command arguments. Use the skill only on a computer or container that no other user can access.
+
 1. Make sure that Python 3 is installed. Install `bws` with the official script, which checks the checksum: `curl https://bws.bitwarden.com/install | sh`.
 2. Make an organization for the agents. In the Bitwarden web app, select **New organization** and the **Free** plan. Secrets Manager is free on a Free organization, for a maximum of 2 users, 3 projects, and 3 machine accounts. A Families organization cannot add Secrets Manager. A Teams or Enterprise organization can add it, at a cost: select **Limit machine accounts** to stop extra billing.
 3. In the Admin Console of the organization, go to **Billing** → **Subscription**. Select **Subscribe to Secrets Manager**, then **Submit**. If Secrets Manager is not in the product switcher, go to **Members**, open the menu on the user row, and select **Activate Secrets Manager**.
