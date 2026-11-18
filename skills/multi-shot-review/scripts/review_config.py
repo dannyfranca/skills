@@ -32,6 +32,7 @@ AUTO_MEMORY_PER_CHILD = 2 * 1024**3
 DEFAULT_VARIANT = "default"
 _SETTING_KEYS = {
     "review_file",
+    "global_review_addendum",
     "review_root",
     "max_passes",
     "reviewers",
@@ -47,6 +48,7 @@ _EVAL_KEYS = {"eval"}
 _SUPPORTED_KEYS = _SETTING_KEYS | _EXPERIMENT_KEYS | _EVAL_KEYS
 _PROFILE_KEYS = {"harness", "model", "reasoning"}
 _PROFILE_SETTINGS = {"classifier", "slice_default", "judge"}
+_REVIEW_BASENAME_SETTINGS = {"review_file", "global_review_addendum"}
 _LANE_STRING_KEYS = {"name"}
 _LANE_POSITIVE_INT_KEYS = {"from_pass", "passes", "shots"}
 _LANE_BOOL_KEYS = {"required", "retire_when_clean"}
@@ -80,6 +82,9 @@ class ReviewerLane:
 @dataclass(frozen=True)
 class ReviewConfig:
     review_file: str = DEFAULT_REVIEW_FILE
+    # A variant body swaps this file to change global guidance while every repository keeps its
+    # own review files; review_file would rename those too.
+    global_review_addendum: str | None = None
     review_root: Path = field(default_factory=lambda: Path.home() / ".reviews")
     max_passes: int = DEFAULT_MAX_PASSES
     reviewers: tuple[ReviewerLane, ...] = ()
@@ -131,10 +136,15 @@ class ReviewConfig:
         owner = "session config snapshot"
         expected = {config_field.name for config_field in fields(cls)} - _SESSION_OWNED_FIELDS
         if isinstance(snapshot, dict):
-            # Sessions created before max_parallel, reviewer lanes, or the deduper existed must
-            # stay loadable.
+            # Sessions created before max_parallel, reviewer lanes, the deduper, or the global
+            # review addendum existed must stay loadable.
             snapshot = _lanes_from_legacy_snapshot(
-                {"max_parallel": DEFAULT_MAX_PARALLEL, "deduper": None, **snapshot}
+                {
+                    "max_parallel": DEFAULT_MAX_PARALLEL,
+                    "deduper": None,
+                    "global_review_addendum": None,
+                    **snapshot,
+                }
             )
         if not isinstance(snapshot, dict) or set(snapshot) != expected:
             raise ReviewStateError(f"invalid {owner}")
@@ -499,8 +509,8 @@ def _lane_table(name: str, lane: dict[str, Any]) -> str:
 def _validate_settings(path: Path | str, data: dict[str, Any]) -> dict[str, Any]:
     validated: dict[str, Any] = {}
     for key, value in data.items():
-        if key == "review_file":
-            validated[key] = _validate_review_file(path, value)
+        if key in _REVIEW_BASENAME_SETTINGS:
+            validated[key] = _validate_review_basename(path, key, value)
         elif key == "review_root":
             validated[key] = _validate_review_root(path, value)
         elif key == "max_passes":
@@ -516,9 +526,9 @@ def _validate_settings(path: Path | str, data: dict[str, Any]) -> dict[str, Any]
     return validated
 
 
-def _validate_review_file(path: Path | str, value: Any) -> str:
+def _validate_review_basename(path: Path | str, key: str, value: Any) -> str:
     if not isinstance(value, str) or not value.strip():
-        raise ReviewStateError(f"review config review_file must be a non-empty string: {path}")
+        raise ReviewStateError(f"review config {key} must be a non-empty string: {path}")
     value = value.strip()
     if (
         not _REVIEW_FILE_RE.fullmatch(value)
@@ -527,7 +537,7 @@ def _validate_review_file(path: Path | str, value: Any) -> str:
         or "\\" in value
     ):
         raise ReviewStateError(
-            f"review config review_file must be a basename without .md: {path}"
+            f"review config {key} must be a basename without .md: {path}"
         )
     return value
 

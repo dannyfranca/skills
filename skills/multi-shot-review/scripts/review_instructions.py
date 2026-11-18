@@ -31,6 +31,7 @@ def load_classifier_guidance(
     target: dict[str, str],
     *,
     review_file: str = DEFAULT_REVIEW_FILE,
+    global_review_addendum: str | None = None,
     global_agents_dir: Path | None = None,
     max_bytes: int = DEFAULT_MAX_BYTES,
 ) -> str:
@@ -41,6 +42,7 @@ def load_classifier_guidance(
             root,
             _collect_changed_files(root, target),
             review_file=review_file,
+            global_review_addendum=global_review_addendum,
             global_agents_dir=global_agents_dir,
             max_bytes=max_bytes,
         )
@@ -109,6 +111,7 @@ def _discover_review_instructions(
     changed_files: Iterable[str],
     *,
     review_file: str = DEFAULT_REVIEW_FILE,
+    global_review_addendum: str | None = None,
     global_agents_dir: Path | None = None,
     max_bytes: int = DEFAULT_MAX_BYTES,
 ) -> tuple[_ScopedGuidance, ...]:
@@ -134,6 +137,10 @@ def _discover_review_instructions(
     )
     if global_instruction is not None:
         loaded.append(global_instruction)
+    if global_review_addendum is not None:
+        loaded.append(
+            _load_global_addendum(global_agents_dir / f"{global_review_addendum}.md", max_bytes)
+        )
 
     directories = _applicable_directories(root, changed_files)
     remaining = max_bytes
@@ -227,6 +234,17 @@ def _load_global_instruction(
             truncated=truncated,
         )
     return None
+
+
+def _load_global_addendum(path: Path, max_bytes: int) -> _ScopedGuidance:
+    # A variant experiment compares addenda. A session that silently ran without its addendum
+    # would record results under the wrong arm, so absence fails the session.
+    if not path.is_file():
+        raise ReviewStateError(f"global review addendum is not a file: {path}")
+    content, _consumed, truncated = _read_limited_utf8(path, max_bytes)
+    if not content.strip():
+        raise ReviewStateError(f"global review addendum is empty: {path}")
+    return _ScopedGuidance(scope="*", content=content.strip(), truncated=truncated)
 
 
 def _select_project_candidate(

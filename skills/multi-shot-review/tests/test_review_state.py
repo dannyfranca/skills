@@ -989,6 +989,7 @@ class ClassifierTests(unittest.TestCase):
             agents.mkdir()
             (agents / "multi-shot-review.toml").write_text(
                 'review_file = "SECURITY"\n'
+                'global_review_addendum = "SECURITY.arm"\n'
                 '[classifier]\n'
                 'harness = "codex"\n'
                 'model = "classifier-x"\n'
@@ -1017,6 +1018,7 @@ class ClassifierTests(unittest.TestCase):
                 root,
                 {"kind": "uncommitted"},
                 review_file="SECURITY",
+                global_review_addendum="SECURITY.arm",
             )
             cmd = run.call_args.args[0]
             self.assertEqual(cmd[cmd.index("-m") + 1], "classifier-x")

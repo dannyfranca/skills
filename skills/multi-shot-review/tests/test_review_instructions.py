@@ -231,6 +231,50 @@ class ReviewInstructionDiscoveryTests(unittest.TestCase):
             ["global security", "root override"],
         )
 
+    def test_global_addendum_follows_global_guidance_and_keeps_repository_guidance(self) -> None:
+        (self.global_dir / "REVIEW.md").write_text("global", encoding="utf-8")
+        (self.global_dir / "REVIEW.arm.md").write_text("arm rules\n", encoding="utf-8")
+        (self.root / "REVIEW.md").write_text("root", encoding="utf-8")
+        (self.root / "REVIEW.arm.md").write_text("repository file, same name", encoding="utf-8")
+
+        instructions = _discover_review_instructions(
+            self.root,
+            ["app.py"],
+            global_review_addendum="REVIEW.arm",
+            global_agents_dir=self.global_dir,
+        )
+
+        self.assertEqual(
+            [(item.scope, item.content) for item in instructions],
+            [("*", "global"), ("*", "arm rules"), (".", "root")],
+        )
+
+    def test_global_addendum_loads_without_global_guidance(self) -> None:
+        (self.global_dir / "REVIEW.arm.md").write_text("arm rules", encoding="utf-8")
+
+        instructions = _discover_review_instructions(
+            self.root,
+            ["app.py"],
+            global_review_addendum="REVIEW.arm",
+            global_agents_dir=self.global_dir,
+        )
+
+        self.assertEqual([(item.scope, item.content) for item in instructions], [("*", "arm rules")])
+
+    def test_missing_or_blank_global_addendum_fails_with_its_path(self) -> None:
+        addendum = self.global_dir / "REVIEW.arm.md"
+        for content in (None, " \n"):
+            with self.subTest(content=content):
+                if content is not None:
+                    addendum.write_text(content, encoding="utf-8")
+                with self.assertRaisesRegex(ReviewStateError, "REVIEW.arm.md"):
+                    _discover_review_instructions(
+                        self.root,
+                        ["app.py"],
+                        global_review_addendum="REVIEW.arm",
+                        global_agents_dir=self.global_dir,
+                    )
+
 
 class ChangedFileCollectionTests(unittest.TestCase):
     def setUp(self) -> None:
