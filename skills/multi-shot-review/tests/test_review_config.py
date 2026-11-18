@@ -55,6 +55,7 @@ class ReviewConfigTests(unittest.TestCase):
         config = load_review_config(self.root, home=self.home)
 
         self.assertEqual(config.review_file, "REVIEW")
+        self.assertIsNone(config.global_review_addendum)
         self.assertIsNone(config.classifier)
         self.assertIsNone(config.slice_default)
 
@@ -248,6 +249,10 @@ class ReviewConfigTests(unittest.TestCase):
             '[classifier]\nharness = "codex"\nunknown = true\n',
             'review_file = "REVIEW.md"\n',
             'review_file = "../REVIEW"\n',
+            'global_review_addendum = ""\n',
+            'global_review_addendum = "REVIEW.arm.md"\n',
+            'global_review_addendum = "../REVIEW.arm"\n',
+            "global_review_addendum = false\n",
         )
         for index, text in enumerate(invalid_configs):
             with self.subTest(text=text):
@@ -595,6 +600,22 @@ class ReviewConfigTests(unittest.TestCase):
                 with self.assertRaises(ReviewStateError):
                     load_review_config(self.root, home=self.home, variant="default")
 
+    def test_variant_body_selects_the_global_review_addendum(self) -> None:
+        self.write_config(
+            self.root,
+            'global_review_addendum = "REVIEW.main"\n'
+            "[variant.a]\n"
+            'global_review_addendum = "REVIEW.arm"\n'
+            "[variant.b]\n",
+        )
+
+        addenda = {
+            variant: load_review_config(self.root, home=self.home, variant=variant).global_review_addendum
+            for variant in ("a", "b", "default")
+        }
+
+        self.assertEqual(addenda, {"a": "REVIEW.arm", "b": "REVIEW.main", "default": "REVIEW.main"})
+
     def test_legacy_shot_snapshot_loads_as_one_lane(self) -> None:
         snapshot = ReviewConfig().to_snapshot()
         del snapshot["reviewers"]
@@ -652,9 +673,17 @@ class ReviewConfigTests(unittest.TestCase):
         del snapshot["max_parallel"]
         self.assertEqual(ReviewConfig.from_snapshot(snapshot, variant="default").max_parallel, "auto")
 
+    def test_snapshot_without_global_review_addendum_loads_without_one(self) -> None:
+        snapshot = ReviewConfig().to_snapshot()
+        del snapshot["global_review_addendum"]
+        self.assertIsNone(
+            ReviewConfig.from_snapshot(snapshot, variant="default").global_review_addendum
+        )
+
     def test_snapshot_round_trips_the_effective_config(self) -> None:
         config = ReviewConfig(
             review_file="SECURITY",
+            global_review_addendum="REVIEW.arm",
             max_passes=2,
             reviewers=(
                 ReviewerLane(harness="codex", model="m", shots=2, passes=1),

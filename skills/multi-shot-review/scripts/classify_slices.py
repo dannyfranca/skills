@@ -54,6 +54,7 @@ def _run_classifier(args: argparse.Namespace, review_dir: Path) -> int:
         root,
         target,
         review_file=config.review_file,
+        global_review_addendum=config.global_review_addendum,
     )
     prompt = _classifier_prompt(
         review_dir=review_dir,

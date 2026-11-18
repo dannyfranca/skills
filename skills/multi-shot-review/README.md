@@ -52,6 +52,9 @@ model = "<model>"
 
 - `review_file`: review-instruction basename. Defaults to `REVIEW`. It must not contain a path or
   the `.md` suffix.
+- `global_review_addendum`: basename of a second global review-instruction file. No default. It
+  follows the name rules of `review_file`. See
+  [Global review addendum](#global-review-addendum).
 - `review_root`: directory that holds the review sessions of every repository, as
   `<review_root>/<owner>/<repo>/<session-id>/`. Sessions outlive the worktree that created them.
   Defaults to `~/.reviews`. Must be an absolute path or start with `~`, outside the repository
@@ -346,10 +349,11 @@ SECURITY_REVIEW.override.md
 Resolution behavior:
 
 1. Load one global instruction from `$HOME/.agents`, preferring the override file.
-2. Find repository directories applicable to the changed files.
-3. Walk those directories from repository root toward each changed file.
-4. At each directory, load at most one file, preferring the override file.
-5. Accumulate the selected instructions in root-to-leaf order.
+2. Load the [global review addendum](#global-review-addendum), when the config sets one.
+3. Find repository directories applicable to the changed files.
+4. Walk those directories from repository root toward each changed file.
+5. At each directory, load at most one file, preferring the override file.
+6. Accumulate the selected instructions in root-to-leaf order.
 
 At project scopes, an override file masks the base file even when the override is empty. At the
 global scope, an empty override falls through to a non-empty base file. Shared ancestor
@@ -368,6 +372,30 @@ and review opinions must concern their assigned changes only.
 
 Classifier-created slices use `--prompt-file`, including whole-change reviews. The legacy native
 target flags remain available for explicit whole-target slices; they carry no scoped review policy.
+
+### Global review addendum
+
+`global_review_addendum = "<name>"` loads `$HOME/.agents/<name>.md` as global guidance, after the
+global instruction. Repository instructions keep their file names and their precedence. The
+addendum has only this one file: the loader reads `<name>.md` as written, with no override form.
+
+Use it in variant bodies to compare global guidance. `review_file` changes the basename at each
+scope, so a variant that sets `review_file` also drops the repository instructions:
+
+```toml
+[variants]
+default = 0
+with-rule = 1
+without-rule = 1
+
+[variant.with-rule]
+global_review_addendum = "REVIEW.with-rule"
+
+[variant.without-rule]
+```
+
+A session whose addendum file is missing or empty stops before classification. The error gives the
+file path. Thus each session of a variant has the guidance of that variant.
 
 ## Session identity
 
