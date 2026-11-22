@@ -1872,8 +1872,10 @@ class ReviewState:
             findings = run.get("findings")
             if findings is None and run.get("findings_archive"):
                 findings = self._load_findings_archive(slice_name, run)
+            # Reviewers report a path as absolute or relative; one file must count once.
             paths.update(
-                finding["location"]["path"]
+                finding.get("root_path")
+                or _relative_path(Path(item["cwd"], finding["location"]["path"]), base=Path(item["cwd"]))
                 for finding in findings or []
                 if finding["severity"] in severities and finding.get("status") != "ignored"
             )

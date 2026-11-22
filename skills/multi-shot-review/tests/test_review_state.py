@@ -4932,6 +4932,18 @@ class ShotsAndJudgeTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(summary["judge"][0]["verdict"], "continue")
 
+    def test_same_file_p1_as_relative_and_absolute_path_requires_continue(self) -> None:
+        self.add_slice("api")
+        self.run_reviews(_writes_review_result([_finding(title="Race")]), max_passes=3)
+        absolute = str(Path(self.slice()["cwd"], "src/cache.py"))
+        self.run_reviews(_writes_review_result([_finding(title="Lock order", path=absolute)]), max_passes=3)
+        self.run_reviews(_writes_review_result([_finding(title="Naming", severity="P2")]), max_passes=3)
+
+        rc, summary = self.run_reviews(_judge_aware(_should_not_run, verdict="stop"), max_passes=3)
+
+        self.assertEqual(rc, 2)
+        self.assertIn("stop contradicts the rule, which requires continue", summary["err"][0]["msg"])
+
     def test_p1_on_different_files_in_consecutive_passes_requires_stop(self) -> None:
         self.add_slice("api")
         self.run_reviews(_writes_review_result([_finding(title="Race")]), max_passes=3)
