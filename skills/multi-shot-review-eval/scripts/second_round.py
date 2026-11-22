@@ -15,9 +15,25 @@ SAMPLE_FILE = "sample.json"
 ROUND2_FILE = "sample-round2.json"
 KEPT_SHARE_GAP = 0.10
 JUDGEABILITY_NOTES = {
-    "exact": "The reviewed commit still exists; judge the finding against that commit.",
-    "approximate": "The reviewed snapshot is gone; judge the finding against the current code at the session root.",
-    "unjudgeable": "The session root is gone; the finding cannot be judged against code.",
+    "exact": (
+        "The `commit` of the entry is the working copy that the reviewers read; "
+        "read the file with `git -C <repository> show <commit>:<path>`. "
+        "A `staged_commit` is the staging area, which has a staged change of the file that the reviewers also read; "
+        "read its version with `git -C <repository> show <staged_commit>:<path>`. "
+        "Two versions with the same content have different file modes; "
+        "`git -C <repository> ls-tree <commit> -- <path>` shows the mode. "
+        "A `base_commit` shows that the reviewed change deleted the file from the working copy or from the staging area; "
+        "read the deleted file with `git -C <repository> show <base_commit>:<path>`. "
+        "A commit without the `path` did not have the file. "
+        "With `working_copy_left_out`, the snapshot did not store the working copy, for example an ignored file "
+        "or a file without read permission: the `commit` without the `path` does not show a deletion, "
+        "and the `staged_commit` is the only reviewed version that a commit holds. "
+        "The finding is valid when the working copy or the staging area has the defect, or when the deletion causes it. "
+        "A defect that is only in the deleted file is gone, so it does not make the finding valid. "
+        "An entry without a `path` is from an older session; use the path of its `location`."
+    ),
+    "approximate": "No commit holds the reviewed code; judge the finding against the current files in the `repository` of the entry.",
+    "unjudgeable": "No commit holds the file of the finding, and the repository is gone or does not have the file now; the finding cannot be judged against code.",
 }
 
 

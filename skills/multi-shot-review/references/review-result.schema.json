@@ -37,6 +37,7 @@
             "required": ["path", "start_line", "end_line"],
             "properties": {
               "path": {
+                "description": "Absolute, or relative to your working directory.",
                 "type": "string",
                 "minLength": 1,
                 "pattern": "\\S"

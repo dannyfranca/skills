@@ -38,6 +38,16 @@ class Finding:
     lane: str = DEFAULT_LANE
     grouped_into: str | None = None
     shot: int = 1
+    # The commit of the code that the run reviewed. Runs outside Git and runs of older sessions have none.
+    snapshot: str | None = None
+    # The commit that the reviewed change of the run starts from. A change without a start has none.
+    snapshot_base: str | None = None
+    # The files that the snapshot does not have and that the reviewers could read on the disk.
+    # None when the review found too many of them to record.
+    snapshot_omitted: tuple[str, ...] | None = ()
+    # The file from the top of the repository, as the review recorded it. Findings of older sessions
+    # and findings on a file outside the session root have none.
+    path: str | None = None
 
 
 def classify(raw: dict[str, Any]) -> FindingClass:
@@ -109,7 +119,17 @@ def _finding(
         lane=run_lane(run),
         grouped_into=_grouped_into(raw),
         shot=int(run.get("shot") or 1),
+        snapshot=run.get("snapshot") or None,
+        snapshot_base=_text(run.get("snapshot_base")),
+        snapshot_omitted=_omitted(run.get("snapshot_omitted", [])),
+        path=_text(raw.get("root_path")),
     )
+
+
+def _omitted(recorded: Any) -> tuple[str, ...] | None:
+    if not isinstance(recorded, list):
+        return None
+    return tuple(name for name in recorded if isinstance(name, str))
 
 
 def run_lane(run: dict[str, Any]) -> str:
@@ -147,6 +167,10 @@ def _run_findings(session: Session, run: dict[str, Any]) -> list[dict[str, Any]]
         return None
     items = data.get("findings") if isinstance(data, dict) else None
     return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else None
+
+
+def _text(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 def _location(value: Any) -> str:

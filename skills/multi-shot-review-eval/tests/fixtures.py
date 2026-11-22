@@ -5,7 +5,7 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 
 SKILL = Path(__file__).resolve().parents[1]
@@ -31,6 +31,8 @@ def finding(
     *,
     outcome: str = "kept",
     title: str | None = None,
+    path: str = "src/lib.rs",
+    root_path: str | None = None,
 ) -> dict[str, Any]:
     status, resolution = {
         "kept": ("superseded", {"kind": "superseded", "successor_run_id": "next", "at": at(0)}),
@@ -44,9 +46,10 @@ def finding(
         "severity": severity,
         "title": title or f"Finding {finding_id}",
         "content": f"Body of {finding_id}. " * 5,
-        "location": {"path": "src/lib.rs", "start_line": 1, "end_line": 2},
+        "location": {"path": path, "start_line": 1, "end_line": 2},
         "status": status,
         "resolution": resolution,
+        **({} if root_path is None else {"root_path": root_path}),
     }
 
 
@@ -59,9 +62,15 @@ def run(
     start: float = 1,
     minutes: float = 2,
     archived: bool = False,
+    snapshot: str | None = None,
+    snapshot_base: str | None = None,
+    snapshot_omitted: Sequence[str] | None = (),
 ) -> dict[str, Any]:
     findings = findings or []
     return {
+        **({} if snapshot is None else {"snapshot": snapshot}),
+        **({} if snapshot_base is None else {"snapshot_base": snapshot_base}),
+        **({} if snapshot_omitted == () else {"snapshot_omitted": snapshot_omitted and list(snapshot_omitted)}),
         "id": run_id,
         "pass": pass_number,
         "shot": 1,
@@ -113,6 +122,7 @@ def write_session(
     session_extra: dict[str, Any] | None = None,
     history_end: float | None = None,
     events: list[dict[str, Any]] | None = None,
+    snapshots: list[dict[str, Any]] | None = None,
 ) -> Path:
     directory = review_root / repo / session_name
     directory.mkdir(parents=True)
@@ -185,6 +195,8 @@ def write_session(
         ],
         "history": [*(events or []), {"event": "run_completed", "at": at(end)}],
     }
+    if snapshots is not None:
+        state["snapshots"] = snapshots
     (directory / "_state.json").write_text(json.dumps(state))
     return directory
 

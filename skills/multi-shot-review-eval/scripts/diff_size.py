@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import subprocess
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING
 
+from git_objects import git, resolved_commit
 from review_target import TargetKind
 
 if TYPE_CHECKING:
@@ -34,17 +33,19 @@ def resolve_diff_size(session: Session) -> DiffSize | None:
     if commit is None or session.root is None:
         return None
     # --root diffs a parentless commit against the empty tree; a merge counts only what it adds to its first parent.
-    output = _git(
+    output = git(
         session.root, "diff-tree", "--root", "--diff-merges=first-parent", "--no-commit-id", "-r", "--numstat", commit
     )
     return None if output is None else _parse_numstat(output)
 
 
-def target_resolves(session: Session) -> bool:
+def target_commit(session: Session) -> str | None:
+    """The commit ID of a commit target that still resolves."""
+
     commit = _commit_target(session)
     if commit is None or session.root is None:
-        return False
-    return _git(session.root, "rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}") is not None
+        return None
+    return resolved_commit(session.root, commit)
 
 
 def _commit_target(session: Session) -> str | None:
@@ -56,16 +57,6 @@ def _commit_target(session: Session) -> str | None:
             return value
         case TargetKind.BASE | TargetKind.UNCOMMITTED | TargetKind.UNKNOWN:
             return None
-
-
-def _git(root: Path, *args: str) -> str | None:
-    try:
-        completed = subprocess.run(
-            ["git", *args], cwd=root, capture_output=True, text=True, timeout=30, check=False
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    return completed.stdout if completed.returncode == 0 else None
 
 
 def _parse_numstat(output: str) -> DiffSize:

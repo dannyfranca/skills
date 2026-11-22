@@ -415,6 +415,89 @@ Binary files count as files without lines. Uncommitted changes leave no trace in
 commit, so this field is the only size source for later evaluations. The value is `null` when Git
 cannot resolve the target. Older sessions do not have this field.
 
+### Reviewed-code snapshots
+
+Each review wave keeps the code that its reviewers read as a Git commit. `snapshots` in
+`_state.json` lists each commit with its `ref`, its `git_dir`, and `created_at`. Each run of the
+wave records the commit in `snapshot`. Read a file of the review with
+`git -C <git_dir> show <commit>:<path>`, where `<path>` is relative to the top of the repository.
+`git_dir` is the shared repository, so the commit stays after the worktree and the branch are
+deleted. A commit has more than one record when the repository moved between two waves.
+
+- Working-tree targets (`--uncommitted`, `--base`): the commit holds the tracked files with their
+  uncommitted changes, and the untracked files that Git does not ignore. The runner builds it in a
+  scratch index. The working tree, the staging area, and the stash stay as they are. A clean
+  working tree uses the `HEAD` commit. A tracked file with the `assume-unchanged` or the
+  `skip-worktree` flag is in the commit with its content on the disk.
+- Staging area: when the staged content is different from `HEAD` and from the working copy, the
+  record has a second commit in `staged`. This commit is also a parent of the snapshot commit. For
+  a file with a merge conflict, the `staged` commit has the `HEAD` version.
+- `--commit` targets: the snapshot is the target commit.
+- Start of the change: `snapshot_base` of each run is the commit before the reviewed change. It is
+  `HEAD` for `--uncommitted`, the merge base of the branch and `HEAD` for `--base`, and the first
+  parent for `--commit`. A file that the change deleted is in this commit. The run and not the
+  record has this commit: a base branch can move between two waves that pin the same commit. A
+  run has no `snapshot_base` when the change has no start: a repository without a commit, a first
+  commit as the target, or a base branch without a shared history.
+- Untracked files larger than 5 MB are not in the snapshot. The untracked files have a total
+  budget of 100 MB, and the smallest files go first. Nested repositories are not in the snapshot.
+  A submodule is in the snapshot only as its recorded commit. A file without read permission, a
+  pipe, a socket, and a device are not in the snapshot. When a symbolic link replaces a directory,
+  the snapshot has the link and not the files below it.
+- Files that the snapshot left out: `snapshot_omitted` of each run names the files that are on the
+  disk, that the `snapshot_base` commit or the `staged` commit has, and that the snapshot commit
+  does not have. Examples are a file that Git now ignores and a file in a nested repository.
+  Without the names, each of them reads as a file that the change deleted. A run without such
+  files has no `snapshot_omitted`. The value is `null` when the list would have more than 200
+  names. The run and not the record has the list: a file can come back on the disk between two
+  waves that pin the same commit. A `--commit` target has no such files, because its reviewers
+  read Git.
+- The ref is `refs/multi-shot-review/<session>/<commit>`. It is local: a default `git push` and
+  `git fetch` do not move it. Each wave deletes the refs of sessions older than 30 days, and then
+  `git gc` removes their objects.
+
+A review always runs. Three cases give a wave without a snapshot, and the runs of that wave then
+have no `snapshot`:
+
+- Git has nothing to store: the session root is not in a Git repository, or a working-tree target
+  is in a bare repository. The state records nothing.
+- Git fails: the target commit does not resolve, a Git command fails, or a Git command does not
+  finish in 120 seconds. A repository that Git refuses to open, for example because of its owner,
+  is a failure. `history` gets a `snapshot_failed` event with the cause in `error`.
+- The session is older than 30 days, or the name of its directory has no session time. The wave
+  would delete the new ref, so `history` gets a `snapshot_failed` event.
+
+When Git cannot delete the expired refs, `history` gets a `snapshot_prune_failed` event. Older
+sessions do not have these fields.
+
+A reviewer reports the path of a file as absolute, or relative to its working directory. When the
+runner records a finding, it resolves that path on the disk, through symbolic links, and stores the
+result in `root_path` of the finding: the path of the file from the session root. In a Git working
+tree, the session root is the top of the repository, so `root_path` is the `<path>` of `git show`.
+For a `--commit` target, the reviewers read Git and the checkout can be at another commit. The
+runner then follows the symbolic links only up to the first directory in the session root, and
+keeps the reported path below it.
+A finding on a file outside the session root has no `root_path`. Findings of older sessions do not
+have this field.
+
+`multi-shot-review-eval` reads `root_path` as a literal file name in three commits:
+
+- The snapshot commit: the working copy.
+- The `staged` commit of the record: a second version, when the file has a staged change and the
+  staging area has other content or another file mode than the working copy. The first parent of
+  the `staged` commit is `HEAD`, so a file that is the same in the two commits has no staged
+  change. When the repository does not have that parent, the file has no staged version.
+- The `snapshot_base` commit of the run: the file before the change, when the change deleted it
+  from the working copy or from the staging area.
+
+When none of the three commits has the file, or Git cannot read a commit, it judges the finding
+against the current files. When the snapshot commit does not have the file and
+`snapshot_omitted` names the file or is `null`, the file is not a deleted file: only its staged
+version is reviewed code, and the sample entry has `working_copy_left_out`. Without a staged
+version, it judges the finding against the current files. A bare
+repository has no current files, and a later change can delete the file or replace it with a
+directory. The finding is then `unjudgeable`.
+
 ## Harness audit data
 
 Execution selections are durable:
