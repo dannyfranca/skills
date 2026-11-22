@@ -7,14 +7,13 @@ from pathlib import Path
 
 from fixtures import write_session
 
-from diff_size import DiffSize, resolve_diff_size, target_resolves
-from sampling import Judgeability, judgeability
+from diff_size import DiffSize, resolve_diff_size, target_commit
 from session_store import load_sessions
 
 
 def git(cwd: Path, *args: str) -> str:
     return subprocess.run(
-        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgSign=false", *args],
         cwd=cwd,
         check=True,
         capture_output=True,
@@ -54,15 +53,14 @@ class DiffSizeTests(unittest.TestCase):
         )
         self.assertEqual(resolve_diff_size(session), DiffSize(files=1, added=5, deleted=5))
 
-    def test_base_target_without_recorded_size_has_no_size_and_approximate_judgeability(self) -> None:
+    def test_base_target_without_recorded_size_has_no_size(self) -> None:
         session = self.session(
             "20261001-0000-bbbbbbbb",
             root=self.repo,
             target={"kind": "base", "value": self.base_sha},
         )
         self.assertIsNone(resolve_diff_size(session))
-        self.assertFalse(target_resolves(session))
-        self.assertEqual(judgeability(session), Judgeability.APPROXIMATE)
+        self.assertIsNone(target_commit(session))
 
     def test_commit_target_uses_first_parent(self) -> None:
         session = self.session(
@@ -71,7 +69,6 @@ class DiffSizeTests(unittest.TestCase):
             target={"kind": "commit", "value": self.head_sha},
         )
         self.assertEqual(resolve_diff_size(session), DiffSize(files=2, added=3, deleted=1))
-        self.assertEqual(judgeability(session), Judgeability.EXACT)
 
     def test_root_commit_target_diffs_against_empty_tree(self) -> None:
         session = self.session(
@@ -105,7 +102,7 @@ class DiffSizeTests(unittest.TestCase):
             with self.subTest(name=name):
                 session = self.session(name, **kwargs)
                 self.assertIsNone(resolve_diff_size(session))
-                self.assertFalse(target_resolves(session))
+                self.assertIsNone(target_commit(session))
 
 
 if __name__ == "__main__":

@@ -17,8 +17,8 @@ Expected effects are small but valuable. Look for the effect size, the uncertain
 ## Work
 
 1. Judge every sample entry against the code. Read the finding, open the code at its `location`, and decide if the defect is real.
-   - `exact`: read the files at the reviewed commit with `git -C <root> show <commit>:<path>`.
-   - `approximate`: read the current files at `<root>`. Say in the `reason` when the code moved.
+   - `exact`: read the files at the reviewed commit with `git -C <repository> show <commit>:<path>`. `repository`, `commit`, and `path` are fields of the entry. `repository` can be a Git directory without files; `git show` reads from it. The `judgeability_notes` of the sample file tell you how to read an entry that has a `staged_commit` or a `base_commit`, or that has no `path`.
+   - `approximate`: read the current files in the `repository` of the entry. Say in the `reason` when the code moved.
    - `unjudgeable`: give the verdict `unjudgeable`.
    - The work is complete when every entry has a verdict and a one-sentence reason that names the code you read.
 2. Read the stats pack. For each non-baseline arm, find the primary metric result, the worsening flags, the cost metrics, the imbalanced strata, and the pooled result when `pooled.eval_ids` is not empty. Compare your sample verdicts per arm with the `kept` and `rejected` classes: a kept finding that you judge `invalid` is noise that the primary metric counts as quality.

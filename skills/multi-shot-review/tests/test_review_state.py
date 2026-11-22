@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import io
 import json
 import os
@@ -27,6 +28,7 @@ TIMESTAMPED_REVIEW_DIR_RE = r"^\d{8}-\d{4}-[0-9a-f]{8}$"
 sys.path.insert(0, str(SCRIPTS))
 
 import classify_slices  # noqa: E402
+import review_snapshot  # noqa: E402
 import review_state as review_state_module  # noqa: E402
 from skill_revision import skill_revision  # noqa: E402
 from review_config import ReviewConfig, ReviewerLane  # noqa: E402
@@ -1536,6 +1538,13 @@ class RunnerTests(unittest.TestCase):
             finding_properties["location"]["properties"]["path"]["pattern"],
             r"\S",
         )
+
+    def test_published_schema_states_the_basis_of_a_relative_path(self) -> None:
+        schema = json.loads((ROOT / "references" / "review-result.schema.json").read_text(encoding="utf-8"))
+        path = schema["properties"]["findings"]["items"]["properties"]["location"]["properties"]["path"]
+
+        # An evaluation finds the reviewed file from this basis and the directory of the run.
+        self.assertEqual(path["description"], "Absolute, or relative to your working directory.")
 
     def test_invalid_utf8_review_output_is_retryable(self) -> None:
         self.add_slice("api")
@@ -5944,6 +5953,503 @@ class VariantSessionTests(unittest.TestCase):
         state_path.write_text(json.dumps(data), encoding="utf-8")
 
         with self.assertRaisesRegex(ReviewStateError, "invalid session variant"):
+            ReviewState.load(review_dir)
+
+
+class WaveSnapshotTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "repo"
+        self.root.mkdir()
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def git(self, *args: str) -> str:
+        # The fixture commits must not need the signing key of the developer.
+        return subprocess.run(
+            ["git", "-c", "commit.gpgSign=false", *args], cwd=self.root, check=True, text=True, capture_output=True
+        ).stdout.strip()
+
+    def refuse_ref_updates(self) -> None:
+        hook = self.root / ".git" / "hooks" / "reference-transaction"
+        hook.parent.mkdir(exist_ok=True)
+        hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        hook.chmod(0o755)
+
+    @staticmethod
+    def snapshot_events(review_dir: Path) -> list[dict]:
+        data = json.loads((review_dir / "_state.json").read_text(encoding="utf-8"))
+        return [event for event in data["history"] if event["event"].startswith("snapshot")]
+
+    def init_git(self) -> None:
+        self.git("init", "-q", "-b", "main")
+        self.git("config", "user.email", "test@example.com")
+        self.git("config", "user.name", "Test")
+        (self.root / "cache.py").write_text("base\n", encoding="utf-8")
+        self.git("add", ".")
+        self.git("commit", "-q", "-m", "base")
+
+    def start_session(self, *slices: str) -> Path:
+        review_dir = init_review_state(self.root, "Review the current uncommitted changes.")
+        with ReviewState.locked(review_dir) as state:
+            for name in slices:
+                state.add_slice(
+                    name=name, mode="native", target={"uncommitted": True}, prompt=None, cwd=self.root
+                )
+            state.save()
+        return review_dir
+
+    @staticmethod
+    def runs(review_dir: Path) -> list[dict]:
+        data = json.loads((review_dir / "_state.json").read_text(encoding="utf-8"))
+        return [run for item in data["slices"].values() for run in item["runs"]]
+
+    def test_each_run_of_a_wave_records_the_commit_of_the_code_that_it_reviewed(self) -> None:
+        self.init_git()
+        (self.root / "cache.py").write_text("first change\n", encoding="utf-8")
+        (self.root / "new.py").write_text("untracked\n", encoding="utf-8")
+        review_dir = self.start_session("a", "b")
+        pinned_at_review_time: list[str] = []
+
+        def runner(cmd, cwd, input_text, output_file, slice_data):
+            pinned_at_review_time.append(self.git("for-each-ref", "--format=%(objectname)", "refs/multi-shot-review"))
+            _write_review_result(output_file, [_finding(path="cache.py", lines=(1, 1))])
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        run_reviews(review_dir, command_runner=runner, stdout=io.StringIO())
+        (self.root / "cache.py").write_text("second change\n", encoding="utf-8")
+        run_reviews(review_dir, command_runner=runner, stdout=io.StringIO())
+
+        data = json.loads((review_dir / "_state.json").read_text(encoding="utf-8"))
+        first, second = (record["commit"] for record in data["snapshots"])
+        by_pass = {
+            pass_number: {run["snapshot"] for run in self.runs(review_dir) if run["pass"] == pass_number}
+            for pass_number in (1, 2)
+        }
+        self.assertEqual(by_pass, {1: {first}, 2: {second}})
+        self.assertEqual(pinned_at_review_time[0], first)
+        self.assertEqual(self.git("show", f"{first}:cache.py"), "first change")
+        self.assertEqual(self.git("show", f"{first}:new.py"), "untracked")
+        self.assertEqual(self.git("show", f"{second}:cache.py"), "second change")
+        for record in data["snapshots"]:
+            self.assertEqual(record["ref"], f"refs/multi-shot-review/{review_dir.name}/{record['commit']}")
+            self.assertEqual(Path(record["git_dir"]), (self.root / ".git").resolve())
+            self.assertEqual(self.git("rev-parse", record["ref"]), record["commit"])
+        ReviewState.load(review_dir)
+
+    def test_waves_over_the_same_code_share_one_snapshot_record(self) -> None:
+        self.init_git()
+        review_dir = self.start_session("a")
+
+        for _ in range(2):
+            run_reviews(
+                review_dir,
+                command_runner=_writes_review_result([_finding(path="cache.py", lines=(1, 1))]),
+                stdout=io.StringIO(),
+            )
+
+        data = json.loads((review_dir / "_state.json").read_text(encoding="utf-8"))
+        head = self.git("rev-parse", "HEAD")
+        self.assertEqual([record["commit"] for record in data["snapshots"]], [head])
+        self.assertEqual([run["snapshot"] for run in self.runs(review_dir)], [head, head])
+
+    def test_wave_over_the_same_code_in_a_moved_repository_records_the_new_git_directory(self) -> None:
+        self.init_git()
+        review_dir = self.start_session("a")
+        finding = _writes_review_result([_finding(path="cache.py", lines=(1, 1))])
+        run_reviews(review_dir, command_runner=finding, stdout=io.StringIO())
+        pin = review_state_module.pin_reviewed_code
+
+        def pin_in_the_moved_repository(*args, **kwargs):
+            return dataclasses.replace(pin(*args, **kwargs), git_dir="/moved/repo/.git")
+
+        with mock.patch.object(review_state_module, "pin_reviewed_code", pin_in_the_moved_repository):
+            run_reviews(review_dir, command_runner=finding, stdout=io.StringIO())
+
+        data = json.loads((review_dir / "_state.json").read_text(encoding="utf-8"))
+        head = self.git("rev-parse", "HEAD")
+        self.assertEqual(
+            [(record["commit"], record["git_dir"]) for record in data["snapshots"]],
+            [(head, str(self.root / ".git")), (head, "/moved/repo/.git")],
+        )
+
+    def test_review_outside_git_runs_without_a_snapshot(self) -> None:
+        (self.root / "notes.txt").write_text("notes\n", encoding="utf-8")
+        review_dir = self.start_session("a")
+
+        code, summary = run_reviews(
+            review_dir, command_runner=_writes_review_result([]), stdout=io.StringIO()
+        )
+
+        self.assertEqual((code, summary["ok"], summary["ran"]), (0, True, 1))
+        data = json.loads((review_dir / "_state.json").read_text(encoding="utf-8"))
+        self.assertNotIn("snapshots", data)
+        self.assertNotIn("snapshot", self.runs(review_dir)[0])
+
+    def test_wave_deletes_the_expired_refs_and_keeps_the_new_ref(self) -> None:
+        self.init_git()
+        head = self.git("rev-parse", "HEAD")
+        expired = f"refs/multi-shot-review/20200101-0000-aaaaaaaa/{head}"
+        self.git("update-ref", expired, head)
+        review_dir = self.start_session("a")
+
+        run_reviews(review_dir, command_runner=_writes_review_result([]), stdout=io.StringIO())
+
+        self.assertEqual(
+            self.git("for-each-ref", "--format=%(refname)", "refs/multi-shot-review").splitlines(),
+            [f"refs/multi-shot-review/{review_dir.name}/{head}"],
+        )
+        self.assertEqual(self.snapshot_events(review_dir), [])
+
+    def test_wave_stores_and_deletes_refs_with_one_clock(self) -> None:
+        self.init_git()
+        review_dir = self.start_session("a")
+        clocks = []
+
+        def with_recorded_clock(step):
+            def call(*args, now, **kwargs):
+                clocks.append(now)
+                return step(*args, now=now, **kwargs)
+
+            return call
+
+        with (
+            mock.patch.object(
+                review_state_module, "pin_reviewed_code", with_recorded_clock(review_state_module.pin_reviewed_code)
+            ),
+            mock.patch.object(
+                review_state_module,
+                "prune_expired_snapshots",
+                with_recorded_clock(review_state_module.prune_expired_snapshots),
+            ),
+        ):
+            run_reviews(review_dir, command_runner=_writes_review_result([]), stdout=io.StringIO())
+
+        # With two clocks, a session at the retention limit gets a ref that the deletion then takes.
+        stored_at, deleted_at = clocks
+        self.assertIsNotNone(stored_at)
+        self.assertIs(stored_at, deleted_at)
+
+    def test_wave_runs_and_records_the_cause_when_git_cannot_take_the_snapshot(self) -> None:
+        self.init_git()
+        head = self.git("rev-parse", "HEAD")
+        self.git("update-ref", f"refs/multi-shot-review/20200101-0000-aaaaaaaa/{head}", head)
+        self.refuse_ref_updates()
+        review_dir = self.start_session("a")
+
+        code, summary = run_reviews(
+            review_dir, command_runner=_writes_review_result([]), stdout=io.StringIO()
+        )
+
+        self.assertEqual((code, summary["ok"], summary["ran"]), (0, True, 1))
+        self.assertNotIn("snapshot", self.runs(review_dir)[0])
+        events = self.snapshot_events(review_dir)
+        self.assertEqual([event["event"] for event in events], ["snapshot_failed", "snapshot_prune_failed"])
+        for event in events:
+            self.assertIn("git update-ref failed", event["error"])
+        ReviewState.load(review_dir)
+
+    def test_wave_keeps_its_snapshot_when_git_refuses_only_the_deletion_of_expired_refs(self) -> None:
+        self.init_git()
+        head = self.git("rev-parse", "HEAD")
+        expired = f"refs/multi-shot-review/20200101-0000-aaaaaaaa/{head}"
+        self.git("update-ref", expired, head)
+        hook = self.root / ".git" / "hooks" / "reference-transaction"
+        hook.parent.mkdir(exist_ok=True)
+        hook.write_text(
+            '#!/bin/sh\nwhile read -r old new ref; do case "$new" in *[!0]*) ;; *) exit 1 ;; esac; done\n',
+            encoding="utf-8",
+        )
+        hook.chmod(0o755)
+        review_dir = self.start_session("a")
+
+        code, summary = run_reviews(review_dir, command_runner=_writes_review_result([]), stdout=io.StringIO())
+
+        self.assertEqual((code, summary["ok"], summary["ran"]), (0, True, 1))
+        self.assertEqual([event["event"] for event in self.snapshot_events(review_dir)], ["snapshot_prune_failed"])
+        self.assertEqual(self.runs(review_dir)[0]["snapshot"], head)
+        self.assertEqual(
+            self.git("for-each-ref", "--format=%(refname)", "refs/multi-shot-review").splitlines(),
+            [expired, f"refs/multi-shot-review/{review_dir.name}/{head}"],
+        )
+
+    def test_retry_in_the_same_pass_gets_its_own_snapshot_and_the_earlier_runs_keep_theirs(self) -> None:
+        self.init_git()
+        (self.root / "cache.py").write_text("first change\n", encoding="utf-8")
+        review_dir = self.start_session("a", "b")
+
+        def only_a_writes_a_result(cmd, cwd, input_text, output_file, slice_data):
+            if slice_data["name"] == "a":
+                _write_review_result(output_file, [])
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        run_reviews(review_dir, command_runner=only_a_writes_a_result, stdout=io.StringIO())
+        (self.root / "cache.py").write_text("fix before the retry\n", encoding="utf-8")
+        _, summary = run_reviews(review_dir, command_runner=_writes_review_result([]), stdout=io.StringIO())
+
+        self.assertEqual(summary["ran"], 1)
+        reviewed = [
+            (run["pass"], run["status"], self.git("show", f"{run['snapshot']}:cache.py"))
+            for run in sorted(self.runs(review_dir), key=lambda run: run["started_at"])
+        ]
+        self.assertCountEqual(
+            reviewed,
+            [
+                (1, "no_findings", "first change"),
+                (1, "failed", "first change"),
+                (1, "no_findings", "fix before the retry"),
+            ],
+        )
+
+    def root_paths(self, review_dir: Path) -> list[str | None]:
+        return [finding.get("root_path") for run in self.runs(review_dir) for finding in run["findings"] or []]
+
+    def review_from_pkg(self, *paths: str, target: dict[str, str] | None = None) -> Path:
+        review_dir = init_review_state(self.root, "Review the changes.", target=target)
+        with ReviewState.locked(review_dir) as state:
+            native_target = {"commit": target["value"]} if target else {"uncommitted": True}
+            state.add_slice(name="a", mode="native", target=native_target, prompt=None, cwd=self.root / "pkg")
+            state.save()
+        findings = [_finding(title=f"Finding {index}", path=path, lines=(1, 1)) for index, path in enumerate(paths)]
+        run_reviews(review_dir, command_runner=_writes_review_result(findings), stdout=io.StringIO())
+        return review_dir
+
+    def test_finding_records_its_file_as_a_path_from_the_session_root(self) -> None:
+        self.init_git()
+        (self.root / "pkg").mkdir()
+        (self.root / "pkg" / "mod.py").write_text("code\n", encoding="utf-8")
+        (self.root / "link").symlink_to("pkg")
+        (self.root / "alias.py").symlink_to("pkg/mod.py")
+        outside_alias = Path(self.tmp.name) / "alias"
+        outside_alias.symlink_to(self.root)
+
+        review_dir = self.review_from_pkg(
+            "mod.py",
+            "../cache.py",
+            str(self.root / "cache.py"),
+            "../link/mod.py",
+            "../link/../cache.py",
+            "../alias.py",
+            str(outside_alias / "cache.py"),
+            "deleted.py",
+        )
+
+        self.assertEqual(
+            self.root_paths(review_dir),
+            ["pkg/mod.py", "cache.py", "cache.py", "pkg/mod.py", "cache.py", "pkg/mod.py", "cache.py", "pkg/deleted.py"],
+        )
+        ReviewState.load(review_dir)
+
+    def test_commit_review_keeps_the_git_path_when_the_checkout_has_a_link_there(self) -> None:
+        self.init_git()
+        (self.root / "pkg").mkdir()
+        (self.root / "pkg" / "mod.py").write_text("code\n", encoding="utf-8")
+        (self.root / "pkg" / "other.py").write_text("other code\n", encoding="utf-8")
+        self.git("add", ".")
+        self.git("commit", "-q", "-m", "reviewed")
+        reviewed = self.git("rev-parse", "HEAD")
+        (self.root / "pkg" / "mod.py").unlink()
+        (self.root / "pkg" / "mod.py").symlink_to("other.py")
+        outside_alias = Path(self.tmp.name) / "alias"
+        outside_alias.symlink_to(self.root)
+
+        review_dir = self.review_from_pkg(
+            "mod.py",
+            "../pkg/./mod.py",
+            str(self.root / "pkg" / "mod.py"),
+            str(outside_alias / "pkg" / "other.py"),
+            str(outside_alias / "pkg" / "mod.py"),
+            target={"kind": "commit", "value": reviewed},
+        )
+
+        self.assertEqual(
+            self.root_paths(review_dir), ["pkg/mod.py", "pkg/mod.py", "pkg/mod.py", "pkg/other.py", "pkg/mod.py"]
+        )
+
+    def test_working_tree_review_follows_a_link_before_the_parent_directory_of_the_link(self) -> None:
+        self.init_git()
+        (self.root / "pkg" / "nested").mkdir(parents=True)
+        (self.root / "pkg" / "config.py").write_text("code\n", encoding="utf-8")
+        (self.root / "entry").symlink_to("pkg/nested")
+
+        review_dir = self.review_from_pkg("../entry/../config.py")
+
+        self.assertEqual(self.root_paths(review_dir), ["pkg/config.py"])
+
+    def test_finding_on_a_file_outside_the_session_root_has_no_path_from_the_root(self) -> None:
+        self.init_git()
+        (self.root / "pkg").mkdir()
+        (self.root / "out.py").symlink_to(Path(self.tmp.name) / "elsewhere.py")
+
+        review_dir = self.review_from_pkg("/etc/hosts", "../../elsewhere.py", "../out.py", "..")
+
+        self.assertEqual(self.root_paths(review_dir), [None, None, None, None])
+        ReviewState.load(review_dir)
+
+    def test_reported_path_that_the_file_system_cannot_resolve_does_not_stop_the_run(self) -> None:
+        self.init_git()
+        (self.root / "pkg").mkdir()
+        (self.root / "pkg" / "a").symlink_to("b")
+        (self.root / "pkg" / "b").symlink_to("a")
+
+        review_dir = self.review_from_pkg("a/mod.py", "x" * 5000)
+
+        self.assertEqual([run["status"] for run in self.runs(review_dir)], ["findings"])
+
+    def test_review_outside_git_records_the_path_from_the_session_root(self) -> None:
+        (self.root / "pkg").mkdir()
+
+        review_dir = self.review_from_pkg("mod.py")
+
+        self.assertEqual(self.root_paths(review_dir), ["pkg/mod.py"])
+
+    def test_archived_finding_keeps_its_path_from_the_root(self) -> None:
+        self.init_git()
+        (self.root / "pkg").mkdir()
+        review_dir = self.review_from_pkg("mod.py")
+
+        run_reviews(review_dir, command_runner=_writes_review_result([]), stdout=io.StringIO())
+
+        archive = json.loads(Path(self.runs(review_dir)[0]["findings_archive"]).read_text(encoding="utf-8"))
+        self.assertEqual([finding["root_path"] for finding in archive["findings"]], ["pkg/mod.py"])
+        with ReviewState.locked(review_dir) as state:
+            (run,) = [run for run in state.data["slices"]["a"]["runs"] if run["findings_archive"]]
+            self.assertEqual(state._load_findings_archive("a", run)[0]["root_path"], "pkg/mod.py")
+
+    def test_state_with_a_malformed_path_from_the_root_is_rejected(self) -> None:
+        self.init_git()
+        (self.root / "pkg").mkdir()
+        review_dir = self.review_from_pkg("mod.py")
+        state_path = review_dir / "_state.json"
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+        data["slices"]["a"]["runs"][0]["findings"][0]["root_path"] = ""
+        state_path.write_text(json.dumps(data), encoding="utf-8")
+
+        with self.assertRaisesRegex(ReviewStateError, "invalid root_path"):
+            ReviewState.load(review_dir)
+
+    def test_run_records_the_commit_that_the_reviewed_change_starts_from(self) -> None:
+        self.init_git()
+        head = self.git("rev-parse", "HEAD")
+        (self.root / "cache.py").unlink()
+        review_dir = self.start_session("a")
+
+        run_reviews(review_dir, command_runner=_writes_review_result([]), stdout=io.StringIO())
+
+        (run,) = self.runs(review_dir)
+        self.assertEqual(run["snapshot_base"], head)
+        self.assertEqual(self.git("show", f"{run['snapshot_base']}:cache.py"), "base")
+        self.assertNotIn("snapshot_omitted", run)
+        ReviewState.load(review_dir)
+
+    def run_with_a_file_that_the_snapshot_left_out(self) -> dict:
+        self.init_git()
+        self.git("rm", "-q", "--cached", "cache.py")
+        (self.root / ".gitignore").write_text("cache.py\n", encoding="utf-8")
+        review_dir = self.start_session("a")
+        run_reviews(review_dir, command_runner=_writes_review_result([]), stdout=io.StringIO())
+        ReviewState.load(review_dir)
+        (run,) = self.runs(review_dir)
+        return run
+
+    def test_run_records_the_files_that_the_snapshot_left_out(self) -> None:
+        run = self.run_with_a_file_that_the_snapshot_left_out()
+
+        self.assertEqual(run["snapshot_omitted"], ["cache.py"])
+
+    def test_run_records_that_the_snapshot_left_out_more_files_than_the_limit(self) -> None:
+        with mock.patch.object(review_snapshot, "OMITTED_LIMIT", 0):
+            run = self.run_with_a_file_that_the_snapshot_left_out()
+
+        self.assertIsNone(run["snapshot_omitted"])
+
+    def test_state_with_a_malformed_list_of_left_out_files_is_rejected(self) -> None:
+        self.init_git()
+        review_dir = self.start_session("a")
+        run_reviews(review_dir, command_runner=_writes_review_result([]), stdout=io.StringIO())
+        state_path = review_dir / "_state.json"
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+        data["slices"]["a"]["runs"][0]["snapshot_omitted"] = [""]
+        state_path.write_text(json.dumps(data), encoding="utf-8")
+
+        with self.assertRaisesRegex(ReviewStateError, "invalid snapshot_omitted"):
+            ReviewState.load(review_dir)
+
+    def test_base_branch_that_moves_between_waves_gives_each_wave_its_own_start_of_the_change(self) -> None:
+        self.init_git()
+        first_start = self.git("rev-parse", "HEAD")
+        self.git("switch", "-q", "-c", "feature")
+        for name in ("lower.py", "upper.py"):
+            (self.root / name).write_text("new\n", encoding="utf-8")
+            self.git("add", ".")
+            self.git("commit", "-q", "-m", name)
+        head = self.git("rev-parse", "HEAD")
+        second_start = self.git("rev-parse", "HEAD^")
+        review_dir = init_review_state(self.root, "Review the branch.", target={"kind": "base", "value": "main"})
+        with ReviewState.locked(review_dir) as state:
+            state.add_slice(name="a", mode="native", target={"base": "main"}, prompt=None, cwd=self.root)
+            state.save()
+        runner = _writes_review_result([_finding(path="upper.py", lines=(1, 1))])
+
+        run_reviews(review_dir, command_runner=runner, stdout=io.StringIO())
+        # The lower commit of the branch merges, and the reviewed commit stays the same.
+        self.git("branch", "-f", "main", second_start)
+        run_reviews(review_dir, command_runner=runner, stdout=io.StringIO())
+
+        data = json.loads((review_dir / "_state.json").read_text(encoding="utf-8"))
+        self.assertEqual([record["commit"] for record in data["snapshots"]], [head])
+        self.assertEqual(
+            [(run["snapshot"], run["snapshot_base"]) for run in self.runs(review_dir)],
+            [(head, first_start), (head, second_start)],
+        )
+
+    def test_run_of_a_change_without_a_start_has_no_start_commit(self) -> None:
+        self.git("init", "-q", "-b", "main")
+        (self.root / "new.py").write_text("new\n", encoding="utf-8")
+        review_dir = self.start_session("a")
+
+        run_reviews(review_dir, command_runner=_writes_review_result([]), stdout=io.StringIO())
+
+        (run,) = self.runs(review_dir)
+        self.assertIn("snapshot", run)
+        self.assertNotIn("snapshot_base", run)
+        ReviewState.load(review_dir)
+
+    def test_staging_area_of_a_wave_is_in_the_snapshot_record(self) -> None:
+        self.init_git()
+        (self.root / "cache.py").write_text("staged\n", encoding="utf-8")
+        self.git("add", "cache.py")
+        (self.root / "cache.py").write_text("staged, then edited\n", encoding="utf-8")
+        review_dir = self.start_session("a")
+
+        run_reviews(review_dir, command_runner=_writes_review_result([]), stdout=io.StringIO())
+
+        (record,) = json.loads((review_dir / "_state.json").read_text(encoding="utf-8"))["snapshots"]
+        self.assertEqual(self.git("show", f"{record['staged']}:cache.py"), "staged")
+        self.assertEqual(self.git("show", f"{record['commit']}:cache.py"), "staged, then edited")
+        ReviewState.load(review_dir)
+
+    def test_state_with_a_malformed_snapshot_is_rejected(self) -> None:
+        review_dir = self.start_session("a")
+        state_path = review_dir / "_state.json"
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+        data["snapshots"] = [{"commit": "abc", "ref": "refs/multi-shot-review/x/abc"}]
+        state_path.write_text(json.dumps(data), encoding="utf-8")
+
+        with self.assertRaisesRegex(ReviewStateError, "snapshots"):
+            ReviewState.load(review_dir)
+
+    def test_state_with_a_malformed_start_of_the_change_is_rejected(self) -> None:
+        self.init_git()
+        review_dir = self.start_session("a")
+        run_reviews(review_dir, command_runner=_writes_review_result([]), stdout=io.StringIO())
+        state_path = review_dir / "_state.json"
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+        data["slices"]["a"]["runs"][0]["snapshot_base"] = ""
+        state_path.write_text(json.dumps(data), encoding="utf-8")
+
+        with self.assertRaisesRegex(ReviewStateError, "invalid snapshot_base"):
             ReviewState.load(review_dir)
 
 

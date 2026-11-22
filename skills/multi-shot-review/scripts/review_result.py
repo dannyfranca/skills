@@ -135,8 +135,12 @@ def validate_stored_finding(value: Any, *, owner: str = "finding") -> dict[str, 
     """Validate a finding after the runner has assigned identity and lifecycle state."""
     if not isinstance(value, dict):
         raise ReviewResultError(f"{owner} must be an object")
+    # Findings from before this key, and findings on a file outside the session root, have no root_path.
+    root_path = value.get("root_path")
+    if "root_path" in value and (not isinstance(root_path, str) or not root_path):
+        raise ReviewResultError(f"{owner} has invalid root_path")
     _require_exact_keys(
-        value,
+        {key: value[key] for key in value if key != "root_path"},
         {"id", "severity", "title", "content", "location", "status", "resolution"},
         owner,
     )
@@ -156,7 +160,13 @@ def validate_stored_finding(value: Any, *, owner: str = "finding") -> dict[str, 
     if not isinstance(status, str) or status not in FINDING_STATUSES:
         raise ReviewResultError(f"{owner} has invalid status")
     resolution = _validate_resolution(value["resolution"], status=status, owner=owner)
-    return {"id": finding_id, **normalized, "status": status, "resolution": resolution}
+    return {
+        "id": finding_id,
+        **normalized,
+        "status": status,
+        "resolution": resolution,
+        **({} if root_path is None else {"root_path": root_path}),
+    }
 
 
 def _lane_lines(lane: str | None) -> list[str]:

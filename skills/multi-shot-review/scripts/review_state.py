@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 from harnesses import HarnessError, ResolvedProfile, get_harness, resolve_profile
+from review_snapshot import Snapshot, SnapshotError, pin_reviewed_code, prune_expired_snapshots
 from skill_revision import skill_revision
 from target_size import measure_target_size
 
@@ -968,6 +969,18 @@ class ReviewState:
             raise ReviewStateError("state history must be an array")
         if not isinstance(data.get("completed"), bool):
             raise ReviewStateError("state completed must be a boolean")
+        # Sessions from before the snapshots, and sessions outside Git, have no snapshots key.
+        snapshots = data.get("snapshots", [])
+        if not isinstance(snapshots, list) or not all(
+            isinstance(record, dict)
+            and all(
+                isinstance(record.get(key), str) and record[key]
+                for key in ("commit", "created_at", "git_dir", "ref")
+            )
+            and (record.get("staged") is None or (isinstance(record["staged"], str) and record["staged"]))
+            for record in snapshots
+        ):
+            raise ReviewStateError("state snapshots must be an array of snapshot records")
         session_finding_ids: set[str] = set()
         for name, item in data["slices"].items():
             self._validate_slice_name(name)
@@ -1216,6 +1229,15 @@ class ReviewState:
         definition_version = run.get("definition_version", 1)
         if type(definition_version) is not int or definition_version < 1:
             raise ReviewStateError(f"slice {slice_name!r} has run with invalid definition version")
+        for key in ("snapshot", "snapshot_base"):
+            commit = run.get(key)
+            if commit is not None and (not isinstance(commit, str) or not commit):
+                raise ReviewStateError(f"slice {slice_name!r} has run with invalid {key}")
+        omitted = run.get("snapshot_omitted", [])
+        if omitted is not None and not (
+            isinstance(omitted, list) and all(isinstance(name, str) and name for name in omitted)
+        ):
+            raise ReviewStateError(f"slice {slice_name!r} has run with invalid snapshot_omitted")
 
     @staticmethod
     def _validate_classification(value: Any) -> None:
@@ -1544,6 +1566,33 @@ class ReviewState:
             }
         )
         self._refresh_completed()
+
+    def record_snapshot(self, snapshot: Snapshot, run_ids: set[str]) -> None:
+        records = self.data.setdefault("snapshots", [])
+        # A clean tree or a commit target gives the same commit in each wave. A repository that
+        # moved between two waves keeps the commit, and only the new Git directory still has it.
+        if all((record["commit"], record["git_dir"]) != (snapshot.commit, snapshot.git_dir) for record in records):
+            records.append(
+                {
+                    "commit": snapshot.commit,
+                    "created_at": now_iso(),
+                    "git_dir": snapshot.git_dir,
+                    "ref": snapshot.ref,
+                    **({} if snapshot.staged is None else {"staged": snapshot.staged}),
+                }
+            )
+        for item in self.data["slices"].values():
+            for run in item["runs"]:
+                if run["id"] in run_ids:
+                    run["snapshot"] = snapshot.commit
+                    # The run and not the record: a base branch can move between two waves that
+                    # pin the same commit, and then each wave has its own start of the change.
+                    if snapshot.base is not None:
+                        run["snapshot_base"] = snapshot.base
+                    # The run for the same reason: a file can come back on the disk between two
+                    # waves. A null value tells an evaluation that the list was too long to keep.
+                    if snapshot.omitted != ():
+                        run["snapshot_omitted"] = None if snapshot.omitted is None else list(snapshot.omitted)
 
     def reserve_eligible(self, *, max_passes: int = DEFAULT_MAX_PASSES) -> list[Reservation]:
         reservations: list[Reservation] = []
@@ -2063,6 +2112,17 @@ class ReviewState:
             findings = assign_finding_ids(findings or [], used_ids=self._finding_ids())
             if not findings:
                 raise ReviewStateError("finding run must contain at least one finding")
+            # The run has the definition version of the slice, so the slice has the directory
+            # that the reviewer ran in.
+            for finding in findings:
+                root_path = _path_from_root(
+                    self.data["session"]["root"],
+                    item["cwd"],
+                    finding["location"]["path"],
+                    read_from_git=self.data["session"]["target"]["kind"] == "commit",
+                )
+                if root_path is not None:
+                    finding["root_path"] = root_path
             touched_siblings = self._mark_auto_duplicates(slice_name, item, run, findings)
         elif status == "no_findings":
             findings = []
@@ -3793,6 +3853,63 @@ def _finish_dedupe(
         )
 
 
+def _path_from_root(root: str, cwd: str, reported: str, *, read_from_git: bool) -> str | None:
+    """The file of a finding as a path from the session root, which is the top of a working tree.
+
+    A reviewer reports a path as absolute or relative to its directory, and through symbolic
+    links. Only the file system of the review can resolve that, and it can be gone when an
+    evaluation looks for the file in the snapshot commit. None for a file outside the root.
+
+    A commit target is read from Git, where a path has no links to follow. The checkout can be at
+    another commit, and a link there would give the name of another file of the reviewed commit.
+    The links are then resolved only up to the first directory in the root: the reviewer can
+    reach the root through a link, and the path below it is a Git path.
+    """
+
+    try:
+        # realpath and not Path.resolve: a loop of symbolic links must not stop the run.
+        real_root = os.path.realpath(root)
+        joined = os.path.join(cwd, reported)
+        if not read_from_git:
+            # The links come before the `..` parts: the file system opens `link/../file` from the
+            # directory that the link names.
+            relative = Path(os.path.realpath(joined)).relative_to(real_root)
+            return relative.as_posix() if relative.parts else None
+        located = Path(os.path.normpath(joined))
+        for directory in reversed(located.parents):
+            real_directory = Path(os.path.realpath(directory))
+            if real_directory.is_relative_to(real_root):
+                return (real_directory.relative_to(real_root) / located.relative_to(directory)).as_posix()
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _snapshot_wave(review_dir: Path, session_root: Path, session_target: dict[str, str], run_ids: set[str]) -> None:
+    """A snapshot failure must not stop the review, so the session history records it."""
+
+    snapshot = None
+    failures = []
+    # One clock for the two steps: with a later clock, the deletion could take the ref that this wave made.
+    now = datetime.now(timezone.utc)
+    try:
+        snapshot = pin_reviewed_code(session_root, session_target, session_name=review_dir.name, now=now)
+    except SnapshotError as error:
+        failures.append({"event": "snapshot_failed", "error": str(error), "at": now_iso()})
+    # A wave without a snapshot prunes too, or the expired refs stay while the failure continues.
+    try:
+        prune_expired_snapshots(session_root, now=now)
+    except SnapshotError as error:
+        failures.append({"event": "snapshot_prune_failed", "error": str(error), "at": now_iso()})
+    if snapshot is None and not failures:
+        return
+    with ReviewState.locked(review_dir) as state:
+        if snapshot is not None:
+            state.record_snapshot(snapshot, run_ids)
+        state.data["history"].extend(failures)
+        state.save()
+
+
 def run_reviews(
     review_dir: Path,
     *,
@@ -3913,6 +4030,8 @@ def run_reviews(
     with ReviewState.locked(review_dir) as state:
         reservations = state.reserve_eligible(max_passes=config.max_passes)
         state.save()
+        session_root = Path(state.data["session"]["root"])
+        session_target = dict(state.data["session"]["target"])
         remaining = _remaining_count(state)
         any_running = state._has_running_runs()
         if any_running and not reservations:
@@ -3961,6 +4080,10 @@ def run_reviews(
             pretty_json=pretty_json,
         )
         return (0 if ok else 2), summary
+
+    # The target is frozen from here until the wave ends, so this is the code that each reviewer
+    # of the wave reads. Git runs outside the state lock: a large repository can be slow.
+    _snapshot_wave(review_dir, session_root, session_target, {reservation.run_id for reservation in reservations})
 
     # A judge phase can run long, so auto reads the free memory again for the reviewer wave.
     child_limit = review_config.resolve_max_parallel(configured_limit)
