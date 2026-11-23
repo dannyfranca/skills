@@ -1,0 +1,5 @@
+interface:
+  display_name: "Atlas"
+  short_description: "Chart a big initiative as a graph of nodes"
+policy:
+  allow_implicit_invocation: false
