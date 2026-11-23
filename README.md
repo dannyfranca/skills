@@ -19,6 +19,7 @@ npx skills add dannyfranca/skills --skill multi-shot-review
 
 - `agent-email` — Email inbox for agent signups, with AgentMail or SMTP.
 - `agent-secrets` — Password store for agent signups, with Bitwarden Secrets Manager.
+- `atlas` — Chart a big initiative as a graph of nodes, each planned and built alone.
 - `browser` — Browser guidance for agents.
 - `explainer-video` — Make a narrated 3Blue1Brown-style explainer video.
 - `google-calendar` — Manage Google Calendar events, calendars, sharing, and Google Tasks.
