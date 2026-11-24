@@ -1,0 +1,61 @@
+# Shadow
+
+The `shadow` role measures the Tier part of [`DECIDE.md`](DECIDE.md) against the user. It replays **rounds** that the user answered by hand: it hides each reply, gives each question its tier, and then compares the tiers with what the user did. Run it before and after a change to the tiers, on the same rounds. It changes no ticket and no file of a repo.
+
+- A **round** is one message in which an agent asked the user one or more questions, each with a recommendation, together with the reply of the user.
+- A **plan-changing override** is a question where the answer of the user is not the recommendation as it is, and the difference changes the scope, the direction, the architecture, or the cost of the plan, so that later decisions or more than one ticket of work depend on it.
+
+## Numbers
+
+- **Reserved**: the share of all questions that have the tier value of a reserved class. The user accepts 25% at most.
+- **Caught**: the share of the plan-changing overrides that have the tier value of a reserved class.
+- **Agreement**: of the questions with another tier value and an outcome other than `unclear`, the share with the outcome `accept` or `modify`.
+
+## Steps
+
+The run directory is `~/.atlas/_shadow/<date>/`. When it exists, add `-2` to the name, then `-3`. When the argument is the directory of an earlier shadow run, copy its `rounds.json`, `replies.json`, and `labels.json` to the new run directory and do only steps 2, 4, 5, and 6, so that the two runs measure the same rounds with the same labels.
+
+1. **Collect the rounds** from the session transcripts of each harness that the user works in (Claude Code: `~/.claude/projects`, Codex: `~/.codex/sessions`). The `grilling` skill gives a question and its recommendation a mark each: a round is a message of a main session that has these marks, and its reply is the next message that the user typed. Tool results, notifications, and the summaries that a harness wrote are not replies. Take each round that is in no earlier run directory. Write two files:
+   - `rounds.json`: a list with one object for each round: `id`, `project`, `context` (the text before the questions), and `questions`. Each question has an `id` (`<round id>.<its position>`), the `question`, and the `recommendation`.
+   - `replies.json`: an object with one key for each round id: `reply`, and `next` (the two messages of the user that follow the reply, because they can show what the reply meant).
+
+   Done when each round has a reply, and `rounds.json` holds no text of a reply.
+2. **Give each question its tier, blind.** Launch subagents on the `thinking` model. Each one has a fresh context window and gets 150 questions at most from `rounds.json`, the path of `DECIDE.md`, and the path of `~/.agents/principles.md`. It applies the Precedent part and the Tier part as a session does. A round has no charter, no atlas file, and no repo of a run, so that principles file is the only source of precedent, the subagent judges the Goal, the scope, and the shape of the plan from the round, and the class Listed does not apply. Its result is one object with a key for each question id and the value `precedent`, `scope`, `shape`, or the kind. Merge the results into `tiers.json`. Done when `tiers.json` has each question id.
+3. **Label each reply.** Launch subagents on the `execution` model with the rounds and their replies. The label of a question has two parts:
+   - `outcome`: `accept` (the recommendation as it is), `modify` (the recommendation with a change that keeps its direction), `override` (a different option, or no to the recommendation), `redirect` (the user changed what is decided), or `unclear` (the reply does not answer the question).
+   - `plan_changing`: true for a plan-changing override, and false for all others. It can be true with each outcome other than `accept` and `unclear`.
+
+   Merge the results into `labels.json`: an object with a key for each question id and the two parts as its value. Done when `labels.json` has each question id.
+4. **Count with a script**, from `tiers.json` and `labels.json`: the three numbers for the tiers of `DECIDE.md`, and for each tier value its share of the questions and its rate of plan-changing overrides. Write the result to `result.md`.
+5. **Report to the user**:
+   - The three numbers, each with its counts, next to those of the baseline or of the earlier run.
+   - The table of the tier values.
+   - Each plan-changing override that the tiers did not give to the user, in one line: the question, the recommendation, and the answer. Each one can give a principle line.
+
+   With 65 plan-changing overrides, the Caught of the baseline can be 12 points off. Tell the user when a run has fewer.
+6. **Propose a change to the tiers** only when the counts show it. List the tier values by their rate of plan-changing overrides, highest first. Leave out `precedent`, and each value with fewer than 5 plan-changing overrides: such a count is too small to move a tier. Go down the list: a value is a reserved class when its rate is above the rate of all questions and Reserved stays at 25% or below with it. Stop at the first value that fails. The class Listed is the choice of the user, and no count changes it. When the result is not the tiers of `DECIDE.md`, show the user the counts and the change. Change `DECIDE.md` only after the user approved the change.
+
+## Baseline
+
+2026-11-24: 200 rounds, 1,080 questions, 65 plan-changing overrides (6.0%). The files are in `~/.atlas/_shadow/2026-11-24/`. `~/.agents/principles.md` was written from other rounds, which are not in the baseline. The tier values come from the first version of the tiers, in which `stakes` and `assumption` were reserved classes with the definitions that the kinds have now.
+
+| Tier value | Share of the questions | Rate of plan-changing overrides |
+| --- | --- | --- |
+| `scope` | 11.2% | 15.7% |
+| `shape` | 6.0% | 10.8% |
+| `stakes` | 8.4% | 8.8% |
+| `assumption` | 3.7% | 7.5% |
+| `plain` | 47.4% | 4.9% |
+| `precedent` | 2.6% | 3.6% |
+| `routine` | 20.6% | 0.9% |
+
+| Reserved classes | Reserved | Caught | Agreement |
+| --- | --- | --- | --- |
+| None | 0% | 0% | 90.3% |
+| Scope and Shape (the tiers of `DECIDE.md`) | 17.2% | 40.0% | 91.4% |
+| Scope, Shape, and `stakes` | 25.6% | 52.3% | 91.8% |
+
+Two more results of the baseline set the tiers:
+
+- A council of four models from two providers, which answered blind, agreed with the user no more than the recommendation did. Its votes for the user raised Reserved to 58% for a Caught of 83%.
+- The question alone does not tell which answers the user changes. The best rule on all signals together gave a Caught of 40% for a Reserved of 25%.

@@ -1,6 +1,6 @@
 # Decide
 
-How a session answers a question that `atlas`, `wayfinder`, `grilling`, or any other skill tells it to ask the user. Take each question through the four parts in order: precedent, tier, record, and (for a reserved or split decision) park. The last part, change, is for a decision that the user corrects after its ticket closed.
+How a session answers a question that `atlas`, `wayfinder`, `grilling`, or any other skill tells it to ask the user. Take each question through the four parts in order: precedent, tier, record, and (for a reserved decision) park. A fifth part, change, is for a decision that the user corrects after its ticket closed.
 
 ## Precedent
 
@@ -8,20 +8,20 @@ A question that is already answered stays answered. Before you choose a tier, lo
 
 ## Tier
 
-Test the question against the reserved classes first, then against the routine list. A question that is in neither goes to the council. When two tiers are possible, take the higher one: reserved is above council, and council is above routine.
+The user changes the plan on few questions, and the question alone does not tell which ones. Thus the user decides only where a change costs the most, and the wave review catches all others. [`SHADOW.md`](SHADOW.md) holds the measurement behind these tiers.
 
-**Reserved**: the user decides.
+**Reserved**: the user decides. When you cannot tell whether a question is in one of these classes, it is.
 
 1. **Scope**: the answer changes the Goal, the Non-goals, the Outcome or the Done signal of a node, or it adds or removes a capability, or it moves the size of the node by one ticket (700 to 1000 changed lines) or more.
-2. **Stakes**: the answer sets a recurring cost, a security or data exposure, a legal or compliance position, a price, or a promise to a customer.
-3. **User-only fact**: the answer depends on a fact that is not in the repo, the tracker, the principles, or a public source.
-4. **Shape**: the answer changes a cross-node decision, the Needs or the Gives of a node, or a core domain term that other decisions will depend on.
-5. **Customer-facing verdict**: the question is which UI or product variant the customer gets.
-6. **Listed**: the charter lists the decision as reserved.
+2. **Shape**: the answer changes a cross-node decision, the Needs or the Gives of a node, or a core domain term that other decisions will depend on.
+3. **Listed**: the charter lists the decision as reserved.
 
-**Routine**: the session decides alone and takes its own recommendation. Names, the choice of a library or a tool, formats, flags, test approach, and ticket mechanics.
+**Session**: all other questions. Take your own recommendation, and record its **kind**: the kind sets the rank of the decision in the wave review. Take the first kind that applies:
 
-**Council**: run [`COUNCIL.md`](COUNCIL.md).
+1. `stakes`: the answer sets a recurring cost, a security or data exposure, a legal or compliance position, a price, or a promise to a customer.
+2. `assumption`: the answer depends on a fact that is not in the repo, the tracker, the principles, or a public source. State the fact that you assumed in the `Why` line.
+3. `routine`: names, the choice of a library or a tool, formats, flags, test approach, and ticket mechanics.
+4. `plain`: all others.
 
 ## Record
 
@@ -33,8 +33,8 @@ The record is the ledger. Post it as the resolution comment of the ticket, with 
 - **Answer**: <one or two lines>
 - **Why**: <one line>
 - **Rejected**: <option: reason; option: reason>
-- **Decided by**: user | council | session | precedent (<link>)
-- **Doubt**: none | low confidence | debate: <the view that lost, in one line>
+- **Decided by**: user | session | precedent (<link>)
+- **Kind**: stakes | assumption | routine | plain (only with `Decided by: session`)
 - **Depends on**: <each ticket whose answer this one builds on, by name with its link> | none
 ```
 
@@ -42,10 +42,10 @@ When you close a ticket that has a decision with `Decided by` other than `user`,
 
 ## Park
 
-Park a reserved decision, and a decision that the council could not settle.
+Park a reserved decision.
 
 1. Post the memo as a comment on the ticket.
-2. Add the label `navigator:shape` for a reserved decision of class 4, and `navigator:parked` for all others. Keep the ticket open.
+2. Add the label `navigator:shape` for a Shape decision, and `navigator:parked` for all others. Keep the ticket open.
 3. Decide each other question of the ticket that does not depend on the parked one. Then end the session.
 
 The memo is for a reader who was not in the session and has not seen the decisions behind it. Use this order:
@@ -65,8 +65,6 @@ The memo is for a reader who was not in the session and has not seen the decisio
 
 **Remaining**: none | <the work that this ticket still needs after the answer>
 ```
-
-A memo for a council split gives one option for each position that the council held.
 
 ## Change
 

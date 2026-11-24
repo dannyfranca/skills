@@ -30,7 +30,7 @@ npx skills add dannyfranca/skills --skill multi-shot-review
 - `multi-shot-benchmark` — Compare full review workflows on isolated real historical diffs.
 - `multi-shot-review` — Split changes into content slices for repeated harness reviews.
 - `multi-shot-review-eval` — Evaluate multi-shot-review A/B tests with independent analyst models.
-- `navigator` — Plan a big initiative with few stops: a live kickoff, decisions by a council of models, and one review for each wave.
+- `navigator` — Plan a big initiative with few stops: a live kickoff, a stop only for scope and shape, and one review for each wave.
 - `to-tickets-gh` — Publish tracer-bullet tickets as GitHub issues.
 - `to-tickets-local` — Publish tracer-bullet tickets as local files.
 - `update-codex-await` — Rebase, test, build, and install the long-await Codex fork.

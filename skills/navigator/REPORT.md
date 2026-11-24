@@ -25,9 +25,9 @@ File: `checkpoint.html` in the run directory. Source: the nodes that the chart s
 File: `wave-<n>/report.html`. Source: what the review session collected and ranked.
 
 1. **The video**, embedded at the top.
-2. **The wave at a glance**: the atlas graph with the nodes of the wave marked, and the count of decisions for each `Decided by` value and for each `Doubt` value.
-3. **Decisions that need your eyes**: one card for each top card, in rank order. The card names who decided, the doubt, the rejected options, and how many decisions depend on it.
-4. **All other decisions**: one scan list for each node, one line for each decision with badges for `Decided by` and `Doubt`. The rejected options are collapsed.
+2. **The wave at a glance**: the atlas graph with the nodes of the wave marked, and the count of decisions for each `Decided by` value and for each `Kind` value.
+3. **Decisions that need your eyes**: one card for each top card, in rank order. The card names who decided, the kind, the rejected options, and how many decisions depend on it.
+4. **All other decisions**: one scan list for each node, one line for each decision with badges for `Decided by` and `Kind`. The rejected options are collapsed.
 5. **The ticket split**: one dependency diagram for each node, with the size of each ticket, and the total against the appetite.
 6. **Prototypes**: a gallery with one link for each prototype and each variant, and the verdict.
 

@@ -5,24 +5,7 @@ review_top_cards = 8
 
 [models]
 driver = "claude-opus-5-5"
-# chart, replan, plan, decide, spec, ask, review
+# chart, replan, plan, decide, spec, ask, review, shadow
 thinking = "claude-fable-5-2"
 # research, proto, task, and the subagents that build reports and videos
 execution = "claude-opus-5-5"
-
-# A council needs answers from two or more providers.
-[[council]]
-provider = "anthropic"
-model = "claude-fable-5-2"
-
-[[council]]
-provider = "openai"
-model = "gpt-6.2-sol"
-
-[[council]]
-provider = "openai"
-model = "gpt-6.2-astra"
-
-[[council]]
-provider = "anthropic"
-model = "claude-opus-5-5"

@@ -1,6 +1,6 @@
 ---
 name: navigator
-description: "Plan a big initiative with few stops for the user: one live kickoff, decisions by a council of models, and one review for each wave."
+description: "Plan a big initiative with few stops for the user: one live kickoff, a stop only for scope and shape, and one review for each wave."
 disable-model-invocation: true
 ---
 
@@ -11,7 +11,7 @@ Navigator adds no planning method. `atlas` charts the initiative as nodes, and `
 ## Words
 
 - **Charter**: what the user settled at the kickoff. It is the Goal, the Non-goals, and the `## Charter` section of the atlas file.
-- **Tier**: who decides a question. A **reserved** decision belongs to the user. A **routine** decision belongs to the session. All others belong to the **council**: models from two or more providers that answer blind.
+- **Tier**: who decides a question. A **reserved** decision changes the scope or the shape of the plan, and it belongs to the user. All others belong to the session, which takes its own recommendation.
 - **Park**: set a decision aside for the user and continue with all work that it does not block.
 - **Memo**: the text that brings one parked decision to the user.
 - **Ledger**: the record on each ticket of who decided what. It tells each session what the user has seen.
@@ -52,5 +52,6 @@ In all other sessions, a question for the user becomes a parked decision.
 | `plan`, `decide`, `research`, `proto`, `task`, or `spec`, then `<atlas path> <target>` | The named role | [`WORK.md`](WORK.md) |
 | `ask <atlas path> <wave>` | `ask` | [`ASK.md`](ASK.md) |
 | `review <atlas path> <wave>` | `review` | [`REVIEW.md`](REVIEW.md) |
+| `shadow`, then no path or the directory of an earlier shadow run | `shadow` | [`SHADOW.md`](SHADOW.md) |
 
-Each session has one role and one target. Before the first step of the role, read the config, the two principles files, and the Goal, Non-goals, and Charter of the atlas file. The `chart` role writes the atlas file, so it reads only the config and the principles. The `driver` role reads only the config.
+Each session has one role and one target. Before the first step of the role, read the config, the two principles files, and the Goal, Non-goals, and Charter of the atlas file. The `chart` role writes the atlas file, so it reads only the config and the principles. The `driver` role reads only the config. The `shadow` role is not part of a run: it measures the tiers, and it reads only the config.
