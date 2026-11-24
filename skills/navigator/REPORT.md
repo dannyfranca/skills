@@ -26,10 +26,11 @@ File: `wave-<n>/report.html`. Source: what the review session collected and rank
 
 1. **The video**, embedded at the top.
 2. **The wave at a glance**: the atlas graph with the nodes of the wave marked, and the count of decisions for each `Decided by` value and for each `Kind` value.
-3. **Decisions that need your eyes**: one card for each top card, in rank order. The card names who decided, the kind, the rejected options, and how many decisions depend on it.
-4. **All other decisions**: one scan list for each node, one line for each decision with badges for `Decided by` and `Kind`. The rejected options are collapsed.
-5. **The ticket split**: one dependency diagram for each node, with the size of each ticket, and the total against the appetite.
-6. **Prototypes**: a gallery with one link for each prototype and each variant, and the verdict.
+3. **The shape**: the atlas graph of now against the graph at the start of the wave: one colour for what was there before, and one for what is there now. Under the graph, one card for each `shape` decision of a session, in rank order: the node or the edge that it changes, before, after, the rejected options, and how many decisions depend on it. A card for a domain term has no mark in the graph. The user must be able to agree or disagree from the graph and the gist line.
+4. **Decisions that need your eyes**: one card for each top card that is not in section 3, in rank order. The card names who decided, the kind, the rejected options, and how many decisions depend on it.
+5. **All other decisions**: one scan list for each node, one line for each decision that is not in sections 3 and 4, with badges for `Decided by` and `Kind`. The rejected options are collapsed.
+6. **The ticket split**: one dependency diagram for each node, with the size of each ticket, and the total against the appetite.
+7. **Prototypes**: a gallery with one link for each prototype and each variant, and the verdict.
 
 ## Delta report
 

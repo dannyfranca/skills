@@ -7,6 +7,6 @@ The `ask` role brings the parked batch of one wave to the user and records the a
 3. **Add a video where words are too many.** When the "What you have not seen" part of a memo is longer than `memo_video_words`, run `explainer-video` in a subagent, with those unseen decisions as the subject. Save the video in `wave-<n>/` and link it at the top of the memo.
 4. **Tell the user the size of the batch** in one line: how many decisions, and how many of them are prototypes to judge.
 5. **Give one memo for each message**, and wait for the answer. Answer each question of the user from the tickets. For a UI prototype, give the link of each variant.
-6. **Record each answer** on its ticket as [`DECIDE.md`](DECIDE.md) says, with `Decided by: user`. Remove the label. Close the ticket when the `Remaining` line of the memo is `none`. When the answer changes the atlas (the Goal, the Non-goals, a node, or a cross-node decision), replace the label with `navigator:shape` and keep the ticket open: the re-plan takes it.
+6. **Record each answer** on its ticket as [`DECIDE.md`](DECIDE.md) says, with `Decided by: user`. When the answer changes the atlas (the Goal, the Non-goals, a node, or a cross-node decision), replace the label with `navigator:shape` as `DECIDE.md` says, with the `Remaining` line of the memo: the re-plan takes the ticket. In all other cases, remove the label, and close the ticket when the `Remaining` line of the memo is `none`.
 
 Complete when no ticket of the wave has the label `navigator:parked`.
