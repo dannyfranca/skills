@@ -1,6 +1,6 @@
 # Decide
 
-How a session answers a question that `atlas`, `wayfinder`, `grilling`, or any other skill tells it to ask the user. Take each question through the four parts in order: precedent, tier, record, and (for a reserved or split decision) park.
+How a session answers a question that `atlas`, `wayfinder`, `grilling`, or any other skill tells it to ask the user. Take each question through the four parts in order: precedent, tier, record, and (for a reserved or split decision) park. The last part, change, is for a decision that the user corrects after its ticket closed.
 
 ## Precedent
 
@@ -67,3 +67,14 @@ The memo is for a reader who was not in the session and has not seen the decisio
 ```
 
 A memo for a council split gives one option for each position that the council held.
+
+## Change
+
+When the user changes the decision of a closed ticket, all that was built on the old answer must run again.
+
+1. Post the answer of the user on the ticket as a new ledger block, with `Decided by: user`, and change its line in the Decisions so far of the map. Open the ticket again only when the change needs new work on it.
+2. Find each ticket whose `Depends on` names the changed ticket, directly or through other tickets, in each map of the initiative. Open each one again, with a comment that states the change.
+3. Where one ticket that is open again depends on another, add a blocking edge between them, so that they run in order.
+4. Delete `spec.md` and `split.md` of the node of the changed ticket, and of each node that has a ticket opened again.
+
+Done when each ticket that depends on the change is open and blocked in order, and no spec of an affected node remains.

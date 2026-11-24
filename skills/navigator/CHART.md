@@ -31,7 +31,7 @@ Run `atlas` in its Chart mode, with these changes:
    ```
 6. **In place of step 6, start the run.**
    1. Create the run directory, and move the checkpoint view into it.
-   2. Create the labels `navigator:unseen`, `navigator:parked`, and `navigator:shape` in the tracker.
+   2. Create the labels `navigator:unseen`, `navigator:parked`, `navigator:shape`, `navigator:draft`, and `navigator:charted` in the tracker.
    3. When `docs/agents/principles.md` does not exist, ask the user for the principles of this product, write them one line each, and commit the file.
    4. Launch the driver as [`HARNESS.md`](HARNESS.md) says. Tell the user the thread name of the driver, and end the session.
 
@@ -41,9 +41,10 @@ The driver launches this role after a build, and when a ticket has the label `na
 
 Run `atlas` in its Re-plan mode, with these changes:
 
-1. **The findings of step 1 include each open ticket with the label `navigator:shape`.** Its memo states the conflict.
+1. **Step 1 has two more sources.** Each open ticket with the label `navigator:shape` is a finding: its memo states the conflict. Each `wave-<n>/signed-off` file lists the published tickets of each node: a node is built when each of them is closed.
 2. **Step 4 is the re-plan checkpoint.** On a change of shape, grill the user as `atlas` says. Show each new or changed node as a card of the checkpoint view, and continue when the user approved each card. Each other question goes through `DECIDE.md`.
 3. **Answer each shape ticket.** Post the decision of the user on the ticket as [`DECIDE.md`](DECIDE.md) says, remove the label, and close the ticket when the `Remaining` line of its memo is `none`.
-4. **In place of the briefs of step 5, end the session.** The driver continues from the atlas file.
+4. **Bring the maps in line with the atlas.** When a node has a new name, change the title of its map. When a node is gone, close its map and its open tickets. When the change of shape changes a decision of a closed ticket, or what a planned node needs or gives, follow the Change part of `DECIDE.md`. Done when each map matches one node of the atlas, and no spec remains that was built on the old shape.
+5. **In place of the briefs of step 5, end the session.** The driver continues from the atlas file.
 
 A re-plan with no change of shape runs with no question to the user.

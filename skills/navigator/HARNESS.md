@@ -36,7 +36,7 @@ The brief is the full prompt of a session. The skill holds each rule, so the bri
 If the line above loaded no skill, read <absolute path of the navigator skill directory>/SKILL.md first, and take the role of the line above.
 ```
 
-The target is the node name for `plan` and `spec`, the ticket id or URL for `decide`, `research`, `proto`, and `task`, and the wave number for `ask` and `review`. The driver has no role word: `/navigator <atlas path>`.
+The target is the node name for `plan`, the wave number and the node name for `spec`, the ticket id or URL for `decide`, `research`, `proto`, and `task`, and the wave number for `ask` and `review`. The driver has no role word: `/navigator <atlas path>`.
 
 ## A model of another provider
 
