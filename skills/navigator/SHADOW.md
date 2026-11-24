@@ -20,7 +20,7 @@ The run directory is `~/.atlas/_shadow/<date>/`. When it exists, add `-2` to the
    - `replies.json`: an object with one key for each round id: `reply`, and `next` (the two messages of the user that follow the reply, because they can show what the reply meant).
 
    Done when each round has a reply, and `rounds.json` holds no text of a reply.
-2. **Give each question its tier, blind.** Launch subagents on the `thinking` model. Each one has a fresh context window and gets 150 questions at most from `rounds.json`, the path of `DECIDE.md`, and the path of `~/.agents/principles.md`. It applies the Precedent part and the Tier part as a session does. A round has no charter, no atlas file, and no repo of a run, so that principles file is the only source of precedent, the subagent judges the Goal, the scope, and the shape of the plan from the round, and the class Listed does not apply. Its result is one object with a key for each question id and the value `precedent`, `scope`, `shape`, or the kind. Merge the results into `tiers.json`. Done when `tiers.json` has each question id.
+2. **Give each question its tier, blind.** Launch subagents on the `thinking` model. Each one has a fresh context window and gets a file with 150 questions at most, the path of `DECIDE.md`, and the path of `~/.agents/principles.md`. It applies the Precedent part and the Tier part as a session does. A round has no charter, no atlas file, and no repo of a run, so that principles file is the only source of precedent, the subagent judges the Goal, the scope, and the shape of the plan from the round, and the class Listed does not apply. Its result is one object with a key for each question id and the value `precedent`, `scope`, `shape`, or the kind. Cut the question files from `rounds.json` into a directory outside the run directory, so that no subagent can read a reply. Merge the results into `tiers.json`. Done when `tiers.json` has each question id.
 3. **Label each reply.** Launch subagents on the `execution` model with the rounds and their replies. The label of a question has two parts:
    - `outcome`: `accept` (the recommendation as it is), `modify` (the recommendation with a change that keeps its direction), `override` (a different option, or no to the recommendation), `redirect` (the user changed what is decided), or `unclear` (the reply does not answer the question).
    - `plan_changing`: true for a plan-changing override, and false for all others. It can be true with each outcome other than `accept` and `unclear`.
@@ -37,25 +37,26 @@ The run directory is `~/.atlas/_shadow/<date>/`. When it exists, add `-2` to the
 
 ## Baseline
 
-2026-11-24: 200 rounds, 1,080 questions, 65 plan-changing overrides (6.0%). The files are in `~/.atlas/_shadow/2026-11-24/`. `~/.agents/principles.md` was written from other rounds, which are not in the baseline. The tier values come from the first version of the tiers, in which `stakes` and `assumption` were reserved classes with the definitions that the kinds have now.
+2026-11-24: 200 rounds, 1,080 questions, 65 plan-changing overrides (6.0%). The files are in `~/.atlas/_shadow/2026-11-24-2/`. `~/.agents/principles.md` was written from other rounds, which are not in the baseline.
 
 | Tier value | Share of the questions | Rate of plan-changing overrides |
 | --- | --- | --- |
-| `scope` | 11.2% | 15.7% |
-| `shape` | 6.0% | 10.8% |
-| `stakes` | 8.4% | 8.8% |
-| `assumption` | 3.7% | 7.5% |
-| `plain` | 47.4% | 4.9% |
-| `precedent` | 2.6% | 3.6% |
-| `routine` | 20.6% | 0.9% |
+| `scope` | 19.8% | 12.1% |
+| `shape` | 13.5% | 9.6% |
+| `stakes` | 8.8% | 7.4% |
+| `precedent` | 2.1% | 4.3% |
+| `plain` | 35.5% | 3.4% |
+| `assumption` | 3.0% | 3.1% |
+| `routine` | 17.3% | 1.6% |
 
 | Reserved classes | Reserved | Caught | Agreement |
 | --- | --- | --- | --- |
 | None | 0% | 0% | 90.3% |
-| Scope and Shape (the tiers of `DECIDE.md`) | 17.2% | 40.0% | 91.4% |
-| Scope, Shape, and `stakes` | 25.6% | 52.3% | 91.8% |
+| Scope | 19.8% | 40.0% | 91.9% |
+| Scope and Shape (the tiers of `DECIDE.md`) | 33.3% | 61.5% | 92.4% |
+| Scope, Shape, and `stakes` | 42.1% | 72.3% | 93.0% |
 
-Two more results of the baseline set the tiers:
+Two more results set the tiers:
 
-- A council of four models from two providers, which answered blind, agreed with the user no more than the recommendation did. Its votes for the user raised Reserved to 58% for a Caught of 83%.
-- The question alone does not tell which answers the user changes. The best rule on all signals together gave a Caught of 40% for a Reserved of 25%.
+- A council of four models from two providers, which answered blind, agreed with the user no more than the recommendation did. In the first version of the tiers, its votes for the user raised Reserved from 34% to 58%.
+- The wording of the classes moves Reserved and Caught together. Three wordings gave a Reserved of 17% to 33%, each with a Caught of about two times its Reserved. Thus a new wording does not catch more for the same number of stops: only the choice of the reserved classes sets the number of stops.
