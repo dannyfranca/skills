@@ -1,10 +1,10 @@
 # Harness
 
-How to launch a session, name it, and reach a model of another provider.
+How to launch a session and how to name it.
 
 ## Session
 
-A **session** has a fresh context window and all the capabilities of a session that the user starts by hand. It can start subagents, and it can reach each model of the config. The council and the reports depend on this.
+A **session** has a fresh context window and all the capabilities of a session that the user starts by hand. It can start subagents: the reports and the videos depend on this.
 
 Launch each session with its model from the `[models]` table of the config. Give the `proto` and `task` roles their own worktree. All other roles work in the repo root.
 
@@ -37,7 +37,3 @@ If the line above loaded no skill, read <absolute path of the navigator skill di
 ```
 
 The target is the node name for `plan`, the wave number and the node name for `spec`, the ticket id or URL for `decide`, `research`, `proto`, and `task`, and the wave number for `ask` and `review`. The driver has no role word: `/navigator <atlas path>`.
-
-## A model of another provider
-
-A council member runs on its own provider. In T3 Code, use the delegate tool with the provider and the model of the member. In other harnesses, use the non-interactive mode of the command line tool of that provider, when it is installed. A member that you cannot reach has failed: `COUNCIL.md` says what to do then.

@@ -18,7 +18,7 @@ Run `wayfinder` in its "Chart the map" mode, with these changes:
 4. **Each decision is a ticket**, also when the way is clear, because the ledger is on the tickets. A node with no fog gets a map with few tickets.
 5. A node with `New UI: yes` gets a UI `prototype` ticket first. That ticket blocks each ticket that decides the behaviour or the data behind that UI.
 6. Create the `research` tickets and leave them open. The driver starts them.
-7. When the map cannot keep the Outcome, the Done signal, the Needs, or the Gives of the node entry, create the map with that one question as its only ticket, park it as class 4, and end the session. The driver launches this role again after the re-plan.
+7. When the map cannot keep the Outcome, the Done signal, the Needs, or the Gives of the node entry, create the map with that one question as its only ticket, park it with the label `navigator:shape`, because only the re-plan can change the node entry, and end the session. The driver launches this role again after the re-plan.
 8. As the last act, add the label `navigator:charted` to the map.
 
 Complete when the map has the label `navigator:charted`, or when it has one ticket with the label `navigator:shape`.
@@ -33,11 +33,11 @@ Run `wayfinder` in its "Work through the map" mode for the ticket in the brief, 
 | --- | --- |
 | `decide` | Build the design tree as `grilling` does. Each question goes through `DECIDE.md` in place of the user. |
 | `research` | No change. A fact is not a decision, so the resolution has no ledger block. |
-| `proto`, logic | Build the prototype. The verdict is a council question: give the members the link and the command that runs it. |
-| `proto`, UI | Build the variants. The verdict is reserved (class 5): park it with a memo that links each variant. |
+| `proto`, logic | Build the prototype. The verdict is a session decision: take it from the result of the prototype. |
+| `proto`, UI | Build the variants. The verdict is a session decision, unless the charter lists it. Give the link of each variant in the ledger block, or in the memo when you park it. |
 | `task` | Do the work. When only a human can do a step, park the ticket with the exact checklist as the memo. |
 
-When the answer conflicts with the atlas (a cross-node decision, the Needs or the Gives of the node), park it as class 4.
+When the answer conflicts with the atlas (a cross-node decision, the Needs or the Gives of the node), park it as a Shape decision.
 
 Create each new ticket with the label `navigator:draft`, and remove the label after its blocking edges exist. The driver starts no ticket that has it.
 
