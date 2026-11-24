@@ -1,6 +1,6 @@
 ---
 name: navigator
-description: "Plan a big initiative with few stops for the user: one live kickoff, a stop only for scope and shape, and one review for each wave."
+description: "Plan a big initiative with few stops for the user: one live kickoff, a stop only for scope, and one review for each wave."
 disable-model-invocation: true
 ---
 
@@ -11,7 +11,7 @@ Navigator adds no planning method. `atlas` charts the initiative as nodes, and `
 ## Words
 
 - **Charter**: what the user settled at the kickoff. It is the Goal, the Non-goals, and the `## Charter` section of the atlas file.
-- **Tier**: who decides a question. A **reserved** decision changes the scope or the shape of the plan, and it belongs to the user. All others belong to the session, which takes its own recommendation.
+- **Tier**: who decides a question. A **reserved** decision changes the scope of the plan, or the charter lists it, and it belongs to the user. All others belong to the session, which takes its own recommendation.
 - **Park**: set a decision aside for the user and continue with all work that it does not block.
 - **Memo**: the text that brings one parked decision to the user.
 - **Ledger**: the record on each ticket of who decided what. It tells each session what the user has seen.
@@ -26,7 +26,7 @@ A session talks to the user only at these stops:
 | --- | --- | --- |
 | Kickoff and node checkpoint | `chart` | One time, at the start |
 | Parked batch | `ask` | When no ticket of the wave can start without the user |
-| Re-plan checkpoint | `replan` | Only on a change of shape |
+| Re-plan checkpoint | `replan` | Only for a reserved decision |
 | Wave review | `review` | One time for each wave, and again for each delta |
 
 In all other sessions, a question for the user becomes a parked decision.
