@@ -1,0 +1,5 @@
+interface:
+  display_name: "Navigator"
+  short_description: "Plan a big initiative with few stops for the user"
+policy:
+  allow_implicit_invocation: false

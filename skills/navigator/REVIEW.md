@@ -1,0 +1,23 @@
+# Review
+
+The `review` role shows the user one wave and takes the corrections. It is the moment when the user sees each decision that was made without them, so the session is complete only when the user understands the wave and signs it off, or when corrections are open for the driver.
+
+The wave directory tells the mode. With no `report.html`, this is the **first review**. With one, this is a **delta review**: its subject is only what changed after the newest report.
+
+1. **Collect the wave**: the ledger record of each closed ticket of each map of the wave, the `spec.md` and `split.md` of each node, and the link of each prototype. For a delta review, collect only the ledger blocks that were posted after the newest report, and the splits that were written after it.
+2. **Rank the decisions.** The score of a decision is (1 + the number of decisions that depend on it) × its doubt: 3 for `debate`, 2 for `low confidence`, 1 for `none`. The **top cards** are the `review_top_cards` decisions with the highest scores that have `Decided by` other than `user`.
+3. **Build the report and the video** in two parallel subagents. The report follows [`REPORT.md`](REPORT.md). The video comes from `explainer-video`: its subject is the top cards and the ticket split, and the report embeds it. A delta review builds a delta report and no video.
+4. **Open the report for the user**, and say in one line what it holds.
+5. **Quiz the top cards**, one for each message. Ask a question that the user can answer only when they understand the trade-off of the decision. Correct a wrong answer from the ticket, then ask for the verdict: keep or change.
+6. **Take the questions and the nitpicks of the user** on all other parts: the other decisions, the split, the prototypes. Answer from the tickets. Continue until the user says that they have no more.
+7. **Apply each correction.**
+   1. Post the answer of the user on the ticket as a new ledger block, with `Decided by: user`, and change its line in the Decisions so far of the map. Open the ticket again only when the correction needs new work on it. A correction of the split is a decision too: record it on a new closed ticket of the map, so that the next split keeps it.
+   2. Find each ticket whose `Depends on` names the corrected ticket, directly or through other tickets. Open each one again, with a comment that states the change.
+   3. Delete `spec.md` and `split.md` of each node that has a ticket opened again, and of each node whose split the user changed.
+8. **Offer principles.** When a correction shows a preference that will apply again, write it as one line and ask the user to approve it. Add each approved line to `docs/agents/principles.md` when it is about the product, and to `~/.agents/principles.md` when it is about how the user works.
+9. **Close the session.**
+
+   | State | Action |
+   | --- | --- |
+   | A ticket is open or a split is deleted | Tell the user that a delta review follows, and end the session. The driver runs the corrections. |
+   | No correction is open, and the user signs off | Remove `navigator:unseen` from each ticket of the wave. For each node, publish `spec.md` as `to-spec` says, and publish `split.md` with the ticket skill of the tracker (`to-tickets-gh` or `to-tickets-local`) from its publish step: this review replaced its quiz. Write the links of the published tickets to the file `signed-off` in the wave directory. |
