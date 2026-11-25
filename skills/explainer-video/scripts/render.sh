@@ -43,6 +43,27 @@ scene_mp4() {
   find "$1/$(basename "$2" .py)/videos" -name '*.mp4' -not -path '*partial_movie_files*' | head -n 1
 }
 
+# TITLE is Python source, so Python decodes its quotes, escapes, and raw strings.
+scene_title() {
+  "$HOME_DIR/venv/bin/python" -I -X utf8 -W ignore -c '
+import ast, sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+title = ""
+for node in ast.parse(path.read_text()).body:
+    if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+        if any(isinstance(t, ast.Name) and t.id == "TITLE" for t in node.targets):
+            title = " ".join(str(node.value.value).split())
+print(title or path.stem)' "$1"
+}
+
+# ffmpeg reads an escaped backslash at a line end as an escaped newline and merges the next
+# chapter into this one. A trailing space keeps the two apart.
+ffmetadata_escape() {
+  sed -e 's/[=;#\\]/\\&/g' -e 's/\\$/\\ /' <<<"$1"
+}
+
 preview() {
   mapfile -t files < <(scene_files "$@")
   render l "$VIDEO_DIR/build/preview" "${files[@]}"
@@ -81,10 +102,10 @@ final() {
     fi
     echo "file '$dst'" >> build/join/list.txt
     dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$dst")
-    title=$(sed -n 's/^TITLE = "\(.*\)"$/\1/p' "$f" | head -n 1)
+    title=$(scene_title "$f")
     end=$(awk -v s="$start" -v d="$dur" 'BEGIN { printf "%d", s + d * 1000 }')
-    printf '[CHAPTER]\nTIMEBASE=1/1000\nSTART=%s\nEND=%s\ntitle=%s\n' "$start" "$end" "${title:-$n}" >> build/join/chapters.txt
-    awk -v s="$start" -v t="${title:-$n}" 'BEGIN { s = int(s / 1000); printf "%d:%02d %s\n", s / 60, s % 60, t }' >> build/join/youtube.txt
+    printf '[CHAPTER]\nTIMEBASE=1/1000\nSTART=%s\nEND=%s\ntitle=%s\n' "$start" "$end" "$(ffmetadata_escape "$title")" >> build/join/chapters.txt
+    printf '%d:%02d %s\n' $(( start / 60000 )) $(( start / 1000 % 60 )) "$title" >> build/join/youtube.txt
     start=$end
   done
 
