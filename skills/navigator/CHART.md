@@ -9,7 +9,6 @@ The kickoff. It is the one long live session of the initiative, so settle here a
 Run `atlas` in its Chart mode, with these changes:
 
 1. **Step 1 also settles the charter.** Grill the user until each item has an answer:
-   - **Appetite**: the size that the user accepts for the initiative, in tickets of 700 to 1000 changed lines.
    - **Non-negotiables**: the constraints that no decision can break.
    - **Reserved decisions**: the decisions that the user keeps, in addition to the scope decisions that [`DECIDE.md`](DECIDE.md) reserves.
    - **Core domain model**: each term that decisions in two or more nodes will depend on. Write the terms to the glossary as `domain-modeling` says.
@@ -21,7 +20,6 @@ Run `atlas` in its Chart mode, with these changes:
    ```markdown
    ## Charter
 
-   - **Appetite**: <number of tickets>
    - **Non-negotiables**: <each constraint>
    - **Reserved decisions**: <each decision that the user keeps>
    ```

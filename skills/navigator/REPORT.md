@@ -18,7 +18,6 @@ File: `checkpoint.html` in the run directory. Source: the nodes that the chart s
 
 1. **The graph** of the nodes, the edges, and the fog.
 2. **One card for each node**: the outcome, the done signal, why it is its own node, which merge was rejected, and the rough size in tickets of 700 to 1000 changed lines. Give the badge "possible over-split" to a node of two tickets or less, and the badge "new UI" where it applies.
-3. **The appetite against the total size**, as one bar.
 
 ## Wave report
 
@@ -29,7 +28,7 @@ File: `wave-<n>/report.html`. Source: what the review session collected and rank
 3. **The shape**: the atlas graph of now against the graph at the start of the wave: one colour for what was there before, and one for what is there now. Under the graph, one card for each `shape` decision of a session, in rank order: the node or the edge that it changes, before, after, the rejected options, and how many decisions depend on it. A card for a domain term has no mark in the graph. The user must be able to agree or disagree from the graph and the gist line.
 4. **Decisions that need your eyes**: one card for each top card that is not in section 3, in rank order. The card names who decided, the kind, the rejected options, and how many decisions depend on it.
 5. **All other decisions**: one scan list for each node, one line for each decision that is not in sections 3 and 4, with badges for `Decided by` and `Kind`. The rejected options are collapsed.
-6. **The ticket split**: one dependency diagram for each node, with the size of each ticket, and the total against the appetite.
+6. **The ticket split**: one dependency diagram for each node, with the size of each ticket.
 7. **Prototypes**: a gallery with one link for each prototype and each variant, and the verdict.
 
 ## Delta report
