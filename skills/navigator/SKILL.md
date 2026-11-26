@@ -56,3 +56,5 @@ In all other sessions, a question for the user becomes a parked decision.
 | `shadow`, then no path or the directory of an earlier shadow run | `shadow` | [`SHADOW.md`](SHADOW.md) |
 
 Each session has one role and one target. Before the first step of the role, read the config, the two principles files, and the Goal, Non-goals, and Charter of the atlas file. The `chart` role writes the atlas file, so it reads only the config and the principles. The `driver` role reads only the config. The `shadow` role is not part of a run: it measures the tiers, and it reads only the config.
+
+A long session can lose these files: when the harness compacts the context, a summary replaces them, and a summary does not hold their rules. Thus, when the context starts with a summary of earlier work, read again the file of the role and each file that it names, before the next step. The driver then does its Start part again: `run.toml` and the tracker hold the state of the run, and the summary does not.
