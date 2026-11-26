@@ -9,4 +9,4 @@ The `ask` role brings the parked batch of one wave to the user and records the a
 5. **Give one memo for each message**, and wait for the answer. Answer each question of the user from the tickets. For a UI prototype, give the link of each variant.
 6. **Record each answer** on its ticket as [`DECIDE.md`](DECIDE.md) says, with `Decided by: user`. When the answer changes the atlas (the Goal, the Non-goals, a node, or a cross-node decision), replace the label with `navigator:shape` as `DECIDE.md` says, with the `Remaining` line of the memo: the re-plan takes the ticket. In all other cases, remove the label, and close the ticket when the `Remaining` line of the memo is `none`.
 
-Complete when no ticket of the wave has the label `navigator:parked`.
+Complete when no ticket of the wave has the label `navigator:parked`. Then wake the driver as [`HARNESS.md`](HARNESS.md) says: the user must not have to do it.

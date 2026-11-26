@@ -2,7 +2,7 @@
 
 The driver launches sessions and waits for them. It reads the state of the run from the tracker and the run directory: labels, open and closed tickets, and which files exist. It reads no ticket body and no transcript, and it answers no question, so its context stays small for the full run. Each state has one dispatch in the table below. When a state is not in the table, stop and tell the user.
 
-[`HARNESS.md`](HARNESS.md) says how to launch a session, how to name it, how to wait for it, and how to settle it.
+[`HARNESS.md`](HARNESS.md) says how to launch a session, how to name it, how to wait for it, how to settle it, and how a session wakes the driver.
 
 ## Run state
 
@@ -10,6 +10,7 @@ The driver launches sessions and waits for them. It reads the state of the run f
 
 ```toml
 atlas = "<absolute path of the atlas file>"
+driver_thread = "<thread id of this driver session, in a harness that has threads>"
 
 [[wave]]
 n = 1
@@ -26,7 +27,7 @@ state = "running"   # running | ended
 
 ## Start
 
-1. Read the config and `run.toml`. A missing `run.toml` is a new run: create it.
+1. Read the config and `run.toml`. A missing `run.toml` is a new run: create it. Write the id of this thread as `driver_thread`: in T3 Code, the capabilities tool gives it as `parentThreadId`.
 2. For each session with `state = "running"`, ask the harness for its state. Wait for those that still run. For each of the others, do the part [When a session ends](#when-a-session-ends).
 3. When there is no wave, or the newest wave has a `signed-off` file, go to [Next wave](#next-wave). In all other cases, go to [The loop](#the-loop).
 
@@ -67,7 +68,7 @@ A thread that asks the user a question looks the same to the driver as a thread 
 | Role | Completion state | The session | Do |
 | --- | --- | --- | --- |
 | All | True | Ended | Set its state to `ended`, and settle its thread as `HARNESS.md` says |
-| `ask`, `review` | False | Waits for the user | Keep its state and its thread as they are, and wait again |
+| `ask`, `review` | False | Waits for the user | Keep its state and its thread as they are, and do the Wake part of `HARNESS.md` |
 | All others | False, `attempt = 1` | Failed | Set its state to `ended`, settle its thread, and launch the session one more time with `attempt = 2` |
 | All others | False, `attempt = 2` | Failed two times | Set its state to `ended`, and keep its thread active: the user reads it to find the fault. Add the label `navigator:parked` to the ticket, with a comment that says "Blocked: the session failed two times". For a role whose target is not a ticket, stop and tell the user. |
 
