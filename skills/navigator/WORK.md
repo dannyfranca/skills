@@ -1,6 +1,6 @@
 # Work sessions
 
-A work session does the work of one target and then ends. It never talks to the user: each question that a skill tells it to ask the user goes through [`DECIDE.md`](DECIDE.md). The driver learns the result from the tracker and the run directory only, so the session is complete when its completion state below is true there.
+A work session does the work of one target and then ends. It never talks to the user: each question that a skill tells it to ask the user goes through [`DECIDE.md`](DECIDE.md). The driver learns the result from the tracker and the run directory only, so the session is complete when its completion state below is true there. Then wake the driver as [`HARNESS.md`](HARNESS.md) says, as the last step.
 
 Work in the repo root and change no code there. The `proto` and `task` roles change code only in the worktree that the driver gave them.
 

@@ -27,7 +27,7 @@ state = "running"   # running | ended
 
 ## Start
 
-1. Read the config and `run.toml`. A missing `run.toml` is a new run: create it. Write the id of this thread as `driver_thread`: in T3 Code, the capabilities tool gives it as `parentThreadId`.
+1. Read the config and `run.toml`. A missing `run.toml` is a new run: create it. Write the id of this thread as `driver_thread`: in T3 Code, the capabilities tool gives it as `parentThreadId`. Give this thread the driver name, as the Name part of `HARNESS.md` says.
 2. For each session with `state = "running"`, ask the harness for its state. Wait for those that still run. For each of the others, do the part [When a session ends](#when-a-session-ends).
 3. When there is no wave, or the newest wave has a `signed-off` file, go to [Next wave](#next-wave). In all other cases, go to [The loop](#the-loop).
 
@@ -42,7 +42,9 @@ state = "running"   # running | ended
 
 `SKILL.md` says which issue is the map of a node, and which tickets belong to the wave. A map is **charted** when it has the label `navigator:charted`. A ticket is **held** when it has the label `navigator:parked` (it waits for the user) or `navigator:shape` (it waits for the re-plan). A ticket **can start** when it is open, its map is charted, each ticket that blocks it is closed, and it is not held and has no `navigator:draft` label.
 
-A row is true only for a target that no running session has. On each pass, take the first row that is true:
+Start each pass with the sessions. When a wake line started the turn, the session that sent it can be in its last turn: wait until its run stopped, as `HARNESS.md` says. Then ask the harness for the state of each session with `state = "running"`, and do the part [When a session ends](#when-a-session-ends) for each one whose run stopped. Thus the driver also finds a session that sent no wake line.
+
+A row is true only for a target that no running session has. Then take the first row that is true:
 
 | State | Dispatch |
 | --- | --- |
@@ -63,7 +65,7 @@ The table also carries a correction from the wave review. The review opens the t
 
 ## When a session ends
 
-A thread that asks the user a question looks the same to the driver as a thread that ended: the wait returns for the two. The completion state of the role tells them apart: the map is charted or one of its tickets is held (`plan`), the ticket is closed or held (`decide`, `research`, `proto`, `task`), `split.md` exists or a ticket of the map is held (`spec`), no ticket of the wave has the label that the session was launched for (`ask`, `replan`), the wave has a `signed-off` file, or a ticket of the wave is open, or a node has no `split.md` (`review`).
+The harness says when the run of a session stopped, as `HARNESS.md` says. The time that a session runs says nothing: a session can run for an hour, so the driver never stops a session. A run that stopped has three causes: the session ended, it asks the user a question, or it failed. The completion state of the role tells them apart: the map is charted or one of its tickets is held (`plan`), the ticket is closed or held (`decide`, `research`, `proto`, `task`), `split.md` exists or a ticket of the map is held (`spec`), no ticket of the wave has the label that the session was launched for (`ask`, `replan`), the wave has a `signed-off` file, or a ticket of the wave is open, or a node has no `split.md` (`review`).
 
 | Role | Completion state | The session | Do |
 | --- | --- | --- | --- |
