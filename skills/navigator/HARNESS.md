@@ -14,7 +14,7 @@ Launch each session with its model from the `[models]` table of the config. Give
 | A harness whose subagents can start subagents | A subagent | The exit notification of the subagent | No step |
 | All others | A session that the user starts | The user says that it ended | No step |
 
-A settled thread leaves the active list of the user and stays readable. `DRIVER.md` says when the driver settles a thread.
+A settled thread leaves the active list of the user and stays readable. `DRIVER.md` says when the driver settles a thread: never while the session waits for the user.
 
 In a harness that is not T3 Code, find first whether a subagent can start its own subagents. Read the documentation of the harness for the setting: it is frequently off by default. When the setting exists and is off, tell the user the exact setting and its value, and wait until the user has enabled it. Use the last row only when the harness has no such setting: print the name and the brief of each session, and ask the user to start each one in a new session.
 
