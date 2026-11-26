@@ -9,3 +9,9 @@ driver = "claude-opus-5-5"
 thinking = "claude-fable-5-2"
 # research, proto, task, and the subagents that build reports and videos
 execution = "claude-opus-5-5"
+
+# The reasoning effort of each group of roles above. A model with no effort setting ignores it.
+[effort]
+driver = "medium"
+thinking = "high"
+execution = "medium"
