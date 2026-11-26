@@ -10,21 +10,23 @@ Launch each session with its model from the `[models]` table of the config and i
 
 | Harness | A session is | Wait | Archive |
 | --- | --- | --- | --- |
-| T3 Code | A top-level thread. The user asked for these threads when they invoked navigator. | The thread wait tool, with the longest interval. | The thread organize tool, with the action `archive` and the thread id. |
+| T3 Code | A top-level thread. The user asked for these threads when they invoked navigator. | End the turn, as the [Wake](#wake) part says. | The thread organize tool, with the action `archive` and the thread id. |
 | A harness whose subagents can start subagents | A subagent | The exit notification of the subagent | No step |
 | All others | A session that the user starts | The user says that it ended | No step |
 
-An archived thread leaves the thread list of the user. It stays readable, and the user can bring it back. `DRIVER.md` says when the driver archives a thread: never while the session waits for the user. A session that woke the driver can be in its last turn: wait for that turn to end, and then archive the thread.
+In T3 Code, the run of a session stopped when its thread has no active run: the thread read tool shows this. The thread wait tool returns after a short time, also while the run continues, so a wait that returned says nothing about the session. Use it for one case only: a session that woke the driver can be in its last turn, and the wait holds the driver until that turn ends.
+
+An archived thread leaves the thread list of the user. It stays readable, and the user can bring it back. `DRIVER.md` says when the driver archives a thread: never while the session waits for the user, and never while its last turn runs.
 
 In a harness that is not T3 Code, find first whether a subagent can start its own subagents. Read the documentation of the harness for the setting: it is frequently off by default. When the setting exists and is off, tell the user the exact setting and its value, and wait until the user has enabled it. Use the last row only when the harness has no such setting: print the name and the brief of each session, and ask the user to start each one in a new session.
 
 ## Wake
 
-An `ask` or a `review` session waits for the user for hours or for days, and the driver must spend no turn in that time. Thus the driver ends its turn, and the session wakes it.
+A work session can run for an hour, and an `ask` or a `review` session waits for the user for hours or for days. The driver must spend no turn in that time. Thus the driver ends its turn, and each session wakes it.
 
-| Harness | The driver | The session, as its last step |
+| Harness | The driver, when it waits | Each session, as its last step |
 | --- | --- | --- |
-| T3 Code | Tells the user the name of the thread that waits for them, and ends its turn. The thread wait tool is of no use here: it returns at once for a thread that waits for the user. | Sends the line `<role> wave <n> ended` to the `driver_thread` of `run.toml`, with the thread send tool. |
+| T3 Code | Ends its turn with no timer: the wake line of a session starts the next turn. When an `ask` or a `review` session waits for the user, the driver first tells the user the name of that thread. | Sends the line `<role> <target> ended` to the `driver_thread` of `run.toml`, with the thread send tool. The target is the target of the brief, and `replan` has none. |
 | All others | Waits as the Session part says | No step |
 
 The line is a signal and gives no instruction: the driver that gets it takes the pass again from the tracker state.
@@ -39,6 +41,8 @@ Each thread name has the same shape, so that the user can tell navigator threads
 ```
 
 The role is the role name from `SKILL.md`. `ask` and `review` use `wave <n>` as the last part, and `replan` has no last part.
+
+A driver that the user started has a name that the user or the harness gave. It gives itself the driver name as its first step, so that the user finds it by the same sign. In T3 Code, the thread update tool does this, with the action `rename`.
 
 ## Brief
 
