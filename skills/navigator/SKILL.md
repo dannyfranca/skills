@@ -34,6 +34,7 @@ In all other sessions, a question for the user becomes a parked decision.
 ## Where things are
 
 - **Atlas file**: `docs/initiatives/<slug>/README.md` in the repo, as `atlas` defines it.
+- **Atlas path**: the argument that names the initiative. It is the atlas file, its directory, or the slug alone: `docs/initiatives/<slug>/README.md`, `docs/initiatives/<slug>` and `<slug>` name the same atlas file. An argument is an atlas path only when that atlas file exists. If the file does not exist, the argument is a loose idea.
 - **Run directory**: `~/.atlas/<repo name>/<slug>/`. It is not committed. It holds the checkpoint view, `run.toml`, and one `wave-<n>/` directory for each wave with the reports, the videos, and one `<node name in kebab-case>/` directory for each node with its spec and its split. `run.toml` lists the nodes of each wave, and only the driver writes it.
 - **Map of a node**: the issue with the label `wayfinder:map` and the title `<initiative name>: <node name>`. The tickets of a wave are the child tickets of the maps of its nodes.
 - **Principles**: `docs/agents/principles.md` in the repo (what each plan for this product must respect) and `~/.agents/principles.md` (how the user works in all repos). A principle answers a question in the same way as an answer from the user.
