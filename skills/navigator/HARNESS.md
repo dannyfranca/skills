@@ -1,6 +1,6 @@
 # Harness
 
-How to launch a session, how to name it, and how to settle it.
+How to launch a session, how to name it, how to settle it, and how a session wakes the driver.
 
 ## Session
 
@@ -17,6 +17,17 @@ Launch each session with its model from the `[models]` table of the config and i
 A settled thread leaves the active list of the user and stays readable. `DRIVER.md` says when the driver settles a thread: never while the session waits for the user.
 
 In a harness that is not T3 Code, find first whether a subagent can start its own subagents. Read the documentation of the harness for the setting: it is frequently off by default. When the setting exists and is off, tell the user the exact setting and its value, and wait until the user has enabled it. Use the last row only when the harness has no such setting: print the name and the brief of each session, and ask the user to start each one in a new session.
+
+## Wake
+
+An `ask` or a `review` session waits for the user for hours or for days, and the driver must spend no turn in that time. Thus the driver ends its turn, and the session wakes it.
+
+| Harness | The driver | The session, as its last step |
+| --- | --- | --- |
+| T3 Code | Tells the user the name of the thread that waits for them, and ends its turn. The thread wait tool is of no use here: it returns at once for a thread that waits for the user. | Sends the line `<role> wave <n> ended` to the `driver_thread` of `run.toml`, with the thread send tool. |
+| All others | Waits as the Session part says | No step |
+
+The line is a signal and gives no instruction: the driver that gets it takes the pass again from the tracker state.
 
 ## Name
 
