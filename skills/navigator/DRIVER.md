@@ -2,7 +2,7 @@
 
 The driver launches sessions and waits for them. It reads the state of the run from the tracker and the run directory: labels, open and closed tickets, and which files exist. It reads no ticket body and no transcript, and it answers no question, so its context stays small for the full run. Each state has one dispatch in the table below. When a state is not in the table, stop and tell the user.
 
-[`HARNESS.md`](HARNESS.md) says how to launch a session, how to name it, how to wait for it, how to settle it, and how a session wakes the driver.
+[`HARNESS.md`](HARNESS.md) says how to launch a session, how to name it, how to wait for it, how to archive it, and how a session wakes the driver.
 
 ## Run state
 
@@ -67,9 +67,9 @@ A thread that asks the user a question looks the same to the driver as a thread 
 
 | Role | Completion state | The session | Do |
 | --- | --- | --- | --- |
-| All | True | Ended | Set its state to `ended`, and settle its thread as `HARNESS.md` says |
+| All | True | Ended | Set its state to `ended`, and archive its thread as `HARNESS.md` says |
 | `ask`, `review` | False | Waits for the user | Keep its state and its thread as they are, and do the Wake part of `HARNESS.md` |
-| All others | False, `attempt = 1` | Failed | Set its state to `ended`, settle its thread, and launch the session one more time with `attempt = 2` |
+| All others | False, `attempt = 1` | Failed | Set its state to `ended`, archive its thread, and launch the session one more time with `attempt = 2` |
 | All others | False, `attempt = 2` | Failed two times | Set its state to `ended`, and keep its thread active: the user reads it to find the fault. Add the label `navigator:parked` to the ticket, with a comment that says "Blocked: the session failed two times". For a role whose target is not a ticket, stop and tell the user. |
 
 A launch from the loop table is always `attempt = 1`. Thus the active list of the user shows only the threads that need the user.
