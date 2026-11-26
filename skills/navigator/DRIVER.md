@@ -27,7 +27,7 @@ state = "running"   # running | ended
 ## Start
 
 1. Read the config and `run.toml`. A missing `run.toml` is a new run: create it.
-2. For each session with `state = "running"`, ask the harness for its state. Wait for those that still run. Set the others to `ended`, and settle their threads.
+2. For each session with `state = "running"`, ask the harness for its state. Wait for those that still run. For each of the others, do the part [When a session ends](#when-a-session-ends).
 3. When there is no wave, or the newest wave has a `signed-off` file, go to [Next wave](#next-wave). In all other cases, go to [The loop](#the-loop).
 
 ## Next wave
@@ -54,7 +54,7 @@ A row is true only for a target that no running session has. On each pass, take 
 | Each node of the wave has a `split.md`, and the wave has no `signed-off` file | `review` for the wave |
 | The wave has a `signed-off` file | Tell the user that the wave is signed off, which tickets are published, and that `/navigator <atlas path>` continues the run after the build. Stop. |
 
-Keep at most `max_parallel_sessions` sessions running. At that number, wait for the next session to end, and then take the pass again. A session that waits for the user is still running: wait again.
+Keep at most `max_parallel_sessions` sessions running. At that number, wait for the next session to end, and then take the pass again. A session that waits for the user is still running, as [When a session ends](#when-a-session-ends) says.
 
 A `replan` can add, remove, or rename nodes. After each one, write the nodes of the wave again: each frontier node of the atlas that is in no earlier wave.
 
@@ -62,8 +62,13 @@ The table also carries a correction from the wave review. The review opens the t
 
 ## When a session ends
 
-Set its state to `ended`, and check the completion state of its role: the map is charted or one of its tickets is held (`plan`), the ticket is closed or held (`decide`, `research`, `proto`, `task`), `split.md` exists or a ticket of the map is held (`spec`), no ticket of the wave has the label that the session was launched for (`ask`, `replan`), the wave has a `signed-off` file, or a ticket of the wave is open, or a node has no `split.md` (`review`).
+A thread that asks the user a question looks the same to the driver as a thread that ended: the wait returns for the two. The completion state of the role tells them apart: the map is charted or one of its tickets is held (`plan`), the ticket is closed or held (`decide`, `research`, `proto`, `task`), `split.md` exists or a ticket of the map is held (`spec`), no ticket of the wave has the label that the session was launched for (`ask`, `replan`), the wave has a `signed-off` file, or a ticket of the wave is open, or a node has no `split.md` (`review`).
 
-When the completion state is false, launch the session one more time with `attempt = 2`. A launch from the table is always `attempt = 1`. When it is false again, add the label `navigator:parked` to the ticket, with a comment that says "Blocked: the session failed two times". For a role whose target is not a ticket, stop and tell the user.
+| Role | Completion state | The session | Do |
+| --- | --- | --- | --- |
+| All | True | Ended | Set its state to `ended`, and settle its thread as `HARNESS.md` says |
+| `ask`, `review` | False | Waits for the user | Keep its state and its thread as they are, and wait again |
+| All others | False, `attempt = 1` | Failed | Set its state to `ended`, settle its thread, and launch the session one more time with `attempt = 2` |
+| All others | False, `attempt = 2` | Failed two times | Set its state to `ended`, and keep its thread active: the user reads it to find the fault. Add the label `navigator:parked` to the ticket, with a comment that says "Blocked: the session failed two times". For a role whose target is not a ticket, stop and tell the user. |
 
-Then settle the thread of the session, as `HARNESS.md` says, so that the active list of the user shows only the threads that need the user. Keep one thread active: the thread of a second attempt that failed, because the user reads it to find the fault.
+A launch from the loop table is always `attempt = 1`. Thus the active list of the user shows only the threads that need the user.
