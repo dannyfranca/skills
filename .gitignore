@@ -1,3 +1,4 @@
 .review/
 .worktrees/
 __pycache__/
+.playwright-cli/
