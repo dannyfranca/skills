@@ -12,7 +12,7 @@ The user changes the plan on few questions, and the question alone does not tell
 
 **Reserved**: the user decides. When you cannot tell whether a question is in one of these classes, it is.
 
-1. **Scope**: the answer changes the Goal, the Non-goals, the Outcome or the Done signal of a node, or it adds or removes a capability, or it moves the size of the node by one ticket (700 to 1000 changed lines) or more.
+1. **Scope**: the answer changes the Goal, the Non-goals, the Outcome or the Done signal of a node, or it adds or removes a capability.
 2. **Listed**: the charter lists the decision as reserved.
 
 **Session**: all other questions. Take your own recommendation, and record its **kind**: the kind sets the rank of the decision in the wave review. Take the first kind that applies:

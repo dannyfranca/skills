@@ -37,28 +37,31 @@ The run directory is `~/.atlas/_shadow/<date>/`. When it exists, add `-2` to the
 
 ## Baseline
 
-2026-11-24: 200 rounds, 1,080 questions, 65 plan-changing overrides (6.0%). The files are in `~/.atlas/_shadow/2026-11-24-4/`. `~/.agents/principles.md` was written from other rounds, which are not in the baseline.
+2026-11-25: 200 rounds, 1,080 questions, 65 plan-changing overrides (6.0%). The files are in `~/.atlas/_shadow/2026-11-25/`. `~/.agents/principles.md` was written from other rounds, which are not in the baseline.
 
 | Tier value | Share of the questions | Rate of plan-changing overrides |
 | --- | --- | --- |
-| `scope` | 22.0% | 12.2% |
-| `stakes` | 8.1% | 9.1% |
-| `shape` | 18.4% | 7.0% |
-| `precedent` | 2.7% | 6.9% |
-| `plain` | 28.7% | 2.9% |
-| `routine` | 17.4% | 1.6% |
-| `assumption` | 2.6% | 0.0% |
+| `scope` | 18.9% | 12.7% |
+| `shape` | 18.6% | 7.5% |
+| `stakes` | 8.1% | 6.9% |
+| `plain` | 31.0% | 3.9% |
+| `precedent` | 2.9% | 3.2% |
+| `routine` | 18.1% | 2.0% |
+| `assumption` | 2.4% | 0.0% |
 
 | Reserved classes | Reserved | Caught | Agreement |
 | --- | --- | --- | --- |
 | None | 0% | 0% | 90.3% |
-| Scope (the tiers of `DECIDE.md`) | 22.0% | 44.6% | 91.8% |
-| Scope and `stakes` | 30.2% | 56.9% | 92.4% |
-| Scope and `shape` | 40.5% | 66.2% | 91.8% |
-| Scope, `shape`, and `stakes` | 48.6% | 78.5% | 92.7% |
+| Scope (the tiers of `DECIDE.md`) | 18.9% | 40.0% | 91.7% |
+| Scope and `stakes` | 26.9% | 49.2% | 91.9% |
+| Scope and `shape` | 37.5% | 63.1% | 92.1% |
+| Scope, `shape`, and `stakes` | 45.6% | 72.3% | 92.4% |
 
-Three more results set the tiers:
+Two runs with the same tiers give different numbers. Three earlier runs of Scope as the only reserved class gave a Reserved of 17.8% to 22.0% and a Caught of 38.5% to 44.6% (`~/.atlas/_shadow/2026-11-24-2/` to `2026-11-24-4/`). Read a difference inside these ranges as no difference.
+
+Four more results set the tiers:
 
 - A council of four models from two providers, which answered blind, agreed with the user no more than the recommendation did. In the first version of the tiers, its votes for the user raised Reserved from 34% to 58%.
 - The wording of the classes moves Reserved and Caught together. Four wordings gave a Reserved of 17% to 33%, each with a Caught of about two times its Reserved. Thus a new wording does not catch more for the same number of stops: only the choice of the reserved classes sets the number of stops.
-- Shape was a reserved class, and Reserved was then 33.3% (`~/.atlas/_shadow/2026-11-24-2/`). The user moved it to the session: a wrong `shape` decision costs sessions and no published ticket, so it is worth a section of the wave report and not a stop. A session gives the value `shape` to more questions when the value is not a stop (18.4% against 13.5%).
+- Shape was a reserved class, and Reserved was then 33.3% (`~/.atlas/_shadow/2026-11-24-2/`). The user moved it to the session: a wrong `shape` decision costs sessions and no published ticket, so it is worth a section of the wave report and not a stop. A session gives the value `shape` to more questions when the value is not a stop (18.6% against 13.5%).
+- Scope had one more clause: the answer moves the size of the node by one ticket or more. The three earlier runs had it. The baseline run has no such clause, and its numbers are inside their ranges. The user removed the clause: the number of tickets is not a reason to stop.
