@@ -1,6 +1,6 @@
 # Harness
 
-How to launch a session, how to name it, how to settle it, and how a session wakes the driver.
+How to launch a session, how to name it, how to archive it, and how a session wakes the driver.
 
 ## Session
 
@@ -8,13 +8,13 @@ A **session** has a fresh context window and all the capabilities of a session t
 
 Launch each session with its model from the `[models]` table of the config and its reasoning effort from the `[effort]` table. State the two in each launch: a launch that leaves one out gets the default of the harness, and not the config value. In T3 Code, the effort is the model option `effort`: `options: [{"id": "effort", "value": "<effort>"}]`. Give the `proto` and `task` roles their own worktree. All other roles work in the repo root.
 
-| Harness | A session is | Wait | Settle |
+| Harness | A session is | Wait | Archive |
 | --- | --- | --- | --- |
-| T3 Code | A top-level thread. The user asked for these threads when they invoked navigator. | The thread wait tool, with the longest interval. | The thread organize tool, with the action `settle` and the thread id. |
+| T3 Code | A top-level thread. The user asked for these threads when they invoked navigator. | The thread wait tool, with the longest interval. | The thread organize tool, with the action `archive` and the thread id. |
 | A harness whose subagents can start subagents | A subagent | The exit notification of the subagent | No step |
 | All others | A session that the user starts | The user says that it ended | No step |
 
-A settled thread leaves the active list of the user and stays readable. `DRIVER.md` says when the driver settles a thread: never while the session waits for the user.
+An archived thread leaves the thread list of the user. It stays readable, and the user can bring it back. `DRIVER.md` says when the driver archives a thread: never while the session waits for the user. A session that woke the driver can be in its last turn: wait for that turn to end, and then archive the thread.
 
 In a harness that is not T3 Code, find first whether a subagent can start its own subagents. Read the documentation of the harness for the setting: it is frequently off by default. When the setting exists and is off, tell the user the exact setting and its value, and wait until the user has enabled it. Use the last row only when the harness has no such setting: print the name and the brief of each session, and ask the user to start each one in a new session.
 
