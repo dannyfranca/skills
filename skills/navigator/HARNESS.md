@@ -6,7 +6,7 @@ How to launch a session, how to name it, and how to settle it.
 
 A **session** has a fresh context window and all the capabilities of a session that the user starts by hand. It can start subagents: the reports and the videos depend on this.
 
-Launch each session with its model from the `[models]` table of the config. Give the `proto` and `task` roles their own worktree. All other roles work in the repo root.
+Launch each session with its model from the `[models]` table of the config and its reasoning effort from the `[effort]` table. State the two in each launch: a launch that leaves one out gets the default of the harness, and not the config value. In T3 Code, the effort is the model option `effort`: `options: [{"id": "effort", "value": "<effort>"}]`. Give the `proto` and `task` roles their own worktree. All other roles work in the repo root.
 
 | Harness | A session is | Wait | Settle |
 | --- | --- | --- | --- |
