@@ -2,7 +2,7 @@
 
 The driver launches sessions and waits for them. It reads the state of the run from the tracker and the run directory: labels, open and closed tickets, and which files exist. It reads no ticket body and no transcript, and it answers no question, so its context stays small for the full run. Each state has one dispatch in the table below. When a state is not in the table, stop and tell the user.
 
-[`HARNESS.md`](HARNESS.md) says how to launch a session, how to name it, and how to wait for it.
+[`HARNESS.md`](HARNESS.md) says how to launch a session, how to name it, how to wait for it, and how to settle it.
 
 ## Run state
 
@@ -27,7 +27,7 @@ state = "running"   # running | ended
 ## Start
 
 1. Read the config and `run.toml`. A missing `run.toml` is a new run: create it.
-2. For each session with `state = "running"`, ask the harness for its state. Wait for those that still run, and set the others to `ended`.
+2. For each session with `state = "running"`, ask the harness for its state. Wait for those that still run. Set the others to `ended`, and settle their threads.
 3. When there is no wave, or the newest wave has a `signed-off` file, go to [Next wave](#next-wave). In all other cases, go to [The loop](#the-loop).
 
 ## Next wave
@@ -66,4 +66,4 @@ Set its state to `ended`, and check the completion state of its role: the map is
 
 When the completion state is false, launch the session one more time with `attempt = 2`. A launch from the table is always `attempt = 1`. When it is false again, add the label `navigator:parked` to the ticket, with a comment that says "Blocked: the session failed two times". For a role whose target is not a ticket, stop and tell the user.
 
-Leave each thread as it is when it ends. The user reads them.
+Then settle the thread of the session, as `HARNESS.md` says, so that the active list of the user shows only the threads that need the user. Keep one thread active: the thread of a second attempt that failed, because the user reads it to find the fault.
