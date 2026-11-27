@@ -15,12 +15,12 @@ The user changes the plan on few questions, and the question alone does not tell
 1. **Scope**: the answer changes the Goal, the Non-goals, the Outcome or the Done signal of a node, or it adds or removes a capability.
 2. **Listed**: the charter lists the decision as reserved.
 
-**Session**: all other questions. Take your own recommendation, and record its **kind**: the kind sets the rank of the decision in the wave review. Take the first kind that applies:
+**Session**: all other questions. Take your own recommendation, and record its **kind**: the kind tells whether the wave review flags the decision for the user. Take the first kind that applies:
 
 1. `shape`: the answer changes a cross-node decision, the Needs or the Gives of a node, or a core domain term that other decisions will depend on.
-2. `stakes`: the answer sets a recurring cost, a security or data exposure, a legal or compliance position, a price, or a promise to a customer.
+2. `stakes`: the answer sets a recurring cost, a security or data exposure, a legal or compliance position, a price, or a commitment to a customer in a contract or a published policy.
 3. `assumption`: the answer depends on a fact that is not in the repo, the tracker, the principles, or a public source. State the fact that you assumed in the `Why` line.
-4. `routine`: names, the choice of a library or a tool, formats, flags, test approach, and ticket mechanics.
+4. `routine`: names, texts, paths, the choice of a library or a tool, formats, flags, test approach, and ticket mechanics, also when a customer sees them.
 5. `plain`: all others.
 
 ## Record

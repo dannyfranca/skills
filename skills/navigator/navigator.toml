@@ -1,7 +1,6 @@
 max_parallel_sessions = 4
 # A memo that needs more words than this to explain unseen decisions gets an explainer video.
 memo_video_words = 200
-review_top_cards = 8
 
 [models]
 driver = "claude-opus-5-5"
