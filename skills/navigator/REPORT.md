@@ -8,9 +8,11 @@ The three views that navigator builds for the user. The user scans and does not 
 - **A card** is one gist line and at most three bullets. All other detail is one link away, on the ticket.
 - **Refer by name.** A ticket, a node, or a decision shows its name, and the name holds the link.
 - **Lead each section with a visual** when its data has a shape: a graph for dependencies, a chart for counts and sizes, a badge for a state.
-- **Keep the skeleton, change the look.** The sections and their order are fixed, so that the user knows where to look. The visual treatment is free and differs from the last view, because a new look holds the attention of the user.
+- **One look.** Copy `assets/report.html` to the path of the view. Replace the `<title>` and all between the comments `content` and `/content`, and change nothing else. The shell gives the two themes, the section menu, the filter, and links that open in a new tab. Build each part from the classes that the template shows.
+- **Each section** is a `section.sec` with a short name in `data-nav`: the menu reads it. The sections and their order are fixed, so that the user knows where to look.
+- **Each colour is a token**: a `var(--name)` from the top of the template, also in an SVG attribute and in an inline style. Text on a coloured fill uses `--on`. A hex value stays the same in the dark theme and becomes unreadable.
 
-A view is done when each item of its source shows one time, each link opens, and the file opens with the network off.
+A view is done when each item of its source shows one time, each link opens, the file opens with the network off, and the content has no hex colour.
 
 ## Checkpoint view
 

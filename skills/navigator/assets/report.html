@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Initiative name · Wave 1 report</title>
+<script>
+(()=>{
+  const key='navigator-theme',root=document.documentElement,os=matchMedia('(prefers-color-scheme:dark)');
+  let choice=null;
+  try{choice=localStorage.getItem(key)}catch{}
+  const apply=()=>{root.dataset.choice=choice||'auto';root.dataset.theme=choice||(os.matches?'dark':'light')};
+  apply();
+  os.addEventListener('change',apply);
+  window.cycleTheme=()=>{
+    choice={auto:'light',light:'dark',dark:null}[root.dataset.choice];
+    try{choice?localStorage.setItem(key,choice):localStorage.removeItem(key)}catch{}
+    apply();
+  };
+})();
+</script>
+<style>
+:root{color-scheme:light;--ink:#16181D;--muted:#6B6F78;--line:#D9D4C7;--hair:#F0EDE5;--paper:#F4F1EA;--card:#FFFFFF;--soft:#FAF9F6;--tint:#ECE8DD;--shadow:#16181D;--on:#FFFFFF;--wave:#2B50E0;--wave-soft:#E7ECFD;--new:#D6336C;--new-soft:#FDF0F4;--before:#A3A8AE;--user:#E8590C;--stakes:#C92A2A;--assumption:#E67700;--plain:#1971C2;--plain-soft:#E3EEFA;--routine:#868E96;--none:#ADB5BD;--precedent:#5C940D;--precedent-soft:#EBF5DF;--session:#495057;--session-soft:#E9ECEF;--ok:#2F9E44;--ok-soft:#E6F4EA;--bar:0px}
+:root[data-theme=dark]{color-scheme:dark;--ink:#ECE9E1;--muted:#9BA0AA;--line:#3A3F4A;--hair:#2A2E37;--paper:#131519;--card:#1C1F26;--soft:#181B21;--tint:#2A2E37;--shadow:#000000;--on:#131519;--wave:#8098FF;--wave-soft:#232B52;--new:#F06595;--new-soft:#3A1E2B;--before:#6E7480;--user:#FF922B;--stakes:#FF6B6B;--assumption:#FFA94D;--plain:#4DABF7;--plain-soft:#172B45;--routine:#868E96;--none:#5C636E;--precedent:#94D82D;--precedent-soft:#26331A;--session:#CED4DA;--session-soft:#2E333B;--ok:#51CF66;--ok-soft:#1F3D29}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--wave);text-decoration:none;border-bottom:1px solid currentColor}
+a:hover{background:var(--wave-soft)}
+code{font:.88em ui-monospace,"SF Mono",Menlo,Consolas,monospace;background:var(--tint);padding:0 3px}
+pre{font:12px/1.45 ui-monospace,Menlo,Consolas,monospace;background:var(--soft);border:1px solid var(--line);padding:8px;overflow:auto;white-space:pre-wrap}
+.page{display:grid;grid-template-columns:170px minmax(0,1fr);max-width:1260px;margin:0 auto}
+.bar{display:none}
+.rail{position:sticky;top:0;height:100vh;padding:28px 0 24px 18px;display:flex;flex-direction:column;gap:4px}
+.toc{display:flex;flex-direction:column;gap:4px}
+.toc a{display:flex;gap:8px;align-items:center;font-size:12px;color:var(--muted);padding:3px 0;border:0;background:none}
+.toc a b{flex:none;display:inline-grid;place-items:center;width:22px;height:22px;border:1.5px solid var(--ink);color:var(--ink);font-size:12px}
+.toc a:hover b,.toc a[aria-current] b{background:var(--ink);color:var(--paper)}
+.toc a[aria-current]{color:var(--ink);font-weight:700}
+.theme{all:unset;cursor:pointer;margin-top:auto;align-self:flex-start;display:inline-flex;gap:6px;align-items:center;font-size:12px;font-weight:700;color:var(--ink);padding:3px 9px;border:1.5px solid var(--ink);background:var(--card)}
+.theme::before{content:"";width:10px;height:10px;border-radius:50%;border:1.5px solid var(--ink);background:linear-gradient(90deg,var(--ink) 50%,transparent 50%)}
+.theme:focus-visible,.menu:focus-visible,.filters button:focus-visible{outline:2px solid var(--wave);outline-offset:2px}
+main{padding:0 32px 80px;min-width:0}
+header{padding:34px 0 18px;border-bottom:3px solid var(--ink)}
+header .kicker{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+h1,h2{font-family:Georgia,"Iowan Old Style","Palatino Linotype",serif;font-weight:700;letter-spacing:-.01em}
+h1{margin:4px 0 6px;font-size:40px;line-height:1.05}
+header .sub{font-size:17px;margin:0}
+header .sub b.u{color:var(--user)}
+.sec{padding:44px 0 6px;border-bottom:1px solid var(--line);scroll-margin-top:var(--bar)}
+.sec>h2{display:flex;align-items:center;gap:14px;margin:0 0 4px;font-size:30px}
+.sec>h2 .n{flex:none;display:inline-grid;place-items:center;width:40px;height:40px;background:var(--ink);color:var(--paper);font:700 18px system-ui,sans-serif}
+.lede{color:var(--muted);margin:0 0 18px;max-width:80ch;font-size:14px}
+.rule{font-size:12px;color:var(--muted);margin:0 0 18px;padding:4px 8px;border-left:3px solid var(--wave);background:var(--card);max-width:100ch}
+video{width:100%;max-height:560px;background:#111;display:block;border:3px solid var(--ink)}
+.box{background:var(--card);border:1.5px solid var(--ink);box-shadow:5px 5px 0 var(--shadow);padding:16px 18px}
+.box h4{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted)}
+.glance{display:grid;grid-template-columns:1.25fr 1fr;gap:26px;align-items:start}
+.stack{display:grid;gap:22px}
+.hero{display:flex;gap:28px;flex-wrap:wrap;margin:0 0 22px}
+.hero div{border-top:5px solid var(--ink);padding-top:4px;min-width:120px}
+.hero b{display:block;font:700 46px/1 Georgia,serif}
+.hero span{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em}
+.hero .you{border-color:var(--user)} .hero .you b{color:var(--user)}
+svg.graph,svg.chart,svg.split{display:block;width:100%;height:auto;font-family:system-ui,sans-serif}
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin:10px 0 0}
+.legend i{display:inline-block;width:14px;height:14px;vertical-align:-2px;margin-right:5px}
+.vs{display:grid;grid-template-columns:1fr 1fr;gap:26px}
+.vs .start{opacity:.8}
+.zero{display:flex;gap:22px;flex-wrap:wrap;align-items:center;margin:0 0 18px;padding:10px 14px;background:var(--card);border:1.5px dashed var(--before)}
+.zero b{font:700 34px/1 Georgia,serif}
+.zero span{font-size:13px;color:var(--muted)}
+.zero .z{display:flex;gap:8px;align-items:baseline}
+.zero .plus b{color:var(--new)}
+.cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px;margin-top:22px}
+.card{position:relative;background:var(--card);border:1.5px solid var(--ink);border-left:10px solid var(--stripe);box-shadow:5px 5px 0 var(--shadow);padding:14px 16px 12px}
+.card.shape{grid-column:1/-1;border-left-width:14px}
+.card.you{border-color:var(--user);box-shadow:5px 5px 0 var(--user)}
+.card .mark{position:absolute;top:-12px;right:12px;background:var(--user);color:var(--on);font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:2px 9px}
+.card .rank{position:absolute;top:-16px;left:-22px;width:34px;height:34px;display:grid;place-items:center;background:var(--ink);color:var(--paper);font:700 17px Georgia,serif}
+.card h3{margin:6px 0 4px;font-size:14px;font-weight:600}
+.card h3 a{color:var(--ink);border-bottom-color:var(--line)}
+.card .gist{margin:0 0 8px;font-size:17px;line-height:1.38;font-weight:500}
+.card ul{margin:0;padding:0;list-style:none;display:grid;gap:6px;font-size:13px}
+.card li{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.lbl{font-size:10.5px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-right:4px}
+.chips{display:inline-flex;flex-wrap:wrap;gap:4px}
+.chip{font-size:12px;padding:0 6px;background:var(--tint);color:var(--muted);text-decoration:line-through;text-decoration-color:var(--before)}
+.ba{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:stretch;width:100%}
+.ba .was,.ba .is{padding:6px 8px;border:1.5px solid var(--before);background:var(--soft)}
+.ba .is{border-color:var(--new);background:var(--new-soft)}
+.ba .arr{align-self:center;font-size:20px;color:var(--new)}
+.meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12px}
+.meta .node{color:var(--muted);margin-left:auto;font-size:11.5px}
+.bd{display:inline-block;font-size:11px;font-weight:700;padding:1px 7px;line-height:1.5;white-space:nowrap}
+.by-session{background:var(--session-soft);color:var(--session)}
+.by-precedent{background:var(--precedent-soft);color:var(--precedent);outline:1px dashed var(--precedent)}
+.by-user{background:var(--user);color:var(--on)}
+.k-stakes{background:var(--stakes);color:var(--on)}
+.k-assumption{background:var(--assumption);color:var(--on)}
+.k-plain{background:var(--plain-soft);color:var(--plain)}
+.k-routine{background:transparent;color:var(--routine);outline:1px solid var(--line)}
+.k-shape{background:var(--new);color:var(--on)}
+.dep{display:inline-flex;gap:5px;align-items:center;color:var(--muted)}
+.dep b{color:var(--ink)}
+.filters{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 18px;position:sticky;top:var(--bar);background:var(--paper);padding:8px 0;z-index:3;border-bottom:1px solid var(--line)}
+.filters button{all:unset;cursor:pointer;font-size:12px;font-weight:700;padding:4px 10px;border:1.5px solid var(--ink);background:var(--card);display:inline-flex;gap:6px;align-items:center}
+.filters button i{display:inline-block;width:10px;height:10px}
+.filters button[aria-pressed=true]{background:var(--ink);color:var(--paper)}
+.lists{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:28px;align-items:start}
+.nodeh{font:700 20px Georgia,serif;margin:0 0 10px;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.nodeh a{color:var(--ink)}
+.cnt{font:600 11.5px system-ui,sans-serif;color:var(--muted)}
+.filters button[aria-pressed=true] .cnt{color:inherit}
+.tg{margin:0 0 14px;background:var(--card);border:1px solid var(--line)}
+.tg h4{margin:0;padding:7px 10px;font-size:13px;font-weight:600;display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:var(--soft);border-bottom:1px solid var(--line)}
+.tg h4 a{color:var(--ink);border-bottom-color:var(--line)}
+.tg h4 .mix{margin-left:auto}
+.tg ol{list-style:none;margin:0;padding:0}
+.ln{border-left:4px solid var(--stripe);border-bottom:1px solid var(--hair)}
+.ln:last-child{border-bottom:0}
+.ln summary{cursor:pointer;padding:5px 8px;display:flex;gap:6px;align-items:baseline;font-size:13px;list-style:none}
+.ln summary::-webkit-details-marker{display:none}
+.ln summary::before{content:"+";font-weight:700;color:var(--muted);width:10px}
+.ln details[open] summary::before{content:"–"}
+.ln .nm{flex:1}
+.dd{padding:2px 12px 10px 26px;font-size:13px;display:grid;gap:6px}
+.dd p{margin:2px 0}
+.src{font-size:12px;color:var(--muted)}
+.hide{display:none}
+.splitbox{overflow-x:auto}
+.totals{display:flex;gap:30px;flex-wrap:wrap;margin:0 0 16px}
+.totals div{display:flex;flex-direction:column}
+.totals b{font:700 30px/1 Georgia,serif}
+.totals span{font-size:12px;color:var(--muted)}
+.gallery{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px}
+.proto{position:relative;background:var(--card);border:1.5px solid var(--ink);border-top:10px solid var(--stripe);box-shadow:5px 5px 0 var(--shadow);padding:14px 16px}
+.proto h3{margin:6px 0 6px;font-size:16px}
+.proto h3 a{color:var(--ink)}
+.proto p{margin:0 0 8px}
+.verdict{display:inline-block;background:var(--stripe);color:var(--on);font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;padding:2px 8px}
+.plinks{font-size:12.5px}
+footer{padding:30px 0;color:var(--muted);font-size:12px}
+@media (max-width:980px){
+:root{--bar:46px}
+.bar{display:flex;position:sticky;top:0;z-index:6;height:var(--bar);padding:0 16px;background:var(--paper);border-bottom:1.5px solid var(--ink)}
+.menu{all:unset;cursor:pointer;flex:1;min-width:0;display:flex;gap:10px;align-items:center;font-size:13px;font-weight:700}
+.menu i{flex:none;width:18px;height:12px;border-top:2px solid var(--ink);border-bottom:2px solid var(--ink);background:linear-gradient(var(--ink),var(--ink)) center/100% 2px no-repeat}
+.menu .here{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.menu::after{content:"▾";margin-left:auto;color:var(--muted)}
+.menu[aria-expanded=true]::after{content:"▴"}
+.page{grid-template-columns:1fr}
+.rail{display:none;position:fixed;top:var(--bar);left:0;right:0;z-index:5;height:auto;max-height:calc(100dvh - var(--bar));overflow:auto;gap:14px;padding:10px 16px 16px;background:var(--paper);border-bottom:3px solid var(--ink);box-shadow:0 12px 24px rgb(0 0 0/.25)}
+.rail.open{display:flex}
+.toc{gap:0}
+.toc a{font-size:15px;padding:9px 0;border-bottom:1px solid var(--line)}
+.toc a b{width:26px;height:26px}
+.theme{margin-top:0;font-size:13px;padding:6px 12px}
+main{padding:0 16px 60px}
+header{padding-top:22px}
+h1{font-size:28px}
+.sec{padding-top:30px}
+.sec>h2{font-size:23px;gap:10px}
+.sec>h2 .n{width:32px;height:32px;font-size:15px}
+.glance,.vs,.cards,.lists,.gallery{grid-template-columns:1fr}
+.box{overflow-x:auto}
+svg.graph{min-width:520px}
+svg.split{min-width:900px}
+.card .rank{left:-10px;top:-18px;width:28px;height:28px;font-size:14px}
+.filters{flex-wrap:nowrap;overflow-x:auto}
+.filters button{flex:none;white-space:nowrap}
+.ba{grid-template-columns:1fr}
+.ba .arr{justify-self:center;transform:rotate(90deg)}
+.meta .node{margin-left:0;flex-basis:100%}
+.hero{gap:18px}
+.hero b{font-size:34px}
+}
+</style></head>
+<body>
+<div class="bar"><button class="menu" type="button" aria-expanded="false" aria-controls="rail"><i aria-hidden="true"></i><span class="here">Sections</span></button></div>
+<div class="page"><nav class="rail" id="rail" aria-label="Sections"><div class="toc"></div><button class="theme" type="button" aria-label="Change the theme"></button></nav><main>
+<!-- content -->
+<header><div class="kicker">Initiative name · wave 1 · planning review</div>
+<h1>The message of the wave in one line.</h1>
+<p class="sub">Sessions made 40 decisions, precedent gave 6, and <b class="u">you made 2</b>. Read sections 3 and 4 first: 3 cards.</p></header>
+
+<section class="sec" id="s1" data-nav="The video"><h2><span class="n">1</span>The video</h2>
+<p class="lede">The wave in a few minutes.</p>
+<video controls preload="metadata" src="video.mp4">Your browser cannot play <code>video.mp4</code>.</video>
+</section>
+
+<section class="sec" id="s2" data-nav="At a glance"><h2><span class="n">2</span>The wave at a glance</h2>
+<div class="hero"><div><b>48</b><span>decisions</span></div><div><b>5</b><span>tickets</span></div><div><b>4,100</b><span>changed lines</span></div><div class="you"><b>2</b><span>decided by you</span></div></div>
+<div class="glance"><div class="box"><h4>Atlas graph</h4><svg class="graph" viewBox="0 0 680 200" role="img" aria-label="Atlas graph, glance"><defs><marker id="arrow-glance" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="context-stroke"/></marker></defs><path d="M225,46 C225,80 170,80 170,112" fill="none" stroke="var(--ink)" stroke-width="2" marker-end="url(#arrow-glance)"/><path d="M285,136 H395" fill="none" stroke="var(--muted)" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#arrow-glance)"/><rect x="110" y="23" width="230" height="46" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="2"/><text x="225" y="51" text-anchor="middle" font-size="14" font-weight="600" fill="var(--ink)">Node that is done</text><rect x="298" y="5" width="42" height="18" fill="var(--ok)"/><text x="319" y="18" text-anchor="middle" font-size="11" font-weight="700" fill="var(--on)">done</text><rect x="55" y="113" width="230" height="46" fill="var(--wave)" stroke="var(--wave)" stroke-width="2"/><text x="170" y="141" text-anchor="middle" font-size="14" font-weight="600" fill="var(--on)">Node of this wave</text><rect x="229" y="95" width="56" height="18" fill="var(--wave)"/><text x="257" y="108" text-anchor="middle" font-size="11" font-weight="700" fill="var(--on)">wave 1</text><rect x="397" y="113" width="230" height="46" fill="var(--paper)" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="5 4"/><text x="512" y="141" text-anchor="middle" font-size="14" font-weight="600" fill="var(--muted)">Node in the fog</text><rect x="592" y="95" width="35" height="18" fill="var(--line)"/><text x="609" y="108" text-anchor="middle" font-size="11" font-weight="700" fill="var(--ink)">fog</text></svg><div class="legend"><span><i style="background:var(--ok-soft)"></i>done</span><span><i style="background:var(--wave)"></i>planned in wave 1</span><span><i style="background:var(--paper);outline:1px dashed var(--muted)"></i>fog</span></div></div>
+<div class="stack"><div class="box"><h4>Decided by</h4><svg class="chart" viewBox="0 0 440 96" role="img" aria-label="Decisions for each Decided by value"><text x="128" y="20" text-anchor="end" font-size="13" fill="var(--ink)">session</text><rect x="136" y="6" width="240" height="20" fill="var(--session)"/><text x="382" y="21" font-size="13" font-weight="700" fill="var(--ink)">40</text><text x="128" y="50" text-anchor="end" font-size="13" fill="var(--ink)">precedent</text><rect x="136" y="36" width="36" height="20" fill="var(--precedent)"/><text x="178" y="51" font-size="13" font-weight="700" fill="var(--ink)">6</text><text x="128" y="80" text-anchor="end" font-size="13" fill="var(--ink)">user</text><rect x="136" y="66" width="12" height="20" fill="var(--user)"/><text x="154" y="81" font-size="13" font-weight="700" fill="var(--ink)">2</text></svg></div>
+<div class="box"><h4>Kind</h4><svg class="chart" viewBox="0 0 440 156" role="img" aria-label="Decisions for each Kind value"><text x="128" y="20" text-anchor="end" font-size="13" fill="var(--ink)">routine</text><rect x="136" y="6" width="240" height="20" fill="var(--routine)"/><text x="382" y="21" font-size="13" font-weight="700" fill="var(--ink)">18</text><text x="128" y="50" text-anchor="end" font-size="13" fill="var(--ink)">plain</text><rect x="136" y="36" width="187" height="20" fill="var(--plain)"/><text x="329" y="51" font-size="13" font-weight="700" fill="var(--ink)">14</text><text x="128" y="80" text-anchor="end" font-size="13" fill="var(--ink)">stakes</text><rect x="136" y="66" width="133" height="20" fill="var(--stakes)"/><text x="275" y="81" font-size="13" font-weight="700" fill="var(--ink)">10</text><text x="128" y="110" text-anchor="end" font-size="13" fill="var(--ink)">assumption</text><rect x="136" y="96" width="53" height="20" fill="var(--assumption)"/><text x="195" y="111" font-size="13" font-weight="700" fill="var(--ink)">4</text><text x="128" y="140" text-anchor="end" font-size="13" fill="var(--ink)">shape</text><rect x="136" y="126" width="27" height="20" fill="var(--new)"/><text x="169" y="141" font-size="13" font-weight="700" fill="var(--ink)">2</text></svg></div></div></div>
+</section>
+
+<section class="sec" id="s3" data-nav="The shape"><h2><span class="n">3</span>The shape</h2>
+<p class="lede">The atlas graph at the start of the wave, and now.</p>
+<div class="zero"><div class="z"><b>0</b><span>nodes changed</span></div><div class="z plus"><b>+1</b><span>edge</span></div></div>
+<div class="vs"><div class="box start"><h4>Start of wave 1</h4><svg class="graph" viewBox="0 0 680 120" role="img" aria-label="Atlas graph, start"><rect x="55" y="37" width="230" height="46" fill="var(--card)" stroke="var(--before)" stroke-width="1.5"/><text x="170" y="65" text-anchor="middle" font-size="14" font-weight="600" fill="var(--ink)">Node A</text><rect x="395" y="37" width="230" height="46" fill="var(--card)" stroke="var(--before)" stroke-width="1.5"/><text x="510" y="65" text-anchor="middle" font-size="14" font-weight="600" fill="var(--ink)">Node B</text></svg></div><div class="box"><h4>Now</h4><svg class="graph" viewBox="0 0 680 120" role="img" aria-label="Atlas graph, now"><defs><marker id="arrow-now" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="context-stroke"/></marker></defs><path d="M285,60 H393" fill="none" stroke="var(--new)" stroke-width="2.5" marker-end="url(#arrow-now)"/><rect x="55" y="37" width="230" height="46" fill="var(--card)" stroke="var(--before)" stroke-width="1.5"/><text x="170" y="65" text-anchor="middle" font-size="14" font-weight="600" fill="var(--ink)">Node A</text><rect x="395" y="37" width="230" height="46" fill="var(--card)" stroke="var(--before)" stroke-width="1.5"/><text x="510" y="65" text-anchor="middle" font-size="14" font-weight="600" fill="var(--ink)">Node B</text></svg></div></div>
+<div class="legend"><span><i style="background:var(--before)"></i>there at the start of the wave</span><span><i style="background:var(--new)"></i>new in this wave</span></div>
+<div class="cards"><article class="card shape" style="--stripe:var(--new)"><div class="meta"><span class="bd by-session">session</span><span class="bd k-shape">shape</span><span class="dep" title="9 decisions depend on this ticket"><svg width="64" height="10" aria-hidden="true"><rect x="0" y="2" width="62" height="6" fill="var(--line)"/><rect x="0" y="2" width="28" height="6" fill="var(--ink)"/></svg><b>9</b> depend on it</span><span class="node">Node A</span></div><h3><a href="https://example.com/issues/1">Name of the ticket</a></h3><p class="gist">The gist of a decision that changes the shape, in one line.</p><ul><li><span class="lbl">Changes</span> Edge from Node A to Node B</li><li><span class="ba"><span class="was"><span class="lbl">Before</span> What was there.</span><span class="arr">→</span><span class="is"><span class="lbl">After</span> What is there now.</span></span></li><li><span class="lbl">Rejected</span> <span class="chips"><span class="chip">option one</span><span class="chip">option two</span></span></li></ul></article><article class="card you" style="--stripe:var(--user)"><span class="mark">decided by you</span><div class="meta"><span class="bd by-user">you</span><span class="dep" title="4 decisions depend on this ticket"><svg width="64" height="10" aria-hidden="true"><rect x="0" y="2" width="62" height="6" fill="var(--line)"/><rect x="0" y="2" width="12" height="6" fill="var(--ink)"/></svg><b>4</b> depend on it</span><span class="node">Node B</span></div><h3><a href="https://example.com/issues/2">Name of the ticket</a></h3><p class="gist">The gist of a decision that the user made.</p><ul><li><span class="lbl">Changes</span> Node B › Gives (new item)</li><li><span class="lbl">Rejected</span> <span class="chips"><span class="chip">option one</span></span></li></ul></article></div>
+</section>
+
+<section class="sec" id="s4" data-nav="Your eyes"><h2><span class="n">4</span>Decisions that need your eyes</h2>
+<p class="rule"><span class="lbl">Rank rule</span> How the review session ranked the cards, in one line.</p>
+<div class="cards"><article class="card top" style="--stripe:var(--stakes)"><span class="rank">1</span><div class="meta"><span class="bd by-session">session</span><span class="bd k-stakes">stakes</span><span class="dep" title="12 decisions depend on this ticket"><svg width="64" height="10" aria-hidden="true"><rect x="0" y="2" width="62" height="6" fill="var(--line)"/><rect x="0" y="2" width="40" height="6" fill="var(--ink)"/></svg><b>12</b> depend on it</span><span class="node">Node A</span></div><h3><a href="https://example.com/issues/3">Name of the ticket</a></h3><p class="gist">The gist of the decision, in one line.</p><ul><li><span class="lbl">Rejected</span> <span class="chips"><span class="chip">option one</span><span class="chip">option two</span></span></li></ul></article><article class="card top" style="--stripe:var(--assumption)"><span class="rank">2</span><div class="meta"><span class="bd by-session">session</span><span class="bd k-assumption">assumption</span><span class="dep" title="7 decisions depend on this ticket"><svg width="64" height="10" aria-hidden="true"><rect x="0" y="2" width="62" height="6" fill="var(--line)"/><rect x="0" y="2" width="22" height="6" fill="var(--ink)"/></svg><b>7</b> depend on it</span><span class="node">Node B</span></div><h3><a href="https://example.com/issues/4">Name of the ticket</a></h3><p class="gist">The gist of the decision, in one line.</p><ul><li><span class="lbl">Assumed</span> The fact that the session assumed.</li><li><span class="lbl">Rejected</span> <span class="chips"><span class="chip">option one</span></span></li></ul></article></div>
+</section>
+
+<section class="sec" id="s5" data-nav="All others"><h2><span class="n">5</span>All other decisions</h2>
+<p class="lede">4 decisions. Click a line for the answer, the why, and the rejected options.</p>
+<div class="filters"><button data-k="all" aria-pressed="true">all <span class="cnt">4</span></button><button data-k="stakes" aria-pressed="false"><i style="background:var(--stakes)"></i>stakes <span class="cnt">1</span></button><button data-k="assumption" aria-pressed="false"><i style="background:var(--assumption)"></i>assumption <span class="cnt">0</span></button><button data-k="plain" aria-pressed="false"><i style="background:var(--plain)"></i>plain <span class="cnt">1</span></button><button data-k="routine" aria-pressed="false"><i style="background:var(--routine)"></i>routine <span class="cnt">1</span></button><button data-k="precedent" aria-pressed="false"><i style="background:var(--precedent)"></i>precedent <span class="cnt">1</span></button></div>
+<div class="lists"><div class="nodelist"><h3 class="nodeh"><a href="https://example.com/issues/10">Node A</a> <span class="cnt">3 decisions · 1 ticket</span> <svg class="mix" width="200" height="10" aria-hidden="true"><rect x="0" y="0" width="67" height="10" fill="var(--stakes)"><title>stakes: 1</title></rect><rect x="67" y="0" width="67" height="10" fill="var(--plain)"><title>plain: 1</title></rect><rect x="134" y="0" width="66" height="10" fill="var(--routine)"><title>routine: 1</title></rect></svg></h3><section class="tg"><h4><a href="https://example.com/issues/5">Name of the ticket</a> <span class="cnt">3</span> <svg class="mix" width="80" height="10" aria-hidden="true"><rect x="0" y="0" width="27" height="10" fill="var(--stakes)"><title>stakes: 1</title></rect><rect x="27" y="0" width="27" height="10" fill="var(--plain)"><title>plain: 1</title></rect><rect x="54" y="0" width="26" height="10" fill="var(--routine)"><title>routine: 1</title></rect></svg></h4><ol><li class="ln" data-kind="stakes" style="--stripe:var(--stakes)"><details><summary><span class="bd by-session">session</span><span class="bd k-stakes">stakes</span><span class="nm">Name of the decision</span></summary><div class="dd"><div><span class="lbl">Answer</span><p>The answer.</p></div><div><span class="lbl">Why</span><p>The reason.</p></div><div><span class="lbl">Rejected</span><p>Each rejected option, with its reason.</p></div><div class="src"><a href="https://example.com/issues/5">Open the ticket</a></div></div></details></li><li class="ln" data-kind="plain" style="--stripe:var(--plain)"><details><summary><span class="bd by-session">session</span><span class="bd k-plain">plain</span><span class="nm">Name of the decision</span></summary><div class="dd"><div><span class="lbl">Answer</span><p>The answer.</p></div><div><span class="lbl">Why</span><p>The reason.</p></div><div class="src"><a href="https://example.com/issues/5">Open the ticket</a></div></div></details></li><li class="ln" data-kind="routine" style="--stripe:var(--routine)"><details><summary><span class="bd by-session">session</span><span class="bd k-routine">routine</span><span class="nm">Name of the decision</span></summary><div class="dd"><div><span class="lbl">Answer</span><p>The answer.</p></div><div class="src"><a href="https://example.com/issues/5">Open the ticket</a></div></div></details></li></ol></section></div>
+<div class="nodelist"><h3 class="nodeh"><a href="https://example.com/issues/11">Node B</a> <span class="cnt">1 decision · 1 ticket</span> <svg class="mix" width="200" height="10" aria-hidden="true"><rect x="0" y="0" width="200" height="10" fill="var(--precedent)"><title>precedent: 1</title></rect></svg></h3><section class="tg"><h4><a href="https://example.com/issues/6">Name of the ticket</a> <span class="cnt">1</span> <svg class="mix" width="80" height="10" aria-hidden="true"><rect x="0" y="0" width="80" height="10" fill="var(--precedent)"><title>precedent: 1</title></rect></svg></h4><ol><li class="ln" data-kind="precedent" style="--stripe:var(--precedent)"><details><summary><span class="bd by-precedent">precedent</span><span class="nm">Name of the decision</span></summary><div class="dd"><div><span class="lbl">Answer</span><p>The answer.</p></div><div><span class="lbl">Precedent</span><p><a href="https://example.com/adr/1">The source that answered the question</a></p></div><div class="src"><a href="https://example.com/issues/6">Open the ticket</a></div></div></details></li></ol></section></div></div>
+</section>
+
+<section class="sec" id="s6" data-nav="Ticket split"><h2><span class="n">6</span>The ticket split</h2>
+<div class="totals"><div><b>1,650</b><span>lines · Node A · 2 tickets</span></div></div>
+<div class="box splitbox"><svg class="split" viewBox="0 0 660 240" role="img" aria-label="Ticket split of Node A"><defs><marker id="arrow-split" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="context-stroke"/></marker></defs><text x="70" y="22" font-size="15" font-weight="700" fill="var(--ink)">Node A · 2 tickets · 1,650 lines</text><path d="M188,106 C188,123 188,123 188,138" fill="none" stroke="var(--ink)" stroke-width="1.8" marker-end="url(#arrow-split)"/><g><title>#1 Name of the ticket: 900 changed lines</title><rect x="70" y="40" width="236" height="66" fill="var(--card)" stroke="var(--ink)" stroke-width="1.5"/><rect x="70" y="40" width="30" height="66" fill="var(--wave)"/><text x="85" y="62" text-anchor="middle" font-size="14" font-weight="700" fill="var(--on)">1</text><text x="108" y="57" font-size="12" fill="var(--ink)">Name of the ticket</text><rect x="108" y="90" width="140" height="8" fill="var(--line)"/><rect x="108" y="90" width="126" height="8" fill="var(--assumption)"/><text x="300" y="98" text-anchor="end" font-size="12" font-weight="700" fill="var(--ink)">900</text></g><g><title>#2 Name of the ticket: 750 changed lines</title><rect x="70" y="140" width="236" height="66" fill="var(--card)" stroke="var(--ink)" stroke-width="1.5"/><rect x="70" y="140" width="30" height="66" fill="var(--wave)"/><text x="85" y="162" text-anchor="middle" font-size="14" font-weight="700" fill="var(--on)">2</text><text x="108" y="157" font-size="12" fill="var(--ink)">Name of the ticket</text><rect x="108" y="190" width="140" height="8" fill="var(--line)"/><rect x="108" y="190" width="105" height="8" fill="var(--assumption)"/><text x="300" y="198" text-anchor="end" font-size="12" font-weight="700" fill="var(--ink)">750</text></g></svg>
+<div class="legend"><span><i style="background:var(--ink)"></i>blocked by (arrow points to the blocked ticket)</span><span><i style="background:var(--new)"></i>cross-node block</span><span><i style="background:var(--assumption)"></i>size bar, full = 1,000 lines</span></div></div>
+</section>
+
+<section class="sec" id="s7" data-nav="Prototypes"><h2><span class="n">7</span>Prototypes</h2>
+<div class="gallery"><article class="proto" style="--stripe:var(--ok)"><span class="verdict">works</span><h3><a href="https://example.com/proto/1">Name of the prototype</a></h3><p>The verdict in one line.</p><div class="plinks"><a href="https://example.com/proto/1">Prototype</a> · <a href="https://example.com/issues/7">Ticket #7</a></div></article><article class="proto" style="--stripe:var(--assumption)"><span class="verdict">works, with changes</span><h3><a href="https://example.com/proto/2">Name of the prototype</a></h3><p>The verdict in one line.</p><div class="plinks"><a href="https://example.com/proto/2">Prototype</a> · <a href="https://example.com/issues/8">Ticket #8</a></div></article></div>
+</section>
+<footer>Built from the ledger of wave 1.</footer>
+<!-- /content -->
+</main></div>
+<script>
+(()=>{
+  const all=(sel,root=document)=>[...root.querySelectorAll(sel)];
+  const rail=document.getElementById('rail'),toc=rail.querySelector('.toc'),menu=document.querySelector('.menu'),here=menu.querySelector('.here'),theme=rail.querySelector('.theme');
+  const sections=all('main section.sec');
+  const label=s=>{
+    if(s.dataset.nav)return s.dataset.nav;
+    const h=s.querySelector('h2').cloneNode(true);
+    h.querySelector('.n')?.remove();
+    return h.textContent.trim();
+  };
+  const links=sections.map((s,i)=>{
+    s.id||=`s${i+1}`;
+    const a=document.createElement('a'),b=document.createElement('b');
+    a.href=`#${s.id}`;
+    b.textContent=s.querySelector('h2 .n')?.textContent||i+1;
+    a.append(b,label(s));
+    toc.append(a);
+    return a;
+  });
+  const setOpen=open=>{rail.classList.toggle('open',open);menu.setAttribute('aria-expanded',open)};
+  menu.addEventListener('click',()=>setOpen(!rail.classList.contains('open')));
+  toc.addEventListener('click',()=>setOpen(false));
+  document.addEventListener('keydown',e=>{if(e.key==='Escape')setOpen(false)});
+  document.addEventListener('click',e=>{if(!e.target.closest('.rail,.bar'))setOpen(false)});
+  let queued=false;
+  const spy=()=>{
+    queued=false;
+    const line=innerHeight*.3;
+    let current=-1;
+    sections.forEach((s,i)=>{if(s.getBoundingClientRect().top<=line)current=i});
+    links.forEach((a,i)=>i===current?a.setAttribute('aria-current','true'):a.removeAttribute('aria-current'));
+    here.textContent=current<0?document.title:`${links[current].firstChild.textContent} · ${label(sections[current])}`;
+  };
+  addEventListener('scroll',()=>{if(!queued){queued=true;requestAnimationFrame(spy)}},{passive:true});
+  spy();
+  const showTheme=()=>{theme.textContent=`Theme: ${document.documentElement.dataset.choice}`};
+  theme.addEventListener('click',()=>{cycleTheme();showTheme()});
+  showTheme();
+  all('main a[href]').forEach(a=>{
+    if(a.getAttribute('href').startsWith('#'))return;
+    a.target='_blank';
+    a.rel='noopener';
+  });
+  all('.filters').forEach(filters=>{
+    const sec=filters.closest('section.sec'),buttons=all('button',filters);
+    buttons.forEach(b=>b.addEventListener('click',()=>{
+      const kind=b.dataset.k;
+      buttons.forEach(x=>x.setAttribute('aria-pressed',x===b));
+      all('.ln',sec).forEach(l=>l.classList.toggle('hide',kind!=='all'&&l.dataset.kind!==kind));
+      all('.tg,.nodelist',sec).forEach(g=>g.classList.toggle('hide',!g.querySelector('.ln:not(.hide)')));
+    }));
+  });
+})();
+</script>
+</body></html>
