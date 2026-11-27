@@ -4,7 +4,7 @@ The three views that navigator builds for the user. The user scans and does not 
 
 ## Rules for each view
 
-- **One HTML file** that opens with no network: inline CSS, inline SVG for each diagram and chart. A video or a prototype is a link to a local file or a URL.
+- **One HTML file** that opens with no network and with no file beside it: inline CSS, inline SVG for each diagram and chart, and the video inside. A prototype is a link to a local file or a URL.
 - **A card** is one gist line and at most three bullets. All other detail is one link away, on the ticket.
 - **Refer by name.** A ticket, a node, or a decision shows its name, and the name holds the link.
 - **Lead each section with a visual** when its data has a shape: a graph for dependencies, a chart for counts and sizes, a badge for a state.
