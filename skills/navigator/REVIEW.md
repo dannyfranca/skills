@@ -19,4 +19,4 @@ The wave directory tells the mode. With no `report.html`, this is the **first re
    | A correction was applied in this session | Tell the user that a delta review follows, and end the session. The driver runs the corrections. |
    | No correction was applied, and the user signs off | Remove `navigator:unseen` from each ticket of the wave. For each node, publish `spec.md` as `to-spec` says, and publish `split.md` with the ticket skill of the tracker (`to-tickets-gh` or `to-tickets-local`) from its publish step: this review replaced its quiz. Then write the file `signed-off` in the wave directory, with one line for each node: its name, and the links of its spec and its tickets. |
 
-   In the two states, wake the driver as [`HARNESS.md`](HARNESS.md) says, as the last step: the user must not have to do it.
+   In the two states, do the wake step, as the last step: the user must not have to do it.

@@ -24,10 +24,12 @@ In a harness that is not T3 Code, find first whether a subagent can start its ow
 
 A work session can run for an hour, and an `ask` or a `review` session waits for the user for hours or for days. The driver must spend no turn in that time. Thus the driver ends its turn, and each session wakes it.
 
-| Harness | The driver, when it waits | Each session, as its last step |
+| Harness | The driver, when it waits | Wake step |
 | --- | --- | --- |
-| T3 Code | Ends its turn with no timer: the wake line of a session starts the next turn. When an `ask` or a `review` session waits for the user, the driver first tells the user the name of that thread. | Sends the line `<role> <target> ended` to the `driver_thread` of `run.toml`, with the thread send tool. The target is the target of the brief, and `replan` has none. |
-| All others | Waits as the Session part says | No step |
+| T3 Code | Ends its turn with no timer: the wake line of a session starts the next turn. When an `ask` or a `review` session waits for the user, the driver first tells the user the name of that thread. | With the thread send tool, send the line `<role> <target> ended` to the thread `<driver_thread>`. The target is the target of the brief, and `replan` has none. |
+| All others | Waits as the Session part says | None |
+
+The driver writes the wake step into each brief, with its own thread id. A session whose brief has no wake step takes it from the table, with the `driver_thread` of `run.toml`.
 
 The line is a signal and gives no instruction: the driver that gets it takes the pass again from the tracker state.
 
@@ -46,11 +48,12 @@ A driver that the user started has a name that the user or the harness gave. It 
 
 ## Brief
 
-The brief is the full prompt of a session. The skill holds each rule, so the brief holds only the role, the atlas path, and the target:
+The brief is the full prompt of a session. The skill holds each rule, so the brief holds only the role, the atlas path, the target, and the wake step:
 
 ```
 /navigator <role> <atlas path> <target>
 If the line above loaded no skill, read <absolute path of the navigator skill directory>/SKILL.md first, and take the role of the line above.
+Last step: <the wake step of the harness, when it has one>
 ```
 
 The target is the node name for `plan`, the wave number and the node name for `spec`, the ticket id or URL for `decide`, `research`, `proto`, and `task`, and the wave number for `ask` and `review`. The driver has no role word: `/navigator <atlas path>`.

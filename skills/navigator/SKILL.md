@@ -17,6 +17,7 @@ Navigator adds no planning method. `atlas` charts the initiative as nodes, and `
 - **Ledger**: the record on each ticket of who decided what. It tells each session what the user has seen.
 - **Wave**: the frontier nodes of the atlas that are planned together, from map to ticket split, and reviewed one time.
 - **Driver**: the session that launches all other sessions. It makes no decision.
+- **Wake step**: the last line of the brief. It tells the driver that the session ended. When the brief has none, [`HARNESS.md`](HARNESS.md) gives it.
 
 ## The stops
 

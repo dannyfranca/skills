@@ -1,6 +1,6 @@
 # Work sessions
 
-A work session does the work of one target and then ends. It never talks to the user: each question that a skill tells it to ask the user goes through [`DECIDE.md`](DECIDE.md). The driver learns the result from the tracker and the run directory only, so the session is complete when its completion state below is true there. Then wake the driver as [`HARNESS.md`](HARNESS.md) says, as the last step.
+A work session does the work of one target and then ends. It never talks to the user: each question that a skill tells it to ask the user goes through [`DECIDE.md`](DECIDE.md). The driver learns the result from the tracker and the run directory only, so the session is complete when its completion state below is true there. Then do the wake step, as the last step.
 
 Work in the repo root and change no code there. The `proto` and `task` roles change code only in the worktree that the driver gave them.
 
@@ -47,7 +47,7 @@ Complete when the ticket is closed with its ledger record and the map is updated
 
 Target: one wave number and one node whose map has no open ticket. Result: the draft spec and the draft ticket split, in the directory of the node in the run directory. Nothing goes to the tracker before the wave review signs off.
 
-1. **Write `spec.md`.** Use the template of `to-spec`. The source is the Decisions so far of the map and the ledger records behind them. Done when each closed ticket of the map shows in the spec or in its Out of Scope.
+1. **Write `spec.md`.** Use the template of `to-spec`. The source is the Decisions so far of the map and, from each closed ticket, the heading and the `Answer` line of each ledger block. Read more of a ticket only when a decision is not clear from these. Done when each closed ticket of the map shows in the spec or in its Out of Scope.
 2. **Write `split.md`.** Follow steps 1 to 3 of `to-tickets` with the spec as the plan. Size each ticket at 700 to 1000 changed lines, tests excluded. Use the ticket template of `to-tickets`, one section for each ticket, and add a `Size:` line with the estimate. Done when each Implementation Decision of the spec belongs to a ticket, and each ticket names its blockers.
 
 A question in either step goes through `DECIDE.md`. Record its decision on a new `wayfinder:grilling` ticket of the map, created with the label `navigator:draft`, and close that ticket, so that the ledger holds it. Remove the draft label when the ticket is closed, or when it gets the label `navigator:parked` or `navigator:shape`. A parked question, or a decision that changes the atlas, leaves that ticket open, and the node gets its spec after the ticket closes.
