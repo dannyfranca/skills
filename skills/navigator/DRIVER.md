@@ -35,7 +35,7 @@ state = "running"   # running | ended
 
 1. When the newest wave has a `signed-off` file, a build can have changed the atlas: launch `replan` and wait for it.
 2. When the atlas directory is gone, the initiative is complete. Tell the user, and stop.
-3. The new wave is each frontier node of the atlas that is in no earlier wave. When there is none, tell the user which published tickets to build first, and stop.
+3. The new wave is each frontier node of the atlas that is in no earlier wave. When there is none, give the user the **build list**, and stop.
 4. Add the wave to `run.toml` with its `atlas_commit`, create `wave-<n>/`, and go to the loop.
 
 ## The loop
@@ -55,7 +55,9 @@ A row is true only for a target that no running session has. Then take the first
 | A ticket has the label `navigator:parked` | `ask` for the wave |
 | A node of the wave has no `split.md`, and its map is charted and has no open ticket | `spec` for each such node |
 | Each node of the wave has a `split.md`, and the wave has no `signed-off` file | `review` for the wave |
-| The wave has a `signed-off` file | Tell the user that the wave is signed off, which tickets are published, and that `/navigator <atlas path>` continues the run after the build. Stop. |
+| The wave has a `signed-off` file | Give the user the **build list**, and stop. |
+
+The **build list** is the first part of the message. The published spec of each node is an epic: the `signed-off` files have the links. Give one line for each open epic: its link, its title, and its node. Then give one line with the build command for all of them: the implement skill of the tracker (`/implement-issues-github` or `/implement-tickets-local`) with each epic. Then say that `/navigator <atlas path>` continues the run after the build.
 
 Keep at most `max_parallel_sessions` sessions running. At that number, wait for the next session to end, and then take the pass again. A session that waits for the user is still running, as [When a session ends](#when-a-session-ends) says.
 
