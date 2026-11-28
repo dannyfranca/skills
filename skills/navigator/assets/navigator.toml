@@ -8,9 +8,12 @@ driver = "<model>"
 thinking = "<model>"
 # research, proto, task, and the subagents that build reports and videos
 execution = "<model>"
+# The build sessions. With no value, the execution value applies.
+implementation = "<model>"
 
 # The reasoning effort of each group of roles above. A model with no effort setting ignores it.
 [effort]
 driver = "low"
 thinking = "high"
 execution = "medium"
+implementation = "high"

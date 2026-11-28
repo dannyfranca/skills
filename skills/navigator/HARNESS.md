@@ -26,7 +26,7 @@ A work session can run for an hour, and an `ask` or a `review` session waits for
 
 | Harness | The driver, when it waits | Wake step |
 | --- | --- | --- |
-| T3 Code | Ends its turn with no timer: the wake line of a session starts the next turn. When an `ask` or a `review` session waits for the user, the driver first tells the user the name of that thread. | With the thread send tool, send the line `<role> <target> ended` to the thread `<driver_thread>`. The target is the target of the brief, and `replan` has none. |
+| T3 Code | Ends its turn with no timer: the wake line of a session starts the next turn. When an `ask`, a `review`, or a `build` session waits for the user, the driver first tells the user the name of that thread. | With the thread send tool, send the line `<role> <target> ended` to the thread `<driver_thread>`. The target is the target of the brief, and `replan` has none. |
 | All others | Waits as the Session part says | None |
 
 The driver writes the wake step into each brief, with its own thread id. A session whose brief has no wake step takes it from the table, with the `driver_thread` of `run.toml`.
@@ -40,6 +40,7 @@ Each thread name has the same shape, so that the user can tell navigator threads
 ```
 🧭 <initiative name> | <role> | <ticket name or node name>
 🧭 <initiative name> | DRIVER
+🔨 #<n> | <initiative name> | <node>
 ```
 
 The role is the role name from `SKILL.md`. `ask` and `review` use `wave <n>` as the last part, and `replan` has no last part.
