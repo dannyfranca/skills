@@ -39,7 +39,7 @@ In all other sessions, a question for the user becomes a parked decision.
 - **Run directory**: `~/.atlas/<repo name>/<slug>/`. It is not committed. It holds the checkpoint view, `run.toml`, and one `wave-<n>/` directory for each wave with the reports, the videos, and one `<node name in kebab-case>/` directory for each node with its spec and its split. `run.toml` lists the nodes of each wave, and only the driver writes it.
 - **Map of a node**: the issue with the label `wayfinder:map` and the title `<initiative name>: <node name>`. The tickets of a wave are the child tickets of the maps of its nodes.
 - **Principles**: `docs/agents/principles.md` in the repo (what each plan for this product must respect) and `~/.agents/principles.md` (how the user works in all repos). A principle answers a question in the same way as an answer from the user.
-- **Config**: [`navigator.toml`](navigator.toml) holds the defaults. A `.agents/navigator.toml` in the repo or in the home directory replaces them key by key, and the repo file wins.
+- **Config**: `~/.agents/navigator.toml`. A `.agents/navigator.toml` in the repo replaces it key by key. With no home file, copy [`assets/navigator.toml`](assets/navigator.toml) there, and ask the user for each `<model>` before the first launch.
 - **Tracker**: the tracker doc of the repo says how labels, blocking, and child issues work. Where the tracker has no labels, a `Labels:` line in the ticket holds them.
 
 **Run a skill** means: call the Skill tool with its name. When the tool does not offer the skill, read its `SKILL.md` in the skills directory and follow it.
