@@ -32,10 +32,11 @@ If an explicit leaf is blocked outside the selection, show the required expansio
 7. Commit and push the branch with `/micro-commits`.
 8. Open a `ready-for-review` PR whose body contains `Closes #<leaf-number>`. Continue when the commit, remote branch, and PR exist.
 9. Merge the PR at the first allowed point, unattended through required checks. Rebase onto the default branch when the PR conflicts. Continue when GitHub shows the PR merged and its issue closed.
+   - Exception: when the repository agent guide (`AGENTS.md`, `CLAUDE.md`, or the files they link) requires a person to approve PRs for an area that the PR changes, add the `needs-human-review` label, do not merge, and keep the leaf `in-progress`. Report the PR as waiting for review. Continue when the label is on the PR.
 10. From the main checkout, run `git worktree remove` without `--force` and delete the local branch. Leave a refused worktree to `worktree-janitor`. Continue when `git worktree list` omits it, or Git refused.
 11. When a worker finishes, refresh dependent leaves. Close an Epic when all descendants close; reopen it when an open descendant appears. Continue when dependent labels and Epic states match their descendants.
 12. Return to step 1 to fill free worker slots, until the completion criterion holds.
 
 ## Completion Criterion
 
-The run finishes when a state refresh finds no `ready-for-agent` leaf in the selection and every leaf handled by the run has passed step 10.
+The run finishes when every leaf in the selection is closed or waits for a person under the step 9 exception. Until then, monitor blocked and waiting leaves with the best wait mechanism that the harness has, and return to step 1 when one changes.
