@@ -3,11 +3,11 @@ max_parallel_sessions = 4
 memo_video_words = 200
 
 [models]
-driver = "claude-opus-5-5"
+driver = "<model>"
 # chart, replan, plan, decide, spec, ask, review, shadow
-thinking = "claude-opus-5-5"
+thinking = "<model>"
 # research, proto, task, and the subagents that build reports and videos
-execution = "claude-opus-5-5"
+execution = "<model>"
 
 # The reasoning effort of each group of roles above. A model with no effort setting ignores it.
 [effort]
