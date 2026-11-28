@@ -57,7 +57,18 @@ A row is true only for a target that no running session has. Then take the first
 | Each node of the wave has a `split.md`, and the wave has no `signed-off` file | `review` for the wave |
 | The wave has a `signed-off` file | Give the user the **build list**, and stop. |
 
-The **build list** is the first part of the message. The published spec of each node is an epic: the `signed-off` files have the links. Give one line for each open epic: its link, its title, and its node. Then give one line with the build command for all of them: the implement skill of the tracker (`/implement-issues-github` or `/implement-tickets-local`) with each epic. Then say that `/navigator <atlas path>` continues the run after the build.
+The **build list** is the first part of the message. The published spec of each node is an epic: the `signed-off` files have the links. Use this template, with one line for each open epic, and a Markdown link that the user can click:
+
+```markdown
+**Build**
+- [#<n> <epic title>](<epic URL>): <node>
+
+`/<implement skill> #<n> #<n>`
+
+After the build, `/navigator <atlas path>` continues the run.
+```
+
+The implement skill is the one of the tracker: `implement-issues-github` or `implement-tickets-local`.
 
 Keep at most `max_parallel_sessions` sessions running. At that number, wait for the next session to end, and then take the pass again. A session that waits for the user is still running, as [When a session ends](#when-a-session-ends) says.
 
