@@ -57,13 +57,11 @@ A row is true only for a target that no running session has. Then take the first
 | Each node of the wave has a `split.md`, and the wave has no `signed-off` file | `review` for the wave |
 | The wave has a `signed-off` file | Give the user the **build list**, and stop. |
 
-The **build list** is the first part of the message. The published spec of each node is an epic: the `signed-off` files have the links. Use this template, with one line for each open epic, and a Markdown link that the user can click:
+The **build list** is the first part of the message. The published spec of each node is an epic: the `signed-off` files have the links. Use this template, with one line for each open epic. Each epic runs in its own session, so each line has its own command:
 
 ```markdown
-**Build**
-- [#<n> <epic title>](<epic URL>): <node>
-
-`/<implement skill> #<n> #<n>`
+**Build**: one session for each epic
+- [#<n> <epic title>](<epic URL>): <node> · `/<implement skill> #<n>`
 
 After the build, `/navigator <atlas path>` continues the run.
 ```
