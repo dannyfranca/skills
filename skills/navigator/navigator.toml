@@ -5,7 +5,7 @@ memo_video_words = 200
 [models]
 driver = "claude-opus-5-5"
 # chart, replan, plan, decide, spec, ask, review, shadow
-thinking = "claude-fable-5-2"
+thinking = "claude-opus-5-5"
 # research, proto, task, and the subagents that build reports and videos
 execution = "claude-opus-5-5"
 
