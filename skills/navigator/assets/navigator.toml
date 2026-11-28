@@ -11,6 +11,6 @@ execution = "<model>"
 
 # The reasoning effort of each group of roles above. A model with no effort setting ignores it.
 [effort]
-driver = "medium"
+driver = "low"
 thinking = "high"
 execution = "medium"
